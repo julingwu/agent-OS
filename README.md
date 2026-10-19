@@ -2,6 +2,22 @@
 
 一句话建任务 → 生成判据 → 执行 → L0/L1/L2 验收 → 审计回放。外壳是 FastAPI + SQLite，执行器是 DSH headless 子进程（或 mock）。
 
+## 界面
+
+| CEO 调度台：一句话拆成项目 + 群 | 群聊里的任务卡与判据 |
+|---|---|
+| <img src="docs/screenshots/dispatch.png" width="420"> | <img src="docs/screenshots/task-card.png" width="420"> |
+
+| FinOps 人民币看板 | 离线评测回归 |
+|---|---|
+| <img src="docs/screenshots/finops.png" width="420"> | <img src="docs/screenshots/evals.png" width="420"> |
+
+| 分层组织经验（驳回 / 共识 / 否决 自动沉淀） |
+|---|
+| <img src="docs/screenshots/experience.png" width="620"> |
+
+> 截图取自 v2.4.0 桌面端（Tauri 壳 + 本地 FastAPI 底座），数据为演示用。
+
 ## 快速开始
 
 ```bash
