@@ -1,0 +1,43 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>企业微信 · OA Agent 卡片预览</title>
+<style>
+ body{margin:0;background:#ededed;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;color:#111}
+ .wrap{max-width:760px;margin:0 auto;padding:24px}
+ h1{font-size:16px;color:#555;font-weight:600;margin:0 0 16px}
+ .msg{margin-bottom:22px}
+ .who{font-size:12px;color:#888;margin-bottom:6px}
+ .bubble{background:#fff;border-radius:10px;padding:16px 18px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+ .src{font-size:12px;color:#576b95;margin-bottom:6px}
+ .title{font-size:16px;font-weight:700;margin-bottom:4px}
+ .desc{font-size:13px;color:#666;margin-bottom:12px}
+ .row{display:flex;justify-content:space-between;border-top:1px solid #f0f0f0;padding:7px 0;font-size:13px}
+ .row span{color:#888}
+ .actions{display:flex;gap:10px;margin-top:14px}
+ button{flex:1;padding:8px 0;border-radius:6px;font:inherit;cursor:pointer}
+ button.primary{background:#07c160;color:#fff;border:1px solid #07c160}
+ button.ghost{background:#fff;color:#07c160;border:1px solid #c9e7d5}
+ .muted{color:#aaa}
+</style></head><body><div class="wrap">
+<h1>企业微信 · OA Agent 卡片（mock 渲染，内容取自本地 outbox）</h1>
+
+    <div class="msg">
+      <div class="who">OA Agent <span class="muted">· 验收卡片</span></div>
+      <div class="bubble">
+        <div class="src">OA Agent · 验收</div>
+        <div class="title">待验收：写一篇 300-400 字的双十一预热短文，主题秋季护肤</div>
+        <div class="desc">业务包 content-v1　0 已过 / 5 待定 / 0 不过</div>
+        <div class="rows"><div class="row"><span>任务</span><b>T-7de14e85ff78470c</b></div><div class="row"><span>判据数</span><b>6</b></div><div class="row"><span>实体</span><b>LE-GROUP-HQ</b></div></div>
+        <div class="actions"><button class="primary">验收</button><button class="ghost">打开详情</button></div>
+      </div>
+    </div>
+    <div class="msg">
+      <div class="who">OA Agent <span class="muted">· 审批卡片</span></div>
+      <div class="bubble">
+        <div class="src">OA Agent · 审批</div>
+        <div class="title">待审批：双十一内容投放追加预算</div>
+        <div class="desc">金额 60,000 CNY</div>
+        <div class="rows"><div class="row"><span>决策包</span><b>DP-c2923e6f4d6d4155</b></div><div class="row"><span>规则</span><b>FR-04 大额支出；财务：超出可用额度（可用 -50000.00）</b></div><div class="row"><span>申请原因</span><b>预热期三条内容线并行，申请 6 万元投放额度</b></div></div>
+        <div class="actions"><button class="primary">同意</button><button class="ghost">驳回</button><button class="ghost">打开</button></div>
+      </div>
+    </div>
+</div></body></html>

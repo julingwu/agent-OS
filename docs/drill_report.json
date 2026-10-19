@@ -1,0 +1,73 @@
+{
+  "started_at": "2026-10-18 19:30:33",
+  "note": "第二次演练（首轮因策略误判与预算不足作废，记录见 DESIGN_GAPS §39–40）",
+  "steps": {
+    "dispatch": {
+      "wall_seconds": 98.3,
+      "content": {
+        "task_id": "T-d9c4f7425dcd4c06",
+        "entity": "LE-CONTENT",
+        "pack": "content-v1",
+        "criteria": 6,
+        "state": "pending_review",
+        "exit_code": 0,
+        "tokens": 11812,
+        "artifact": "workspace/ID-d2d0846432e64006/T-d9c4f7425dcd4c06/article.md",
+        "session": "5cd55ba4-b601-4c17-976a-b0b896451aec",
+        "seconds": 30.2
+      },
+      "quant": {
+        "task_id": "T-85025ee3c9554ca8",
+        "entity": "LE-QUANT",
+        "pack": "code-v1",
+        "criteria": 5,
+        "state": "pending_review",
+        "exit_code": 0,
+        "tokens": 24658,
+        "artifact": "workspace/ID-ae38504179f041ac/T-85025ee3c9554ca8/fetch_quote.py",
+        "session": "e16d001b-2194-4638-b45f-ec6fb40deeb5",
+        "seconds": 98.3
+      }
+    },
+    "isolation": {
+      "content_entities_seen": ["LE-CONTENT"],
+      "quant_entities_seen": ["LE-QUANT"],
+      "quant_task_visible_to_content": 404,
+      "quant_memory_id": "MEM-a2441f7de2854a2c",
+      "content_memory_count": 0,
+      "content_peeking_quant_memory": 404
+    },
+    "decision": {
+      "decision_id": "DP-eb56e7daf10244b6",
+      "legal_entity_id": "LE-CONTENT",
+      "title": "内容实体申请追加 15 万 token 预算（双十一大促）",
+      "amount": 150000,
+      "currency": "token",
+      "state": "escalated_ceo",
+      "matched_rule": "FR-04",
+      "filter_reason": "大额支出",
+      "finance": "unbudgeted",
+      "unsigned_status": 401,
+      "forged_signature_status": 401,
+      "wrong_role_status": 403,
+      "wrong_role_detail": {"code": "NeedsCEO", "role": "manager"}
+    },
+    "chairman_visibility": {
+      "tasks_visible": 24,
+      "entities_visible": ["LE-GROUP-HQ", "LE-CONTENT", "LE-QUANT"],
+      "tokens_visible": 241923,
+      "escalated_inbox": ["DP-eb56e7daf10244b6"],
+      "cross_entity_create": 403
+    }
+  },
+  "handover": {
+    "workbench": "http://127.0.0.1:8077/",
+    "ceo_id": "ID-da610f30a4e94e0d",
+    "secret_file": ".env.drill",
+    "pending_tasks": {
+      "content": "T-d9c4f7425dcd4c06",
+      "quant": "T-85025ee3c9554ca8"
+    },
+    "pending_decision": "DP-eb56e7daf10244b6"
+  }
+}

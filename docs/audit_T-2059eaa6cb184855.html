@@ -1,0 +1,129 @@
+<!doctype html><html lang=zh-CN><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>审计时间轴 · T-2059eaa6cb184855</title><style>
+:root{--bg:#0f1115;--panel:#151922;--line:#262b36;--fg:#e6e6e6;--muted:#8b93a1;--accent:#8ab4f8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.65 -apple-system,"PingFang SC",Segoe UI,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:36px 22px 80px}
+h1{font-size:24px;margin:0 0 18px;letter-spacing:.02em}
+h2{font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+   margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+p{margin:6px 0;color:var(--muted)}
+p strong{color:var(--fg)}
+ul{margin:8px 0 8px 18px;padding:0;color:var(--muted)}
+table{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);padding:7px 9px;white-space:nowrap}
+td{border-bottom:1px solid #1d222c;padding:7px 9px;vertical-align:top;word-break:break-word}
+tr:hover td{background:#12161e}
+td:first-child{color:#a9b4c4;font-variant-numeric:tabular-nums;white-space:nowrap}
+code{background:#1b2029;padding:1px 5px;border-radius:4px;font-size:12.5px}
+.tag{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11.5px;background:#22303f;color:#9dc6ff}
+</style></head>
+<body><div class=wrap><h1>审计时间轴 · T-2059eaa6cb184855</h1>
+<p>标题：做一个双十一大促的商品落地页 index.html，深色高级感，含主标题、三档价格卡、立即购买按钮和一段促销文案</p>
+<p>业务包：web-v1　实体：LE-GROUP-HQ　状态：<strong>completed</strong></p>
+<p>创建：2026-10-18 14:11:15　更新：2026-10-18 14:51:54</p>
+<p>运行次数：3　累计 tokens：<strong>124,012</strong>　产物：3</p>
+<h2>判据快照</h2>
+<table>
+<tr><th>seq</th><th>acceptance_layer</th><th>state</th><th>criterion</th><th>check_type</th><th>note</th></tr>
+<tr><td>1</td><td>L2</td><td>passed</td><td>产出 HTML 落地页文件、可读且非空（≥2000 字节）</td><td>script_exec</td><td>文件 可用（36288 字节）</td></tr>
+<tr><td>2</td><td>L0</td><td>passed</td><td>页面结构完整（含 &lt;html 根节点）</td><td>rule_auto</td><td>命中 &lt;html</td></tr>
+<tr><td>3</td><td>L0</td><td>passed</td><td>自带样式（内联 &lt;style&gt; 或外链 &lt;link）</td><td>rule_auto</td><td>命中 &lt;style</td></tr>
+<tr><td>4</td><td>L0</td><td>passed</td><td>含可点击的行动按钮（&lt;button / 立即购买 / 抢购）</td><td>rule_auto</td><td>命中 &lt;button</td></tr>
+<tr><td>5</td><td>L0</td><td>passed</td><td>不含广告法禁用词（最好/最佳/第一品牌/绝对/100%/根治/治愈…）</td><td>rule_auto</td><td>无禁用词</td></tr>
+<tr><td>6</td><td>L1</td><td>passed</td><td>页面视觉与文案质量（人工判定，须附页面片段）</td><td>human_check</td><td>企微卡片人工通过</td></tr>
+<tr><td>7</td><td>L1</td><td>na</td><td>移动端适配检查（M0 未启用）</td><td>human_check</td><td>—</td></tr>
+</table>
+<h2>运行记录</h2>
+<table>
+<tr><th>id</th><th>run_seq</th><th>state</th><th>runner</th><th>usage_tokens</th><th>exit_code</th><th>started_at</th><th>ended_at</th><th>actor_identity</th></tr>
+<tr><td>RUN-7d903ad254374ad6</td><td>1</td><td>succeeded</td><td>acp</td><td>51198</td><td>0</td><td>2026-10-18 14:11:15</td><td>2026-10-18 14:13:54</td><td>ID-da610f30a4e94e0d</td></tr>
+<tr><td>RUN-28b07495d29142fe</td><td>2</td><td>failed</td><td>acp</td><td>50978</td><td>3</td><td>2026-10-18 14:16:05</td><td>2026-10-18 14:20:36</td><td>ID-7f3ed41c41ae45f9</td></tr>
+<tr><td>RUN-ba5a5a45e6bf450f</td><td>3</td><td>succeeded</td><td>acp</td><td>21836</td><td>0</td><td>2026-10-18 14:21:43</td><td>2026-10-18 14:23:36</td><td>ID-7f3ed41c41ae45f9</td></tr>
+</table>
+<h2>产物</h2>
+<table>
+<tr><th>run_id</th><th>file_path</th><th>bytes</th><th>created_at</th></tr>
+<tr><td>RUN-7d903ad254374ad6</td><td>C:\oaagent-m0\workspace\ID-da610f30a4e94e0d\T-2059eaa6cb184855\index.html</td><td>61627</td><td>2026-10-18 14:13:54</td></tr>
+<tr><td>RUN-28b07495d29142fe</td><td>C:\oaagent-m0\workspace\ID-7f3ed41c41ae45f9\T-2059eaa6cb184855\index.html</td><td>36282</td><td>2026-10-18 14:20:36</td></tr>
+<tr><td>RUN-ba5a5a45e6bf450f</td><td>C:\oaagent-m0\workspace\ID-7f3ed41c41ae45f9\T-2059eaa6cb184855\index.html</td><td>36288</td><td>2026-10-18 14:23:26</td></tr>
+</table>
+<h2>预算</h2>
+<table>
+<tr><th>id</th><th>identity_id</th><th>limit_tokens</th><th>used_tokens</th><th>limit_amount</th><th>used_amount</th></tr>
+<tr><td>B-8e646a13946a444b</td><td>ID-da610f30a4e94e0d</td><td>200000</td><td>202349</td><td>100000.0</td><td>0.0</td></tr>
+<tr><td>B-51af5e15644745cd</td><td>ID-7f3ed41c41ae45f9</td><td>200000</td><td>151151</td><td>100000.0</td><td>0.0</td></tr>
+</table>
+<h2>企微推送</h2>
+<table>
+<tr><th>kind</th><th>wecom_userid</th><th>status</th><th>sent_at</th></tr>
+<tr><td>task_review</td><td>demo-user</td><td>sent</td><td>2026-10-18 14:44:03</td></tr>
+</table>
+<h2>事件时间轴</h2>
+<table>
+<tr><th>时间</th><th>动作</th><th>阶段</th><th>执行者</th><th>摘要</th></tr>
+</table>
+<table>
+<tr><th>2026-10-18 14:11:15</th><th>create_task</th><th>system</th><th>system</th><th>criteria_count=7</th></tr>
+<tr><td>2026-10-18 14:11:15</td><td>state_transition</td><td>system</td><td>shell</td><td>event=run_spawned</td></tr>
+<tr><td>2026-10-18 14:11:15</td><td>spawn_run</td><td>system</td><td>system</td><td>RUN-7d903ad254374ad6 task_id=T-2059eaa6cb184855 run_seq=1</td></tr>
+<tr><td>2026-10-18 14:11:15</td><td>reserve_budget</td><td>system</td><td>system</td><td>reason=None</td></tr>
+<tr><td>2026-10-18 14:11:15</td><td>state_transition</td><td>system</td><td>adapter</td><td>event=run_started</td></tr>
+<tr><td>2026-10-18 14:11:15</td><td>emit_event</td><td>system</td><td>system</td><td>event=run_started</td></tr>
+<tr><td>2026-10-18 14:11:15 → 2026-10-18 14:13:45</td><td>心跳 ×11</td><td>system</td><td>system</td><td>运行存活探针</td></tr>
+<tr><td>2026-10-18 14:13:54</td><td>attach_artifact</td><td>system</td><td>system</td><td>ART-0cefc7164845413c art_seq=1 file_path=C:\oaagent-m0\workspace\ID-da610f30a4e94e0d\T-2059eaa6cb184855\index.html</td></tr>
+<tr><td>2026-10-18 14:13:54</td><td>state_transition</td><td>system</td><td>adapter</td><td>event=run_succeeded</td></tr>
+<tr><td>2026-10-18 14:13:54</td><td>emit_event</td><td>system</td><td>system</td><td>event=run_succeeded</td></tr>
+<tr><td>2026-10-18 14:13:54</td><td>run_executed</td><td>system</td><td>system</td><td>runner=acp, exit_code=0, event=run_succeeded, usage_tokens=51198, artifacts=1</td></tr>
+<tr><td>2026-10-18 14:13:54</td><td>state_transition</td><td>system</td><td>acceptance</td><td>event=review_failed</td></tr>
+<tr><td>2026-10-18 14:13:54</td><td>acceptance_run</td><td>system</td><td>system</td><td>verdict=rejected</td></tr>
+<tr><td>2026-10-18 14:16:05</td><td>state_transition</td><td>system</td><td>reviewer</td><td>event=retry</td></tr>
+<tr><td>2026-10-18 14:16:05</td><td>retry</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe prompt=任务：做一个双十一大促的商品落地页 index.html，深色高级感，含主标题、三档价格卡、立即购买按钮和一段促销文案。</td></tr>
+</table>
+<p>上一版命中了广告法禁用词「100%」，请把它以及任何绝对化表述替换成合规说法（例如「大幅提升」「限时」），其余结构与视觉保 |</p>
+<table>
+<tr><th>2026-10-18 14:16:05</th><th>reserve_budget</th><th>system</th><th>system</th><th>reason=None</th></tr>
+<tr><td>2026-10-18 14:16:05</td><td>run_started_skipped</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe task_state=in_progress resumed=True</td></tr>
+<tr><td>2026-10-18 14:16:05 → 2026-10-18 14:18:35</td><td>心跳 ×11</td><td>system</td><td>system</td><td>运行存活探针</td></tr>
+<tr><td>2026-10-18 14:18:43</td><td>budget_cancel</td><td>system</td><td>system</td><td>reason=reservation_exceeded</td></tr>
+<tr><td>2026-10-18 14:18:43</td><td>state_transition</td><td>system</td><td>adapter</td><td>event=run_failed</td></tr>
+<tr><td>2026-10-18 14:18:43</td><td>emit_event</td><td>system</td><td>system</td><td>event=run_failed</td></tr>
+<tr><td>2026-10-18 14:18:43</td><td>run_executed</td><td>system</td><td>system</td><td>runner=acp, exit_code=3, event=run_failed, usage_tokens=47494, artifacts=0</td></tr>
+<tr><td>2026-10-18 14:18:49</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:bud:1 key=RUN-28b07495d29142fe:bud:1 original_verb=reserve_budget</td></tr>
+<tr><td>2026-10-18 14:18:49</td><td>run_started_skipped</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe task_state=failed resumed=False</td></tr>
+<tr><td>2026-10-18 14:18:49</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:hb:1 key=RUN-28b07495d29142fe:hb:1 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:19:04</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:hb:2 key=RUN-28b07495d29142fe:hb:2 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:19:19</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:hb:3 key=RUN-28b07495d29142fe:hb:3 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:19:34</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:hb:4 key=RUN-28b07495d29142fe:hb:4 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:19:49</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:hb:5 key=RUN-28b07495d29142fe:hb:5 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:20:04</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:hb:6 key=RUN-28b07495d29142fe:hb:6 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:20:19</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:hb:7 key=RUN-28b07495d29142fe:hb:7 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:20:34</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:hb:8 key=RUN-28b07495d29142fe:hb:8 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:20:36</td><td>budget_cancel</td><td>system</td><td>system</td><td>reason=reservation_exceeded</td></tr>
+<tr><td>2026-10-18 14:20:36</td><td>attach_artifact</td><td>system</td><td>system</td><td>ART-dce5cf392ca74378 art_seq=1 file_path=C:\oaagent-m0\workspace\ID-7f3ed41c41ae45f9\T-2059eaa6cb184855\index.html</td></tr>
+<tr><td>2026-10-18 14:20:36</td><td>replay</td><td>system</td><td>system</td><td>RUN-28b07495d29142fe:evt:3 key=RUN-28b07495d29142fe:evt:3 original_verb=emit_event</td></tr>
+<tr><td>2026-10-18 14:20:36</td><td>run_executed</td><td>system</td><td>system</td><td>runner=acp, exit_code=3, event=run_failed, usage_tokens=50978, artifacts=1</td></tr>
+<tr><td>2026-10-18 14:20:36</td><td>acceptance_run</td><td>system</td><td>system</td><td>verdict=pending</td></tr>
+<tr><td>2026-10-18 14:21:43</td><td>state_transition</td><td>system</td><td>reviewer</td><td>event=retry</td></tr>
+<tr><td>2026-10-18 14:21:43</td><td>retry</td><td>system</td><td>system</td><td>RUN-ba5a5a45e6bf450f prompt=任务：双十一商品落地页 index.html（深色高级感，主标题、三档价格卡、立即购买按钮、促销文案）。</td></tr>
+</table>
+<p>硬性要求：不得出现「100%」以及任何绝对化用语（最好/最佳/第一/绝对/根治/治愈），用「大幅提升」「限时」这类合规说法替代；三档价格卡 |</p>
+<table>
+<tr><th>2026-10-18 14:21:43</th><th>reserve_budget</th><th>system</th><th>system</th><th>reason=None</th></tr>
+<tr><td>2026-10-18 14:21:43</td><td>run_started_skipped</td><td>system</td><td>system</td><td>RUN-ba5a5a45e6bf450f task_state=in_progress resumed=True</td></tr>
+<tr><td>2026-10-18 14:21:43 → 2026-10-18 14:23:13</td><td>心跳 ×7</td><td>system</td><td>system</td><td>运行存活探针</td></tr>
+<tr><td>2026-10-18 14:23:26</td><td>attach_artifact</td><td>system</td><td>system</td><td>ART-2747240afbea444b art_seq=1 file_path=C:\oaagent-m0\workspace\ID-7f3ed41c41ae45f9\T-2059eaa6cb184855\index.html</td></tr>
+<tr><td>2026-10-18 14:23:26</td><td>state_transition</td><td>system</td><td>adapter</td><td>event=run_succeeded</td></tr>
+<tr><td>2026-10-18 14:23:26</td><td>emit_event</td><td>system</td><td>system</td><td>event=run_succeeded</td></tr>
+<tr><td>2026-10-18 14:23:26</td><td>run_executed</td><td>system</td><td>system</td><td>runner=acp, exit_code=0, event=run_succeeded, usage_tokens=30843, artifacts=1</td></tr>
+<tr><td>2026-10-18 14:23:26</td><td>replay</td><td>system</td><td>system</td><td>RUN-ba5a5a45e6bf450f:bud:1 key=RUN-ba5a5a45e6bf450f:bud:1 original_verb=reserve_budget</td></tr>
+<tr><td>2026-10-18 14:23:26</td><td>run_started_skipped</td><td>system</td><td>system</td><td>RUN-ba5a5a45e6bf450f task_state=pending_review resumed=False</td></tr>
+<tr><td>2026-10-18 14:23:26</td><td>replay</td><td>system</td><td>system</td><td>RUN-ba5a5a45e6bf450f:hb:1 key=RUN-ba5a5a45e6bf450f:hb:1 original_verb=report_heartbeat</td></tr>
+<tr><td>2026-10-18 14:23:36</td><td>replay</td><td>system</td><td>system</td><td>RUN-ba5a5a45e6bf450f:evt:3 key=RUN-ba5a5a45e6bf450f:evt:3 original_verb=emit_event</td></tr>
+<tr><td>2026-10-18 14:23:36</td><td>run_executed</td><td>system</td><td>system</td><td>runner=acp, exit_code=0, event=run_succeeded, usage_tokens=21836, artifacts=0</td></tr>
+<tr><td>2026-10-18 14:23:37</td><td>acceptance_run</td><td>system</td><td>system</td><td>verdict=pending</td></tr>
+<tr><td>2026-10-18 14:51:54</td><td>manual_check</td><td>L1</td><td>ID-da610f30a4e94e0d</td><td>C-8872c5cf2b804354 passed=True note=企微卡片人工通过</td></tr>
+<tr><td>2026-10-18 14:51:54</td><td>state_transition</td><td>system</td><td>acceptance</td><td>event=review_passed</td></tr>
+<tr><td>2026-10-18 14:51:54</td><td>acceptance_run</td><td>system</td><td>system</td><td>verdict=completed</td></tr>
+</table></div></body></html>

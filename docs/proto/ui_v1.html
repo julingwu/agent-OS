@@ -1,0 +1,4196 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#06080d" />
+  <title>Agent OS · 控制台</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: "#06080d",
+            mint: "#5eead4",
+            sky: "#60a5fa"
+          },
+          fontFamily: {
+            sans: ["Inter", "SF Pro Display", "Segoe UI", "PingFang SC", "Microsoft YaHei", "sans-serif"]
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    :root {
+      --bg: #06080d;
+      --panel: rgba(13, 18, 28, 0.72);
+      --panel-deep: rgba(8, 12, 20, 0.82);
+      --line: rgba(255, 255, 255, 0.075);
+      --line-strong: rgba(255, 255, 255, 0.13);
+      --text: #e8eef7;
+      --muted: #8b99ad;
+      --faint: #5e6b80;
+      --mint: #5eead4;
+      --sky: #60a5fa;
+      --violet: #a78bfa;
+      --amber: #fbbf24;
+      --rose: #fb7185;
+      --radius: 24px;
+      --sidebar-w: 284px;
+      --details-w: 332px;
+      --font-mono: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148, 163, 184, 0.24) transparent;
+    }
+
+    *::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+
+    *::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    *::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.2);
+      border-radius: 99px;
+    }
+
+    *::-webkit-scrollbar-thumb:hover {
+      background: rgba(148, 163, 184, 0.34);
+    }
+
+    html {
+      height: 100%;
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      height: 100%;
+      min-height: 100dvh;
+      overflow: hidden;
+      color: var(--text);
+      font-family: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      background:
+        radial-gradient(900px 620px at -8% -12%, rgba(45, 212, 191, 0.14), transparent 58%),
+        radial-gradient(820px 620px at 104% -4%, rgba(96, 165, 250, 0.13), transparent 54%),
+        radial-gradient(980px 800px at 72% 116%, rgba(139, 92, 246, 0.13), transparent 56%),
+        #06080d;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: 0.13;
+      background-image: radial-gradient(rgba(203, 213, 225, 0.55) 0.65px, transparent 0.65px);
+      background-size: 22px 22px;
+      -webkit-mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.65) 55%, transparent 100%);
+      mask-image: linear-gradient(to bottom, #000 0%, rgba(0, 0, 0, 0.65) 55%, transparent 100%);
+    }
+
+    ::selection {
+      color: #04110f;
+      background: rgba(94, 234, 212, 0.85);
+    }
+
+    button,
+    input,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+      border: 0;
+      cursor: pointer;
+    }
+
+    button:focus-visible,
+    textarea:focus-visible,
+    input:focus-visible {
+      outline: 2px solid rgba(94, 234, 212, 0.66);
+      outline-offset: 2px;
+    }
+
+    svg {
+      display: block;
+      flex: 0 0 auto;
+    }
+
+    .mono {
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+    }
+
+    .aurora {
+      position: fixed;
+      z-index: 0;
+      border-radius: 999px;
+      pointer-events: none;
+      filter: blur(105px);
+      opacity: 0.24;
+      will-change: transform;
+    }
+
+    .aurora-a {
+      top: -170px;
+      left: -130px;
+      width: 470px;
+      height: 470px;
+      background: #14b8a6;
+      animation: drift-a 20s ease-in-out infinite alternate;
+    }
+
+    .aurora-b {
+      right: -120px;
+      bottom: -150px;
+      width: 460px;
+      height: 460px;
+      background: #4f46e5;
+      animation: drift-b 24s ease-in-out infinite alternate;
+    }
+
+    @keyframes drift-a {
+      to { transform: translate3d(70px, 60px, 0) scale(1.08); }
+    }
+
+    @keyframes drift-b {
+      to { transform: translate3d(-60px, -50px, 0) scale(1.1); }
+    }
+
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(7px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes pulse-soft {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(94, 234, 212, 0.3); }
+      50% { opacity: 0.72; box-shadow: 0 0 0 4px rgba(94, 234, 212, 0); }
+    }
+
+    @keyframes shimmer {
+      0% { background-position: 0% 50%; }
+      100% { background-position: 200% 50%; }
+    }
+
+    .app-shell {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--details-w);
+      gap: 14px;
+      width: min(1780px, calc(100vw - 32px));
+      height: calc(100dvh - 32px);
+      margin: 16px auto;
+    }
+
+    .app-shell.details-collapsed {
+      grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+    }
+
+    .app-shell.details-collapsed .details-panel {
+      display: none;
+    }
+
+    .glass-panel {
+      min-width: 0;
+      min-height: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(180deg, rgba(19, 27, 41, 0.78) 0%, rgba(9, 14, 23, 0.7) 100%);
+      box-shadow:
+        0 30px 90px rgba(0, 0, 0, 0.44),
+        inset 0 1px 0 rgba(255, 255, 255, 0.055);
+      backdrop-filter: blur(28px) saturate(145%);
+      -webkit-backdrop-filter: blur(28px) saturate(145%);
+    }
+
+    /* ---------- Sidebar ---------- */
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-head {
+      flex: 0 0 auto;
+      padding: 21px 18px 13px;
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      flex: 0 0 auto;
+      border: 1px solid rgba(94, 234, 212, 0.23);
+      border-radius: 12px;
+      background:
+        radial-gradient(circle at 30% 20%, rgba(94, 234, 212, 0.25), transparent 55%),
+        linear-gradient(145deg, rgba(94, 234, 212, 0.15), rgba(96, 165, 250, 0.06));
+      box-shadow:
+        0 10px 28px rgba(0, 0, 0, 0.32),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    }
+
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      inset: 5px;
+      border: 1px solid rgba(94, 234, 212, 0.11);
+      border-radius: 8px;
+      pointer-events: none;
+    }
+
+    .brand-copy {
+      min-width: 0;
+      line-height: 1;
+    }
+
+    .brand-name {
+      font-size: 15px;
+      font-weight: 680;
+      letter-spacing: 0.015em;
+      white-space: nowrap;
+    }
+
+    .brand-name span {
+      color: #8291a5;
+      font-weight: 420;
+    }
+
+    .brand-kicker {
+      margin-top: 7px;
+      color: var(--faint);
+      font-size: 8px;
+      font-weight: 650;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-left: auto;
+      padding: 5px 7px;
+      color: #8cf6e5;
+      font-size: 8px;
+      font-weight: 750;
+      letter-spacing: 0.12em;
+      border: 1px solid rgba(94, 234, 212, 0.15);
+      border-radius: 999px;
+      background: rgba(94, 234, 212, 0.065);
+    }
+
+    .live-pill i {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--mint);
+      animation: pulse-soft 2.6s ease-in-out infinite;
+    }
+
+    .sidebar-close {
+      display: none;
+      margin-left: auto;
+    }
+
+    .workspace-switch {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      margin-top: 18px;
+      padding: 9px 10px;
+      text-align: left;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.022);
+      transition: background 160ms ease, border-color 160ms ease;
+    }
+
+    .workspace-switch:hover {
+      border-color: rgba(255, 255, 255, 0.11);
+      background: rgba(255, 255, 255, 0.042);
+    }
+
+    .workspace-icon {
+      display: grid;
+      place-items: center;
+      width: 27px;
+      height: 27px;
+      flex: 0 0 auto;
+      color: #c8d7ea;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      background: linear-gradient(150deg, rgba(96, 165, 250, 0.18), rgba(167, 139, 250, 0.1));
+    }
+
+    .workspace-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .workspace-copy strong {
+      overflow: hidden;
+      color: #d7e1ef;
+      font-size: 11px;
+      font-weight: 580;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .workspace-copy small {
+      overflow: hidden;
+      color: var(--faint);
+      font-size: 8.5px;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .workspace-switch > svg {
+      color: #69788d;
+    }
+
+    .tabs {
+      flex: 0 0 auto;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 2px;
+      margin: 4px 12px 0;
+      padding: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 14px;
+      background: rgba(2, 5, 10, 0.28);
+    }
+
+    .tab-btn {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      min-width: 0;
+      padding: 9px 4px 8px;
+      color: #79879b;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
+    }
+
+    .tab-btn:hover {
+      color: #c4d1e1;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .tab-btn.is-active {
+      color: #e8fffb;
+      border-color: rgba(94, 234, 212, 0.14);
+      background:
+        linear-gradient(180deg, rgba(94, 234, 212, 0.13), rgba(96, 165, 250, 0.055));
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 8px 22px rgba(0, 0, 0, 0.16);
+    }
+
+    .tab-btn.is-active::after {
+      content: "";
+      position: absolute;
+      bottom: 3px;
+      left: 50%;
+      width: 13px;
+      height: 2px;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--mint), var(--sky));
+      transform: translateX(-50%);
+      box-shadow: 0 0 9px rgba(94, 234, 212, 0.6);
+    }
+
+    .tab-btn svg {
+      width: 15px;
+      height: 15px;
+      opacity: 0.9;
+    }
+
+    .tab-panels {
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      margin-top: 2px;
+    }
+
+    .tab-panel {
+      display: none;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 12px 10px;
+      overscroll-behavior: contain;
+    }
+
+    .tab-panel.is-active {
+      display: block;
+      animation: fade-up 220ms ease both;
+    }
+
+    .new-chat {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      margin: 0 0 13px;
+      padding: 10px 11px;
+      color: #d7fffa;
+      font-size: 11px;
+      font-weight: 620;
+      text-align: left;
+      border: 1px solid rgba(94, 234, 212, 0.14);
+      border-radius: 11px;
+      background:
+        linear-gradient(90deg, rgba(94, 234, 212, 0.09), rgba(96, 165, 250, 0.035));
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+
+    .new-chat:hover {
+      border-color: rgba(94, 234, 212, 0.28);
+      background:
+        linear-gradient(90deg, rgba(94, 234, 212, 0.13), rgba(96, 165, 250, 0.055));
+    }
+
+    .new-chat .plus {
+      display: grid;
+      place-items: center;
+      width: 19px;
+      height: 19px;
+      color: var(--mint);
+      border: 1px solid rgba(94, 234, 212, 0.2);
+      border-radius: 6px;
+      background: rgba(94, 234, 212, 0.08);
+      font-size: 14px;
+      font-weight: 400;
+      line-height: 1;
+    }
+
+    .new-chat kbd {
+      margin-left: auto;
+      padding: 2px 5px;
+      color: #6f7f94;
+      font-family: var(--font-mono);
+      font-size: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.18);
+    }
+
+    .section-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 8px 6px;
+      color: #5f6d82;
+      font-size: 8.5px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .section-label span:last-child {
+      color: #4e5b6e;
+      font-family: var(--font-mono);
+      font-size: 8px;
+      letter-spacing: 0;
+    }
+
+    .session {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      margin: 1px 0;
+      padding: 9px 8px;
+      text-align: left;
+      border: 1px solid transparent;
+      border-radius: 11px;
+      background: transparent;
+      transition: background 150ms ease, border-color 150ms ease;
+    }
+
+    .session:hover {
+      background: rgba(255, 255, 255, 0.032);
+    }
+
+    .session.is-active {
+      border-color: rgba(94, 234, 212, 0.11);
+      background:
+        linear-gradient(90deg, rgba(94, 234, 212, 0.075), rgba(96, 165, 250, 0.028));
+    }
+
+    .session.is-active::before {
+      content: "";
+      position: absolute;
+      top: 11px;
+      bottom: 11px;
+      left: -1px;
+      width: 2px;
+      border-radius: 99px;
+      background: linear-gradient(180deg, var(--mint), var(--sky));
+      box-shadow: 0 0 10px rgba(94, 234, 212, 0.45);
+    }
+
+    .session-icon {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      flex: 0 0 auto;
+      color: #8392a8;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .session.is-active .session-icon {
+      color: #94fff0;
+      border-color: rgba(94, 234, 212, 0.15);
+      background: rgba(94, 234, 212, 0.07);
+    }
+
+    .session-main {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .session-title {
+      overflow: hidden;
+      color: #c9d5e5;
+      font-size: 11px;
+      font-weight: 570;
+      line-height: 1.2;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .session.is-active .session-title {
+      color: #effcf9;
+    }
+
+    .session-sub {
+      overflow: hidden;
+      color: #647287;
+      font-size: 8.5px;
+      font-weight: 400;
+      line-height: 1.2;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .session-side {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+      flex: 0 0 auto;
+      padding-left: 2px;
+    }
+
+    .session-time {
+      color: #536175;
+      font-family: var(--font-mono);
+      font-size: 8px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #6b7890;
+    }
+
+    .dot-live {
+      background: var(--mint);
+      box-shadow: 0 0 7px rgba(94, 234, 212, 0.75);
+    }
+
+    .dot-warm {
+      background: var(--amber);
+    }
+
+    .dot-done {
+      background: rgba(96, 165, 250, 0.7);
+    }
+
+    .sidebar-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      margin-top: 8px;
+      padding: 8px;
+      color: #69798e;
+      font-size: 9.5px;
+      border-radius: 9px;
+      background: transparent;
+      transition: color 150ms ease, background 150ms ease;
+    }
+
+    .sidebar-link:hover {
+      color: #bccbdc;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .panel-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 7px 13px;
+    }
+
+    .panel-heading h2 {
+      margin: 0;
+      color: #e5edf8;
+      font-size: 12.5px;
+      font-weight: 620;
+      letter-spacing: 0.01em;
+    }
+
+    .panel-heading p {
+      margin: 4px 0 0;
+      color: #617086;
+      font-size: 8.5px;
+    }
+
+    .mini-icon {
+      display: grid;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      flex: 0 0 auto;
+      color: #8190a5;
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.025);
+      transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+    }
+
+    .mini-icon:hover {
+      color: #d7fff9;
+      border-color: rgba(94, 234, 212, 0.18);
+      background: rgba(94, 234, 212, 0.07);
+    }
+
+    .org-tree {
+      position: relative;
+      padding: 0 1px 4px;
+    }
+
+    .org-group-label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 2px 7px 7px;
+      color: #59677c;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .org-group-label::after {
+      content: "";
+      height: 1px;
+      flex: 1;
+      background: linear-gradient(90deg, rgba(255, 255, 255, 0.07), transparent);
+    }
+
+    .agent-card {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 5px;
+      padding: 9px 9px;
+      border: 1px solid rgba(255, 255, 255, 0.055);
+      border-radius: 11px;
+      background: rgba(255, 255, 255, 0.022);
+    }
+
+    .agent-card.primary {
+      border-color: rgba(94, 234, 212, 0.13);
+      background:
+        linear-gradient(110deg, rgba(94, 234, 212, 0.075), rgba(96, 165, 250, 0.025));
+    }
+
+    .agent-avatar {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      flex: 0 0 auto;
+      color: #ecfffc;
+      font-size: 10px;
+      font-weight: 700;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 9px;
+      background: linear-gradient(145deg, #1d6f68, #1f3f60);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    }
+
+    .agent-avatar.violet {
+      background: linear-gradient(145deg, #56418c, #273052);
+    }
+
+    .agent-avatar.blue {
+      background: linear-gradient(145deg, #25527f, #1a2e4b);
+    }
+
+    .agent-avatar.amber {
+      background: linear-gradient(145deg, #755a28, #3e3120);
+    }
+
+    .agent-main {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .agent-main strong {
+      color: #d6e2f1;
+      font-size: 10.5px;
+      font-weight: 590;
+    }
+
+    .agent-main small {
+      color: #647287;
+      font-size: 8.5px;
+    }
+
+    .agent-state {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: #769187;
+      font-size: 8px;
+      white-space: nowrap;
+    }
+
+    .org-connector {
+      width: 1px;
+      height: 11px;
+      margin: 0 0 7px 24px;
+      background: linear-gradient(to bottom, rgba(94, 234, 212, 0.3), rgba(255, 255, 255, 0.04));
+    }
+
+    .org-note {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
+      margin: 12px 3px 4px;
+      padding: 9px;
+      color: #66758a;
+      font-size: 8.5px;
+      line-height: 1.55;
+      border: 1px solid rgba(255, 255, 255, 0.045);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.017);
+    }
+
+    .org-note svg {
+      margin-top: 1px;
+      color: #77998f;
+    }
+
+    .file-search {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0 3px 11px;
+      padding: 8px 9px;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 9px;
+      background: rgba(0, 0, 0, 0.17);
+      transition: border-color 150ms ease;
+    }
+
+    .file-search:focus-within {
+      border-color: rgba(94, 234, 212, 0.25);
+    }
+
+    .file-search svg {
+      color: #617086;
+    }
+
+    .file-search input {
+      width: 100%;
+      min-width: 0;
+      color: #c7d3e3;
+      font-size: 9.5px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+    }
+
+    .file-search input::placeholder {
+      color: #536176;
+    }
+
+    .folder-block {
+      margin: 0 1px 8px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 11px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.016);
+    }
+
+    .folder-head {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 9px;
+      color: #b5c3d5;
+      font-size: 9.5px;
+      font-weight: 570;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+    }
+
+    .folder-head svg {
+      color: #79a79d;
+    }
+
+    .folder-head span {
+      margin-left: auto;
+      color: #5d6a7e;
+      font-family: var(--font-mono);
+      font-size: 8px;
+    }
+
+    .file-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      width: 100%;
+      padding: 7px 9px;
+      text-align: left;
+      border-top: 1px solid rgba(255, 255, 255, 0.025);
+      background: transparent;
+      transition: background 140ms ease;
+    }
+
+    .file-row:first-of-type {
+      border-top: 0;
+    }
+
+    .file-row:hover {
+      background: rgba(255, 255, 255, 0.034);
+    }
+
+    .file-ext {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      color: #8fe3d3;
+      font-family: var(--font-mono);
+      font-size: 6.5px;
+      font-weight: 700;
+      border: 1px solid rgba(94, 234, 212, 0.12);
+      border-radius: 5px;
+      background: rgba(94, 234, 212, 0.06);
+    }
+
+    .file-ext.code {
+      color: #96c3ff;
+      border-color: rgba(96, 165, 250, 0.12);
+      background: rgba(96, 165, 250, 0.06);
+    }
+
+    .file-ext.shell {
+      color: #ceb9ff;
+      border-color: rgba(167, 139, 250, 0.12);
+      background: rgba(167, 139, 250, 0.06);
+    }
+
+    .file-name {
+      overflow: hidden;
+      flex: 1;
+      color: #aebdce;
+      font-size: 9px;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .file-size {
+      color: #536176;
+      font-family: var(--font-mono);
+      font-size: 7.5px;
+    }
+
+    .storage-card {
+      margin: 12px 3px 3px;
+      padding: 9px;
+      border: 1px solid rgba(255, 255, 255, 0.045);
+      border-radius: 9px;
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .storage-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: #69798e;
+      font-size: 8px;
+    }
+
+    .storage-bar {
+      height: 3px;
+      margin-top: 7px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: rgba(255, 255, 255, 0.07);
+    }
+
+    .storage-bar span {
+      display: block;
+      width: 24%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--mint), var(--sky));
+    }
+
+    .sidebar-footer {
+      flex: 0 0 auto;
+      padding: 10px 12px 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.055);
+      background: rgba(4, 8, 14, 0.18);
+    }
+
+    .user-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: 100%;
+      padding: 7px 6px;
+      text-align: left;
+      border-radius: 10px;
+      background: transparent;
+      transition: background 150ms ease;
+    }
+
+    .user-row:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .avatar {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      flex: 0 0 auto;
+      color: #f1f8ff;
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 9px;
+      background:
+        radial-gradient(circle at 25% 18%, rgba(255, 255, 255, 0.22), transparent 40%),
+        linear-gradient(145deg, #3c5d7e, #4d3c74);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.13);
+    }
+
+    .user-main {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .user-main strong {
+      color: #cbd7e6;
+      font-size: 10px;
+      font-weight: 580;
+    }
+
+    .user-main small {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: #5f6d81;
+      font-size: 8px;
+    }
+
+    .user-main small i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 5px rgba(94, 234, 212, 0.55);
+    }
+
+    .user-row > svg {
+      color: #5f6e83;
+    }
+
+    /* ---------- Main ---------- */
+
+    .main-panel {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .main-panel::before {
+      content: "";
+      position: absolute;
+      top: -16%;
+      left: 14%;
+      width: 65%;
+      height: 45%;
+      pointer-events: none;
+      border-radius: 50%;
+      background: radial-gradient(closest-side, rgba(94, 234, 212, 0.07), transparent 100%);
+      filter: blur(30px);
+    }
+
+    .topbar {
+      position: relative;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      flex: 0 0 auto;
+      min-height: 72px;
+      padding: 0 17px 0 21px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.022), rgba(255, 255, 255, 0));
+    }
+
+    .topbar-title {
+      min-width: 0;
+    }
+
+    .crumb-line {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 5px;
+      color: #58677b;
+      font-size: 8.5px;
+      font-weight: 520;
+      letter-spacing: 0.04em;
+    }
+
+    .crumb-line .slash {
+      color: #3e4a5b;
+    }
+
+    .crumb-line .current {
+      color: #8796aa;
+    }
+
+    .title-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .title-line h1 {
+      overflow: hidden;
+      margin: 0;
+      color: #eef4fc;
+      font-size: 14px;
+      font-weight: 630;
+      letter-spacing: 0.005em;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .run-state {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      color: #8bf5e2;
+      font-size: 8px;
+      font-weight: 620;
+      white-space: nowrap;
+      border: 1px solid rgba(94, 234, 212, 0.15);
+      border-radius: 999px;
+      background: rgba(94, 234, 212, 0.06);
+    }
+
+    .run-state i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--mint);
+      animation: pulse-soft 2.2s ease-in-out infinite;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+
+    .cmd-search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: clamp(170px, 18vw, 245px);
+      min-width: 0;
+      padding: 8px 9px;
+      color: #69788d;
+      font-size: 10px;
+      text-align: left;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.022);
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+
+    .cmd-search:hover {
+      border-color: rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .cmd-search span {
+      overflow: hidden;
+      flex: 1;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .cmd-search kbd {
+      flex: 0 0 auto;
+      padding: 2px 5px;
+      color: #627187;
+      font-family: var(--font-mono);
+      font-size: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.075);
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.16);
+    }
+
+    .icon-btn {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 auto;
+      color: #8190a4;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      background: transparent;
+      transition: color 150ms ease, background 150ms ease, border-color 150ms ease;
+    }
+
+    .icon-btn:hover {
+      color: #d8e7f5;
+      border-color: rgba(255, 255, 255, 0.07);
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .notify-btn {
+      position: relative;
+    }
+
+    .notify-dot {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 5px;
+      height: 5px;
+      border: 1px solid #0b111b;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 7px rgba(94, 234, 212, 0.5);
+    }
+
+    .top-divider {
+      width: 1px;
+      height: 20px;
+      margin: 0 2px;
+      background: rgba(255, 255, 255, 0.075);
+    }
+
+    .user-chip {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px;
+      border-radius: 10px;
+      background: transparent;
+      transition: background 150ms ease;
+    }
+
+    .user-chip:hover {
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .user-chip .avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      font-size: 8.5px;
+    }
+
+    .mobile-menu {
+      display: none;
+    }
+
+    .chat-scroll {
+      position: relative;
+      z-index: 1;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scroll-behavior: smooth;
+    }
+
+    .chat-stream {
+      width: 100%;
+      max-width: 856px;
+      margin: 0 auto;
+      padding: 22px 28px 12px;
+    }
+
+    .day-divider {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      margin: 1px 0 18px;
+      color: #56657a;
+      font-size: 8px;
+      font-weight: 570;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .day-divider::before,
+    .day-divider::after {
+      content: "";
+      height: 1px;
+      flex: 1;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+    }
+
+    .system-note {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin: 0 auto 20px;
+      color: #647388;
+      font-size: 9px;
+      text-align: center;
+    }
+
+    .system-note svg {
+      color: #6e8e85;
+    }
+
+    .message {
+      display: flex;
+      gap: 11px;
+      margin: 20px 0;
+      animation: fade-up 280ms ease both;
+    }
+
+    .message.user {
+      justify-content: flex-end;
+    }
+
+    .user-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      max-width: min(78%, 620px);
+    }
+
+    .message-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0 2px 7px;
+      color: #5a687c;
+      font-size: 8.5px;
+      line-height: 1;
+    }
+
+    .message-meta .name {
+      color: #c7d4e4;
+      font-size: 10.5px;
+      font-weight: 610;
+    }
+
+    .message-meta .role-tag {
+      padding: 2px 5px;
+      color: #8ba79f;
+      font-size: 7px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      border: 1px solid rgba(94, 234, 212, 0.11);
+      border-radius: 4px;
+      background: rgba(94, 234, 212, 0.045);
+    }
+
+    .message-meta .meta-dot {
+      width: 2px;
+      height: 2px;
+      border-radius: 50%;
+      background: #445166;
+    }
+
+    .message-meta time {
+      font-family: var(--font-mono);
+      font-size: 7.5px;
+      color: #4f5d71;
+    }
+
+    .bubble {
+      position: relative;
+      font-size: 12.5px;
+      line-height: 1.72;
+    }
+
+    .user-bubble {
+      padding: 12px 15px;
+      color: #e1edfb;
+      border: 1px solid rgba(124, 176, 255, 0.16);
+      border-radius: 16px 16px 4px 16px;
+      background:
+        linear-gradient(135deg, rgba(54, 82, 122, 0.58), rgba(38, 55, 86, 0.48));
+      box-shadow:
+        0 12px 30px rgba(0, 0, 0, 0.18),
+        inset 0 1px 0 rgba(255, 255, 255, 0.055);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .assistant-avatar {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 auto;
+      margin-top: 18px;
+      color: #eafffb;
+      border: 1px solid rgba(94, 234, 212, 0.27);
+      border-radius: 10px;
+      background:
+        radial-gradient(circle at 28% 20%, rgba(255, 255, 255, 0.25), transparent 36%),
+        linear-gradient(145deg, #19776e, #1f405f);
+      box-shadow:
+        0 9px 23px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    }
+
+    .assistant-main {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .assistant-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 21px;
+      margin: 0 1px 7px;
+      color: #5a687c;
+      font-size: 8.5px;
+      line-height: 1;
+    }
+
+    .assistant-meta .name {
+      color: #dcfbf7;
+      font-size: 10.5px;
+      font-weight: 630;
+    }
+
+    .assistant-meta .model-tag {
+      padding: 2px 5px;
+      color: #8698b0;
+      font-family: var(--font-mono);
+      font-size: 7px;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .assistant-meta time {
+      margin-left: auto;
+      color: #4f5d71;
+      font-family: var(--font-mono);
+      font-size: 7.5px;
+    }
+
+    .thinking-card {
+      margin: 0 0 9px;
+      overflow: hidden;
+      border: 1px solid rgba(167, 139, 250, 0.13);
+      border-radius: 12px;
+      background:
+        linear-gradient(120deg, rgba(167, 139, 250, 0.05), rgba(96, 165, 250, 0.022));
+    }
+
+    .thinking-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 9px 11px;
+      color: #9ca9c1;
+      font-size: 10px;
+      text-align: left;
+      background: transparent;
+    }
+
+    .thinking-toggle:hover {
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .thinking-spark {
+      display: grid;
+      place-items: center;
+      width: 20px;
+      height: 20px;
+      flex: 0 0 auto;
+      color: #c4b5fd;
+      border: 1px solid rgba(167, 139, 250, 0.15);
+      border-radius: 6px;
+      background: rgba(167, 139, 250, 0.07);
+    }
+
+    .thinking-label strong {
+      color: #c4bfe0;
+      font-weight: 570;
+    }
+
+    .thinking-toggle .thinking-time {
+      color: #647289;
+      font-family: var(--font-mono);
+      font-size: 8px;
+    }
+
+    .thinking-toggle .chev {
+      margin-left: auto;
+      color: #647289;
+      transition: transform 220ms ease;
+    }
+
+    .thinking-card.is-open .thinking-toggle .chev {
+      transform: rotate(180deg);
+    }
+
+    .thinking-body {
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition: max-height 300ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+    }
+
+    .thinking-card.is-open .thinking-body {
+      max-height: 330px;
+      opacity: 1;
+    }
+
+    .thinking-inner {
+      padding: 0 12px 10px 38px;
+    }
+
+    .thinking-steps {
+      position: relative;
+      padding: 1px 0 2px;
+    }
+
+    .thinking-steps::before {
+      content: "";
+      position: absolute;
+      top: 5px;
+      bottom: 13px;
+      left: 3px;
+      width: 1px;
+      background: linear-gradient(to bottom, rgba(167, 139, 250, 0.3), rgba(96, 165, 250, 0.04));
+    }
+
+    .thinking-step {
+      position: relative;
+      padding: 0 0 9px 15px;
+      color: #7f8da4;
+      font-size: 9.5px;
+      line-height: 1.45;
+    }
+
+    .thinking-step::before {
+      content: "";
+      position: absolute;
+      top: 4px;
+      left: -1px;
+      width: 7px;
+      height: 7px;
+      border: 1px solid rgba(167, 139, 250, 0.4);
+      border-radius: 50%;
+      background: #19182b;
+    }
+
+    .thinking-step.done::before {
+      border-color: rgba(94, 234, 212, 0.5);
+      background: var(--mint);
+      box-shadow: 0 0 7px rgba(94, 234, 212, 0.3);
+    }
+
+    .thinking-step strong {
+      color: #aeb8cc;
+      font-weight: 540;
+    }
+
+    .tool-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 1px;
+    }
+
+    .tool-chip {
+      padding: 3px 6px;
+      color: #8fa1b9;
+      font-family: var(--font-mono);
+      font-size: 7.5px;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.026);
+    }
+
+    .assistant-bubble {
+      padding: 15px 17px 13px;
+      color: #bfcbdb;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 4px 17px 17px 17px;
+      background:
+        linear-gradient(145deg, rgba(19, 29, 44, 0.8), rgba(12, 18, 29, 0.7));
+      box-shadow:
+        0 16px 40px rgba(0, 0, 0, 0.18),
+        inset 0 1px 0 rgba(255, 255, 255, 0.045);
+    }
+
+    .markdown > :first-child {
+      margin-top: 0;
+    }
+
+    .markdown > :last-child {
+      margin-bottom: 0;
+    }
+
+    .markdown p {
+      margin: 0 0 11px;
+      color: #bac7d8;
+      font-size: 12.5px;
+      line-height: 1.72;
+    }
+
+    .markdown strong {
+      color: #f0f7ff;
+      font-weight: 620;
+    }
+
+    .markdown ol {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: 12px 0 13px;
+      padding: 0;
+      list-style: none;
+      counter-reset: plan;
+    }
+
+    .markdown ol li {
+      position: relative;
+      padding-left: 29px;
+      color: #aebccf;
+      font-size: 11.5px;
+      line-height: 1.62;
+      counter-increment: plan;
+    }
+
+    .markdown ol li::before {
+      content: counter(plan, decimal-leading-zero);
+      position: absolute;
+      top: 1px;
+      left: 0;
+      display: grid;
+      place-items: center;
+      width: 19px;
+      height: 19px;
+      color: #8fe3d3;
+      font-family: var(--font-mono);
+      font-size: 7.5px;
+      border: 1px solid rgba(94, 234, 212, 0.16);
+      border-radius: 5px;
+      background: rgba(94, 234, 212, 0.055);
+    }
+
+    .markdown ol li strong {
+      display: block;
+      margin-bottom: 1px;
+      color: #e1ebf7;
+      font-size: 11.5px;
+    }
+
+    .markdown code {
+      padding: 1px 4px;
+      color: #8ff5e5;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      border: 1px solid rgba(94, 234, 212, 0.1);
+      border-radius: 4px;
+      background: rgba(94, 234, 212, 0.055);
+    }
+
+    .markdown blockquote {
+      margin: 12px 0;
+      padding: 9px 11px;
+      color: #9eacbf;
+      font-size: 10.5px;
+      line-height: 1.6;
+      border-left: 2px solid rgba(94, 234, 212, 0.4);
+      border-radius: 0 7px 7px 0;
+      background: rgba(94, 234, 212, 0.028);
+    }
+
+    .markdown blockquote p {
+      margin: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .code-shell {
+      margin: 12px 0 8px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.075);
+      border-radius: 10px;
+      background: rgba(3, 7, 13, 0.72);
+    }
+
+    .code-head {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      color: #64748b;
+      font-family: var(--font-mono);
+      font-size: 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .code-head .traffic {
+      display: flex;
+      gap: 4px;
+      margin-right: 3px;
+    }
+
+    .code-head .traffic i {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .code-head .traffic i:first-child {
+      background: rgba(251, 113, 133, 0.55);
+    }
+
+    .code-head .traffic i:nth-child(2) {
+      background: rgba(251, 191, 36, 0.5);
+    }
+
+    .code-head .traffic i:last-child {
+      background: rgba(94, 234, 212, 0.42);
+    }
+
+    .code-copy {
+      margin-left: auto;
+      padding: 2px 5px;
+      color: #68788e;
+      font-family: var(--font-mono);
+      font-size: 7px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 4px;
+      background: transparent;
+    }
+
+    .code-copy:hover {
+      color: #c7f7ef;
+      border-color: rgba(94, 234, 212, 0.18);
+    }
+
+    .code-shell pre {
+      margin: 0;
+      padding: 10px 12px;
+      overflow-x: auto;
+      color: #bfd0e4;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      line-height: 1.72;
+      tab-size: 2;
+    }
+
+    .tok-key { color: #c4b5fd; }
+    .tok-fn { color: #7dd3fc; }
+    .tok-str { color: #86efac; }
+    .tok-num { color: #fbbf24; }
+    .tok-comment { color: #526176; }
+
+    .result-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.055);
+    }
+
+    .result-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 6px;
+      color: #8394aa;
+      font-size: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.055);
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .result-chip svg {
+      color: #7b9e95;
+    }
+
+    .msg-actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      margin: 7px 2px 0;
+      opacity: 0.78;
+      transition: opacity 150ms ease;
+    }
+
+    .message:hover .msg-actions {
+      opacity: 1;
+    }
+
+    .msg-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 6px;
+      color: #647287;
+      font-size: 8px;
+      border-radius: 5px;
+      background: transparent;
+      transition: color 150ms ease, background 150ms ease;
+    }
+
+    .msg-action:hover {
+      color: #c0cfdf;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .decision-card {
+      position: relative;
+      margin: 13px 0 5px;
+      padding: 14px 15px 13px;
+      overflow: hidden;
+      border: 1px solid rgba(94, 234, 212, 0.17);
+      border-radius: 15px;
+      background:
+        radial-gradient(120% 150% at 0% 0%, rgba(94, 234, 212, 0.085), transparent 50%),
+        linear-gradient(140deg, rgba(16, 27, 38, 0.88), rgba(11, 17, 28, 0.8));
+      box-shadow:
+        0 18px 40px rgba(0, 0, 0, 0.22),
+        inset 0 1px 0 rgba(255, 255, 255, 0.055);
+    }
+
+    .decision-card::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 15px;
+      right: 15px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(94, 234, 212, 0.42), transparent);
+    }
+
+    .decision-top {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-bottom: 9px;
+    }
+
+    .decision-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 6px;
+      color: #fcd57b;
+      font-size: 7.5px;
+      font-weight: 650;
+      letter-spacing: 0.06em;
+      border: 1px solid rgba(251, 191, 36, 0.15);
+      border-radius: 4px;
+      background: rgba(251, 191, 36, 0.06);
+    }
+
+    .decision-status i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--amber);
+    }
+
+    .decision-id {
+      margin-left: auto;
+      color: #5d6c81;
+      font-family: var(--font-mono);
+      font-size: 8px;
+    }
+
+    .decision-card h3 {
+      margin: 0;
+      color: #f0f8ff;
+      font-size: 13px;
+      font-weight: 640;
+      letter-spacing: 0.005em;
+    }
+
+    .decision-desc {
+      margin: 5px 0 10px;
+      color: #8e9eb3;
+      font-size: 10px;
+      line-height: 1.58;
+    }
+
+    .decision-checks {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px 12px;
+      margin-bottom: 12px;
+    }
+
+    .decision-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: #7e8da2;
+      font-size: 8.5px;
+    }
+
+    .decision-check svg {
+      color: #6bc6b7;
+    }
+
+    .decision-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 7px 11px;
+      font-size: 9.5px;
+      font-weight: 590;
+      line-height: 1.2;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      transition: transform 150ms ease, background 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn-primary {
+      color: #041411;
+      border-color: rgba(94, 234, 212, 0.6);
+      background: linear-gradient(135deg, #7ff4e3, #55cfc4);
+      box-shadow: 0 6px 18px rgba(94, 234, 212, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    }
+
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #9bfff1, #6ae0d4);
+      box-shadow: 0 8px 24px rgba(94, 234, 212, 0.22);
+    }
+
+    .btn-secondary {
+      color: #b8c6d7;
+      border-color: rgba(255, 255, 255, 0.09);
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .btn-secondary:hover {
+      color: #eff8ff;
+      border-color: rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .btn-ghost {
+      color: #748399;
+      border-color: transparent;
+      background: transparent;
+    }
+
+    .btn-ghost:hover {
+      color: #f3a8b3;
+      background: rgba(251, 113, 133, 0.06);
+    }
+
+    .decision-result {
+      display: none;
+      align-items: flex-start;
+      gap: 9px;
+      margin-top: 1px;
+      padding: 9px 10px;
+      border: 1px solid rgba(94, 234, 212, 0.12);
+      border-radius: 8px;
+      background: rgba(94, 234, 212, 0.045);
+      animation: fade-up 200ms ease both;
+    }
+
+    .decision-card:not([data-state="pending"]) .decision-actions {
+      display: none;
+    }
+
+    .decision-card:not([data-state="pending"]) .decision-result {
+      display: flex;
+    }
+
+    .decision-card[data-state="approved"] .decision-status {
+      color: #90f8e8;
+      border-color: rgba(94, 234, 212, 0.2);
+      background: rgba(94, 234, 212, 0.08);
+    }
+
+    .decision-card[data-state="approved"] .decision-status i {
+      background: var(--mint);
+    }
+
+    .decision-card[data-state="revise"] .decision-status {
+      color: #fcd57b;
+      border-color: rgba(251, 191, 36, 0.2);
+      background: rgba(251, 191, 36, 0.075);
+    }
+
+    .decision-card[data-state="revise"] .decision-result {
+      border-color: rgba(251, 191, 36, 0.14);
+      background: rgba(251, 191, 36, 0.045);
+    }
+
+    .decision-card[data-state="revise"] .result-glyph {
+      color: #fcd57b;
+      border-color: rgba(251, 191, 36, 0.1);
+      background: rgba(251, 191, 36, 0.1);
+    }
+
+    .decision-card[data-state="rejected"] .decision-status {
+      color: #fda4af;
+      border-color: rgba(251, 113, 133, 0.2);
+      background: rgba(251, 113, 133, 0.075);
+    }
+
+    .decision-card[data-state="rejected"] .decision-status i {
+      background: var(--rose);
+    }
+
+    .decision-card[data-state="rejected"] .decision-result {
+      border-color: rgba(251, 113, 133, 0.14);
+      background: rgba(251, 113, 133, 0.045);
+    }
+
+    .decision-card[data-state="rejected"] .result-glyph {
+      color: #fda4af;
+      border-color: rgba(251, 113, 133, 0.12);
+      background: rgba(251, 113, 133, 0.1);
+    }
+
+    .result-glyph {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      color: #8ff5e5;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      border: 1px solid rgba(94, 234, 212, 0.12);
+      border-radius: 6px;
+      background: rgba(94, 234, 212, 0.1);
+    }
+
+    .decision-result-copy {
+      min-width: 0;
+    }
+
+    .decision-result-copy strong {
+      display: block;
+      color: #d9e7f4;
+      font-size: 9.5px;
+      font-weight: 590;
+    }
+
+    .decision-result-copy p {
+      margin: 3px 0 0;
+      color: #8190a4;
+      font-size: 8.5px;
+      line-height: 1.5;
+    }
+
+    .composer-shell {
+      position: relative;
+      z-index: 2;
+      flex: 0 0 auto;
+      padding: 10px 22px 16px;
+      background: linear-gradient(180deg, rgba(7, 11, 18, 0), rgba(7, 11, 18, 0.58) 36%);
+    }
+
+    .composer {
+      width: 100%;
+      max-width: 856px;
+      margin: 0 auto;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 15px;
+      background:
+        linear-gradient(180deg, rgba(17, 25, 38, 0.94), rgba(12, 18, 29, 0.94));
+      box-shadow:
+        0 18px 45px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.06);
+      transition: border-color 180ms ease, box-shadow 180ms ease;
+    }
+
+    .composer:focus-within {
+      border-color: rgba(94, 234, 212, 0.27);
+      box-shadow:
+        0 18px 48px rgba(0, 0, 0, 0.33),
+        0 0 0 3px rgba(94, 234, 212, 0.035),
+        inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    }
+
+    .composer textarea {
+      display: block;
+      width: 100%;
+      min-height: 47px;
+      max-height: 116px;
+      padding: 13px 14px 4px;
+      resize: none;
+      color: #dce7f4;
+      font-size: 11.5px;
+      line-height: 1.55;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      overflow-y: auto;
+    }
+
+    .composer textarea::placeholder {
+      color: #637187;
+    }
+
+    .composer-bar {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 6px 8px 8px 10px;
+    }
+
+    .composer-tool {
+      display: grid;
+      place-items: center;
+      width: 27px;
+      height: 27px;
+      color: #718096;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      transition: color 150ms ease, background 150ms ease;
+    }
+
+    .composer-tool:hover {
+      color: #c9d7e6;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .model-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-left: 2px;
+      padding: 4px 7px;
+      color: #8595aa;
+      font-size: 8.5px;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.024);
+    }
+
+    .model-pill:hover {
+      color: #d3e1f0;
+      border-color: rgba(255, 255, 255, 0.1);
+    }
+
+    .model-pill i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 5px rgba(94, 234, 212, 0.5);
+    }
+
+    .model-pill svg {
+      color: #65748a;
+    }
+
+    .composer-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+
+    .composer-hint {
+      color: #526176;
+      font-size: 7.5px;
+      white-space: nowrap;
+    }
+
+    .send-btn {
+      display: grid;
+      place-items: center;
+      width: 31px;
+      height: 31px;
+      flex: 0 0 auto;
+      color: #06211d;
+      border: 1px solid rgba(94, 234, 212, 0.48);
+      border-radius: 9px;
+      background: linear-gradient(135deg, #89f7e8, #55cfc4);
+      box-shadow: 0 5px 15px rgba(94, 234, 212, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.38);
+      transition: transform 150ms ease, box-shadow 150ms ease;
+    }
+
+    .send-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 20px rgba(94, 234, 212, 0.21), inset 0 1px 0 rgba(255, 255, 255, 0.38);
+    }
+
+    .composer-note {
+      max-width: 856px;
+      margin: 6px auto 0;
+      color: #4e5c70;
+      font-size: 7.5px;
+      text-align: center;
+      letter-spacing: 0.02em;
+    }
+
+    /* ---------- Details ---------- */
+
+    .details-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .details-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex: 0 0 auto;
+      padding: 19px 15px 13px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .eyebrow {
+      margin: 0 0 5px;
+      color: #56657a;
+      font-size: 7.5px;
+      font-weight: 720;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    .details-head h2 {
+      margin: 0;
+      color: #e1eaf6;
+      font-size: 12.5px;
+      font-weight: 630;
+      letter-spacing: 0.01em;
+    }
+
+    .details-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      padding: 12px 13px 10px;
+      overscroll-behavior: contain;
+    }
+
+    .run-hero {
+      position: relative;
+      margin-bottom: 15px;
+      padding: 13px 13px 12px;
+      overflow: hidden;
+      border: 1px solid rgba(94, 234, 212, 0.12);
+      border-radius: 14px;
+      background:
+        radial-gradient(100% 120% at 0% 0%, rgba(94, 234, 212, 0.09), transparent 55%),
+        linear-gradient(145deg, rgba(19, 30, 43, 0.8), rgba(11, 17, 27, 0.7));
+    }
+
+    .run-hero::after {
+      content: "";
+      position: absolute;
+      right: -20px;
+      bottom: -36px;
+      width: 100px;
+      height: 100px;
+      border: 1px solid rgba(94, 234, 212, 0.08);
+      border-radius: 50%;
+      box-shadow: 0 0 0 18px rgba(94, 234, 212, 0.015);
+      pointer-events: none;
+    }
+
+    .run-topline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 6px;
+      color: #f8d581;
+      font-size: 7.5px;
+      font-weight: 640;
+      border: 1px solid rgba(251, 191, 36, 0.14);
+      border-radius: 4px;
+      background: rgba(251, 191, 36, 0.055);
+    }
+
+    .status-pill i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--amber);
+    }
+
+    .run-id {
+      color: #536176;
+      font-family: var(--font-mono);
+      font-size: 8px;
+    }
+
+    .run-hero h3 {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      color: #eff8ff;
+      font-size: 13px;
+      font-weight: 630;
+      letter-spacing: 0.01em;
+    }
+
+    .run-hero > p {
+      position: relative;
+      z-index: 1;
+      margin: 4px 0 11px;
+      color: #748397;
+      font-size: 8.5px;
+    }
+
+    .progress-row {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .progress-track {
+      height: 4px;
+      flex: 1;
+      overflow: hidden;
+      border-radius: 99px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .progress-track span {
+      display: block;
+      width: 42%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--mint), var(--sky));
+      box-shadow: 0 0 10px rgba(94, 234, 212, 0.25);
+    }
+
+    .progress-value {
+      color: #90a1b7;
+      font-family: var(--font-mono);
+      font-size: 8px;
+    }
+
+    .run-stats {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+      margin-top: 11px;
+      padding-top: 9px;
+      border-top: 1px solid rgba(255, 255, 255, 0.055);
+    }
+
+    .run-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .run-stat span {
+      color: #5e6c80;
+      font-size: 7px;
+      letter-spacing: 0.05em;
+    }
+
+    .run-stat strong {
+      color: #c1cfdf;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      font-weight: 550;
+    }
+
+    .details-section {
+      margin-bottom: 16px;
+    }
+
+    .details-section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+      padding: 0 2px;
+    }
+
+    .details-section-head h3 {
+      margin: 0;
+      color: #aab9ca;
+      font-size: 9px;
+      font-weight: 620;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .details-section-head span {
+      color: #536176;
+      font-family: var(--font-mono);
+      font-size: 7.5px;
+    }
+
+    .topo {
+      position: relative;
+      padding: 2px 1px;
+    }
+
+    .topo::before {
+      content: "";
+      position: absolute;
+      top: 20px;
+      bottom: 22px;
+      left: 17px;
+      width: 1px;
+      background: linear-gradient(to bottom, rgba(94, 234, 212, 0.26), rgba(255, 255, 255, 0.045));
+    }
+
+    .topo-item {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 0 6px 27px;
+    }
+
+    .topo-node {
+      position: absolute;
+      left: 14px;
+      top: 50%;
+      width: 7px;
+      height: 7px;
+      border: 1px solid rgba(94, 234, 212, 0.36);
+      border-radius: 50%;
+      background: #0c1520;
+      transform: translateY(-50%);
+    }
+
+    .topo-item.done .topo-node {
+      border-color: rgba(94, 234, 212, 0.55);
+      background: var(--mint);
+      box-shadow: 0 0 7px rgba(94, 234, 212, 0.26);
+    }
+
+    .topo-item.running .topo-node {
+      border-color: rgba(251, 191, 36, 0.55);
+      background: var(--amber);
+      box-shadow: 0 0 8px rgba(251, 191, 36, 0.24);
+      animation: pulse-soft 2s ease-in-out infinite;
+    }
+
+    .topo-avatar {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      color: #dffdf8;
+      font-size: 7.5px;
+      font-weight: 680;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      background: rgba(94, 234, 212, 0.08);
+    }
+
+    .topo-avatar.blue {
+      color: #dbeeff;
+      background: rgba(96, 165, 250, 0.11);
+    }
+
+    .topo-avatar.violet {
+      color: #e7ddff;
+      background: rgba(167, 139, 250, 0.11);
+    }
+
+    .topo-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .topo-copy strong {
+      color: #bdcbdb;
+      font-size: 9px;
+      font-weight: 560;
+    }
+
+    .topo-copy small {
+      color: #5e6c80;
+      font-size: 7.5px;
+    }
+
+    .topo-state {
+      color: #647287;
+      font-size: 7px;
+      white-space: nowrap;
+    }
+
+    .topo-item.done .topo-state {
+      color: #73a79c;
+    }
+
+    .topo-item.running .topo-state {
+      color: #d2aa58;
+    }
+
+    .context-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding: 11px 12px;
+      border: 1px solid rgba(255, 255, 255, 0.055);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .context-ring {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: conic-gradient(var(--mint) var(--p), rgba(255, 255, 255, 0.075) 0);
+      box-shadow: 0 0 18px rgba(94, 234, 212, 0.06);
+    }
+
+    .context-ring::before {
+      content: "";
+      position: absolute;
+      inset: 4px;
+      border-radius: 50%;
+      background: #0c141f;
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+
+    .context-ring span {
+      position: relative;
+      color: #dcfcf7;
+      font-family: var(--font-mono);
+      font-size: 8px;
+      font-weight: 600;
+    }
+
+    .context-copy {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .context-copy strong {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      color: #b8c6d6;
+      font-size: 9px;
+      font-weight: 570;
+    }
+
+    .context-copy strong span {
+      color: #7d8ba0;
+      font-family: var(--font-mono);
+      font-size: 7.5px;
+    }
+
+    .context-copy p {
+      margin: 4px 0 0;
+      color: #5e6c80;
+      font-size: 7.5px;
+    }
+
+    .context-track {
+      height: 2px;
+      margin-top: 7px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: rgba(255, 255, 255, 0.07);
+    }
+
+    .context-track i {
+      display: block;
+      width: 62%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--mint), var(--sky));
+    }
+
+    .artifact-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 7px;
+      border-radius: 7px;
+      transition: background 150ms ease;
+    }
+
+    .artifact-row:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .file-badge {
+      display: grid;
+      place-items: center;
+      width: 23px;
+      height: 23px;
+      flex: 0 0 auto;
+      color: #8be8da;
+      font-family: var(--font-mono);
+      font-size: 6.5px;
+      font-weight: 700;
+      border: 1px solid rgba(94, 234, 212, 0.11);
+      border-radius: 5px;
+      background: rgba(94, 234, 212, 0.055);
+    }
+
+    .file-badge.blue {
+      color: #94c6ff;
+      border-color: rgba(96, 165, 250, 0.11);
+      background: rgba(96, 165, 250, 0.055);
+    }
+
+    .file-badge.violet {
+      color: #c6b2ff;
+      border-color: rgba(167, 139, 250, 0.11);
+      background: rgba(167, 139, 250, 0.055);
+    }
+
+    .artifact-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .artifact-copy strong {
+      overflow: hidden;
+      color: #aebed0;
+      font-family: var(--font-mono);
+      font-size: 8px;
+      font-weight: 470;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .artifact-copy small {
+      color: #566479;
+      font-size: 7px;
+    }
+
+    .artifact-action {
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      color: #5d6b7f;
+      border-radius: 5px;
+      background: transparent;
+    }
+
+    .artifact-action:hover {
+      color: #bcd2e7;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .permission-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 7px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .permission-row:last-child {
+      border-bottom: 0;
+    }
+
+    .permission-icon {
+      display: grid;
+      place-items: center;
+      width: 23px;
+      height: 23px;
+      flex: 0 0 auto;
+      color: #7b8ca2;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.022);
+    }
+
+    .permission-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .permission-copy strong {
+      color: #a9b8c9;
+      font-size: 8.5px;
+      font-weight: 540;
+    }
+
+    .permission-copy small {
+      color: #566479;
+      font-size: 7px;
+    }
+
+    .permission-state {
+      padding: 3px 5px;
+      color: #83c8bc;
+      font-size: 7px;
+      white-space: nowrap;
+      border: 1px solid rgba(94, 234, 212, 0.1);
+      border-radius: 4px;
+      background: rgba(94, 234, 212, 0.045);
+    }
+
+    .permission-state.pending {
+      color: #d8b467;
+      border-color: rgba(251, 191, 36, 0.11);
+      background: rgba(251, 191, 36, 0.045);
+    }
+
+    .details-foot {
+      flex: 0 0 auto;
+      padding: 9px 13px 12px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .log-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 9px;
+      color: #748398;
+      font-size: 8.5px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.018);
+      transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+    }
+
+    .log-link:hover {
+      color: #c7f7ef;
+      border-color: rgba(94, 234, 212, 0.13);
+      background: rgba(94, 234, 212, 0.04);
+    }
+
+    /* ---------- Overlays ---------- */
+
+    .scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 70;
+      opacity: 0;
+      pointer-events: none;
+      background: rgba(3, 6, 11, 0.66);
+      backdrop-filter: blur(7px);
+      -webkit-backdrop-filter: blur(7px);
+      transition: opacity 240ms ease;
+    }
+
+    .scrim.is-visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 25px;
+      left: 50%;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      max-width: calc(100vw - 34px);
+      padding: 9px 13px;
+      color: #d9e7f2;
+      font-size: 10px;
+      border: 1px solid rgba(94, 234, 212, 0.16);
+      border-radius: 9px;
+      background: rgba(11, 18, 28, 0.94);
+      box-shadow: 0 14px 40px rgba(0, 0, 0, 0.42);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 10px);
+      transition: opacity 200ms ease, transform 200ms ease;
+    }
+
+    .toast.is-visible {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    .toast-dot {
+      width: 5px;
+      height: 5px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 7px rgba(94, 234, 212, 0.7);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* ---------- Responsive ---------- */
+
+    @media (max-width: 1279px) {
+      .app-shell {
+        grid-template-columns: 270px minmax(0, 1fr);
+      }
+
+      .details-panel {
+        position: fixed;
+        top: 14px;
+        right: 14px;
+        bottom: 14px;
+        z-index: 80;
+        width: min(350px, calc(100vw - 28px));
+        border-radius: 22px;
+        box-shadow: -22px 0 70px rgba(0, 0, 0, 0.52);
+        transform: translateX(calc(100% + 30px));
+        transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      body.details-open .details-panel {
+        transform: translateX(0);
+      }
+
+      .details-panel .details-head {
+        padding-top: 17px;
+      }
+
+      .top-divider {
+        display: none;
+      }
+    }
+
+    @media (max-width: 1180px) {
+      .cmd-search {
+        display: none;
+      }
+    }
+
+    @media (max-width: 1023px) {
+      .app-shell {
+        grid-template-columns: minmax(0, 1fr);
+        width: 100%;
+        height: 100dvh;
+        margin: 0;
+        gap: 0;
+      }
+
+      .main-panel {
+        border: 0;
+        border-radius: 0;
+      }
+
+      .sidebar {
+        position: fixed;
+        top: 10px;
+        bottom: 10px;
+        left: 10px;
+        z-index: 90;
+        width: min(300px, calc(100vw - 40px));
+        border-radius: 21px;
+        box-shadow: 20px 0 70px rgba(0, 0, 0, 0.58);
+        transform: translateX(calc(-100% - 26px));
+        transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      body.sidebar-open .sidebar {
+        transform: translateX(0);
+      }
+
+      .sidebar-close {
+        display: grid;
+      }
+
+      .mobile-menu {
+        display: grid;
+      }
+
+      .topbar {
+        min-height: 64px;
+        padding: 0 10px 0 7px;
+      }
+
+      .topbar-title .crumb-line {
+        display: none;
+      }
+
+      .title-line h1 {
+        font-size: 13.5px;
+      }
+
+      .topbar .run-state {
+        font-size: 7.5px;
+      }
+
+      .chat-stream {
+        padding: 19px 16px 8px;
+      }
+
+      .composer-shell {
+        padding: 8px 12px max(12px, env(safe-area-inset-bottom));
+      }
+
+      .composer-note {
+        display: none;
+      }
+
+      .details-panel {
+        top: 10px;
+        right: 10px;
+        bottom: 10px;
+        width: min(360px, calc(100vw - 20px));
+      }
+
+      .aurora {
+        opacity: 0.17;
+      }
+    }
+
+    @media (max-width: 700px) {
+      .topbar .notify-btn,
+      .topbar .user-chip {
+        display: none;
+      }
+
+      .topbar {
+        gap: 5px;
+      }
+
+      .top-actions {
+        gap: 1px;
+      }
+
+      .chat-stream {
+        padding: 16px 13px 8px;
+      }
+
+      .message {
+        gap: 8px;
+        margin: 17px 0;
+      }
+
+      .assistant-avatar {
+        width: 29px;
+        height: 29px;
+        margin-top: 17px;
+        border-radius: 8px;
+      }
+
+      .assistant-bubble {
+        padding: 13px 13px 11px;
+        border-radius: 4px 14px 14px 14px;
+      }
+
+      .markdown p {
+        font-size: 12px;
+      }
+
+      .markdown ol li {
+        font-size: 11px;
+      }
+
+      .markdown ol li strong {
+        font-size: 11px;
+      }
+
+      .user-wrap {
+        max-width: 90%;
+      }
+
+      .user-bubble {
+        padding: 10px 12px;
+        font-size: 12px;
+      }
+
+      .decision-card {
+        padding: 12px 12px 11px;
+      }
+
+      .decision-checks {
+        gap: 5px 9px;
+      }
+
+      .decision-actions .btn-primary {
+        flex: 1 1 100%;
+        order: -1;
+      }
+
+      .decision-actions .btn-secondary,
+      .decision-actions .btn-ghost {
+        flex: 1;
+      }
+
+      .composer-hint,
+      .model-pill span {
+        display: none;
+      }
+
+      .model-pill {
+        padding: 5px;
+      }
+
+      .msg-actions {
+        gap: 0;
+      }
+
+      .msg-action span {
+        display: none;
+      }
+
+      .details-panel {
+        width: calc(100vw - 20px);
+      }
+    }
+
+    @media (max-width: 390px) {
+      .brand-kicker {
+        letter-spacing: 0.14em;
+      }
+
+      .title-line h1 {
+        max-width: 125px;
+      }
+
+      .topbar .run-state {
+        display: none;
+      }
+
+      .chat-stream {
+        padding-left: 10px;
+        padding-right: 10px;
+      }
+
+      .assistant-meta time {
+        display: none;
+      }
+
+      .composer-shell {
+        padding-left: 8px;
+        padding-right: 8px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="aurora aurora-a" aria-hidden="true"></div>
+  <div class="aurora aurora-b" aria-hidden="true"></div>
+
+  <div class="app-shell" id="app">
+    <!-- ============ LEFT / WORKSPACE ============ -->
+    <aside class="sidebar glass-panel" id="sidebar" aria-label="工作区侧栏">
+      <div class="sidebar-head">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">
+            <svg width="29" height="29" viewBox="0 0 32 32" fill="none">
+              <defs>
+                <linearGradient id="markGradient" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+                  <stop stop-color="#8ffff0" />
+                  <stop offset="0.52" stop-color="#5eead4" />
+                  <stop offset="1" stop-color="#60a5fa" />
+                </linearGradient>
+              </defs>
+              <path d="M16 8.4V13.6M11.4 19.7L7.9 22.1M20.6 19.7L24.1 22.1" stroke="url(#markGradient)" stroke-width="1.15" stroke-linecap="round" opacity="0.85" />
+              <circle cx="16" cy="7.3" r="3.2" stroke="url(#markGradient)" stroke-width="1.2" />
+              <circle cx="7.4" cy="23.4" r="3.2" stroke="url(#markGradient)" stroke-width="1.2" />
+              <circle cx="24.6" cy="23.4" r="3.2" stroke="url(#markGradient)" stroke-width="1.2" />
+              <circle cx="16" cy="17.3" r="2.6" fill="url(#markGradient)" opacity="0.92" />
+            </svg>
+          </div>
+          <div class="brand-copy">
+            <div class="brand-name">Agent <span>OS</span></div>
+            <div class="brand-kicker">Orchestration Console</div>
+          </div>
+          <span class="live-pill"><i></i>LIVE</span>
+          <button class="icon-btn sidebar-close" id="sidebarClose" type="button" aria-label="关闭侧栏">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
+        </div>
+
+        <button class="workspace-switch" type="button" data-toast="工作区切换器已就绪">
+          <span class="workspace-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 9.5L12 5l8 4.5v9L12 23l-8-4.5v-9z" />
+              <path d="M4 9.5l8 4.5 8-4.5M12 14v9" />
+            </svg>
+          </span>
+          <span class="workspace-copy">
+            <strong>Product Studio</strong>
+            <small>Personal workspace</small>
+          </span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 10l4 4 4-4" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="工作区导航">
+        <button class="tab-btn is-active" id="tab-chats" type="button" role="tab" aria-selected="true" aria-controls="panel-chats" data-tab="chats">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 11.4a8.4 8.4 0 01-9 8.4 9.2 9.2 0 01-3.4-.6L4 21l1.7-4.2A8.2 8.2 0 013 11.4 8.4 8.4 0 0111.7 3h.6A8.4 8.4 0 0121 11.4z" />
+            <path d="M8 10h8M8 13.5h5" />
+          </svg>
+          <span>会话</span>
+        </button>
+        <button class="tab-btn" id="tab-org" type="button" role="tab" aria-selected="false" aria-controls="panel-org" data-tab="org" tabindex="-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="2.8" width="6" height="5" rx="1.4" />
+            <rect x="2.8" y="16.2" width="6" height="5" rx="1.4" />
+            <rect x="15.2" y="16.2" width="6" height="5" rx="1.4" />
+            <path d="M12 7.8v4.4M5.8 16.2v-2.1a1.8 1.8 0 011.8-1.8h8.8a1.8 1.8 0 011.8 1.8v2.1" />
+          </svg>
+          <span>组织架构</span>
+        </button>
+        <button class="tab-btn" id="tab-files" type="button" role="tab" aria-selected="false" aria-controls="panel-files" data-tab="files" tabindex="-1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3.5 7.5a1.8 1.8 0 011.8-1.8h4l2 2.2h7.4a1.8 1.8 0 011.8 1.8v7.8a1.8 1.8 0 01-1.8 1.8H5.3a1.8 1.8 0 01-1.8-1.8V7.5z" />
+          </svg>
+          <span>文件库</span>
+        </button>
+      </div>
+
+      <div class="tab-panels">
+        <!-- Chats -->
+        <section class="tab-panel is-active" id="panel-chats" role="tabpanel" aria-labelledby="tab-chats" aria-hidden="false">
+          <button class="new-chat" id="newChatBtn" type="button">
+            <span class="plus" aria-hidden="true">+</span>
+            新建会话
+            <kbd>N</kbd>
+          </button>
+
+          <div class="section-label"><span>进行中</span><span>02</span></div>
+
+          <button class="session is-active" type="button" aria-current="page">
+            <span class="session-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 11.4a8.4 8.4 0 01-9 8.4 9.2 9.2 0 01-3.4-.6L4 21l1.7-4.2A8.2 8.2 0 013 11.4 8.4 8.4 0 0111.7 3h.6A8.4 8.4 0 0121 11.4z" />
+              </svg>
+            </span>
+            <span class="session-main">
+              <span class="session-title">支付网关迁移</span>
+              <span class="session-sub">Nova · 12 分钟前</span>
+            </span>
+            <span class="session-side">
+              <span class="session-time">10:42</span>
+              <i class="dot dot-live" aria-label="运行中"></i>
+            </span>
+          </button>
+
+          <button class="session" type="button">
+            <span class="session-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 11.4a8.4 8.4 0 01-9 8.4 9.2 9.2 0 01-3.4-.6L4 21l1.7-4.2A8.2 8.2 0 013 11.4 8.4 8.4 0 0111.7 3h.6A8.4 8.4 0 0121 11.4z" />
+              </svg>
+            </span>
+            <span class="session-main">
+              <span class="session-title">客服知识库 RAG</span>
+              <span class="session-sub">Lens · 36 分钟前</span>
+            </span>
+            <span class="session-side">
+              <span class="session-time">10:18</span>
+              <i class="dot dot-warm" aria-label="等待确认"></i>
+            </span>
+          </button>
+
+          <div class="section-label"><span>最近</span><span>03</span></div>
+
+          <button class="session" type="button">
+            <span class="session-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M7 3.5h7l4 4v13H7z" />
+                <path d="M14 3.5v4h4M10 12h5M10 15.5h5" />
+              </svg>
+            </span>
+            <span class="session-main">
+              <span class="session-title">周报自动生成</span>
+              <span class="session-sub">Codex · 1 小时前</span>
+            </span>
+            <span class="session-side">
+              <span class="session-time">09:31</span>
+              <i class="dot dot-done" aria-label="已完成"></i>
+            </span>
+          </button>
+
+          <button class="session" type="button">
+            <span class="session-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3.5l2.1 5.9L20 12l-5.9 2.1L12 20l-2.1-5.9L4 12l5.9-2.6L12 3.5z" />
+              </svg>
+            </span>
+            <span class="session-main">
+              <span class="session-title">品牌视觉探索</span>
+              <span class="session-sub">Pixel · 昨天</span>
+            </span>
+            <span class="session-side">
+              <span class="session-time">昨天</span>
+              <i class="dot" aria-label="已归档"></i>
+            </span>
+          </button>
+
+          <button class="session" type="button">
+            <span class="session-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 6.5h16M4 12h16M4 17.5h10" />
+              </svg>
+            </span>
+            <span class="session-main">
+              <span class="session-title">API 文档重构</span>
+              <span class="session-sub">Nova · 昨天</span>
+            </span>
+            <span class="session-side">
+              <span class="session-time">昨天</span>
+              <i class="dot" aria-label="已归档"></i>
+            </span>
+          </button>
+
+          <button class="sidebar-link" type="button" data-toast="会话归档即将接入">
+            查看全部会话
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        </section>
+
+        <!-- Organization -->
+        <section class="tab-panel" id="panel-org" role="tabpanel" aria-labelledby="tab-org" aria-hidden="true">
+          <div class="panel-heading">
+            <div>
+              <h2>组织架构</h2>
+              <p>3 个代理 · 1 位人类协作者</p>
+            </div>
+            <button class="mini-icon" type="button" aria-label="邀请成员" data-toast="邀请链接已复制">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="org-tree">
+            <div class="org-group-label">Orchestrator</div>
+            <div class="agent-card primary">
+              <span class="agent-avatar" aria-hidden="true">N</span>
+              <span class="agent-main">
+                <strong>Nova</strong>
+                <small>Planner · 当前主理</small>
+              </span>
+              <span class="agent-state"><i class="dot dot-live"></i>在线</span>
+            </div>
+
+            <div class="org-connector" aria-hidden="true"></div>
+            <div class="org-group-label">Sub-agents</div>
+
+            <div class="agent-card">
+              <span class="agent-avatar blue" aria-hidden="true">C</span>
+              <span class="agent-main">
+                <strong>Codex</strong>
+                <small>Builder · 实现与测试</small>
+              </span>
+              <span class="agent-state"><i class="dot dot-live"></i>执行中</span>
+            </div>
+
+            <div class="agent-card">
+              <span class="agent-avatar violet" aria-hidden="true">L</span>
+              <span class="agent-main">
+                <strong>Lens</strong>
+                <small>Reviewer · 质量复核</small>
+              </span>
+              <span class="agent-state"><i class="dot dot-warm"></i>待命</span>
+            </div>
+
+            <div class="agent-card">
+              <span class="agent-avatar amber" aria-hidden="true">P</span>
+              <span class="agent-main">
+                <strong>Pixel</strong>
+                <small>Designer · 界面探索</small>
+              </span>
+              <span class="agent-state"><i class="dot"></i>休眠</span>
+            </div>
+
+            <div class="org-note">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7l8-4z" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+              所有代理共享当前工作区上下文。敏感操作默认需要人类确认。
+            </div>
+          </div>
+        </section>
+
+        <!-- Files -->
+        <section class="tab-panel" id="panel-files" role="tabpanel" aria-labelledby="tab-files" aria-hidden="true">
+          <div class="panel-heading">
+            <div>
+              <h2>文件库</h2>
+              <p>12 个文件 · 2 个目录</p>
+            </div>
+            <button class="mini-icon" type="button" aria-label="上传文件" data-toast="打开本地上传">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 16V4M7.5 8.5L12 4l4.5 4.5M5 15v4h14v-4" />
+              </svg>
+            </button>
+          </div>
+
+          <label class="file-search">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+              <circle cx="10.5" cy="10.5" r="6.5" />
+              <path d="M16 16l4 4" />
+            </svg>
+            <input type="search" placeholder="搜索文件…" aria-label="搜索文件" />
+          </label>
+
+          <div class="folder-block">
+            <div class="folder-head">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3.5 7.5a1.8 1.8 0 011.8-1.8h4l2 2.2h7.4a1.8 1.8 0 011.8 1.8v7.8a1.8 1.8 0 01-1.8 1.8H5.3a1.8 1.8 0 01-1.8-1.8V7.5z" />
+              </svg>
+              payments-migration
+              <span>3</span>
+            </div>
+            <button class="file-row" type="button" data-toast="migration-plan.md 已打开">
+              <span class="file-ext">MD</span>
+              <span class="file-name">migration-plan.md</span>
+              <span class="file-size">12.4 KB</span>
+            </button>
+            <button class="file-row" type="button" data-toast="webhook-handler.ts 已打开">
+              <span class="file-ext code">TS</span>
+              <span class="file-name">webhook-handler.ts</span>
+              <span class="file-size">4.1 KB</span>
+            </button>
+            <button class="file-row" type="button" data-toast="rollback.sh 已打开">
+              <span class="file-ext shell">SH</span>
+              <span class="file-name">rollback.sh</span>
+              <span class="file-size">1.8 KB</span>
+            </button>
+          </div>
+
+          <div class="folder-block">
+            <div class="folder-head">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3.5 7.5a1.8 1.8 0 011.8-1.8h4l2 2.2h7.4a1.8 1.8 0 011.8 1.8v7.8a1.8 1.8 0 01-1.8 1.8H5.3a1.8 1.8 0 01-1.8-1.8V7.5z" />
+              </svg>
+              design-system
+              <span>4</span>
+            </div>
+            <button class="file-row" type="button" data-toast="tokens.json 已打开">
+              <span class="file-ext">JSON</span>
+              <span class="file-name">tokens.json</span>
+              <span class="file-size">6.2 KB</span>
+            </button>
+            <button class="file-row" type="button" data-toast="console-v2.fig 已打开">
+              <span class="file-ext code">FIG</span>
+              <span class="file-name">console-v2.fig</span>
+              <span class="file-size">8.7 MB</span>
+            </button>
+          </div>
+
+          <div class="storage-card">
+            <div class="storage-top"><span>工作区存储</span><span class="mono">1.2 / 5 GB</span></div>
+            <div class="storage-bar" aria-hidden="true"><span></span></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="user-row" type="button" data-toast="账户设置已打开">
+          <span class="avatar" aria-hidden="true">YL</span>
+          <span class="user-main">
+            <strong>Yun Li</strong>
+            <small><i></i>Workspace owner</small>
+          </span>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.7 1.7 0 00.34 1.87l.06.06a2 2 0 11-2.83 2.83l-.06-.06A1.7 1.7 0 0015 19.4a1.7 1.7 0 00-1 .6 1.7 1.7 0 00-.4 1.1V21a2 2 0 11-4 0v-.1A1.7 1.7 0 009 19.4a1.7 1.7 0 00-1.87.34l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.7 1.7 0 004.6 15a1.7 1.7 0 00-.6-1 1.7 1.7 0 00-1.1-.4H3a2 2 0 110-4h.1A1.7 1.7 0 004.6 9a1.7 1.7 0 00-.34-1.87l-.06-.06a2 2 0 112.83-2.83l.06.06A1.7 1.7 0 009 4.6a1.7 1.7 0 001-.6 1.7 1.7 0 00.4-1.1V3a2 2 0 114 0v.1A1.7 1.7 0 0015 4.6a1.7 1.7 0 001.87-.34l.06-.06a2 2 0 112.83 2.83l-.06.06A1.7 1.7 0 0019.4 9c.13.36.35.7.6 1 .3.26.68.4 1.1.4H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5.6z" />
+          </svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- ============ CENTER / CHAT ============ -->
+    <main class="main-panel glass-panel" aria-label="会话主区域">
+      <header class="topbar">
+        <div class="flex min-w-0 items-center gap-2">
+          <button class="icon-btn mobile-menu" id="menuBtn" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <path d="M4 7h16M4 12h16M4 17h11" />
+            </svg>
+          </button>
+          <div class="topbar-title min-w-0">
+            <div class="crumb-line">
+              <span>工作区</span>
+              <span class="slash">/</span>
+              <span class="current">会话</span>
+            </div>
+            <div class="title-line">
+              <h1>支付网关迁移</h1>
+              <span class="run-state"><i></i>运行中</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="top-actions">
+          <button class="cmd-search" type="button" data-toast="命令面板正在接入中">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+              <circle cx="10.5" cy="10.5" r="6.5" />
+              <path d="M16 16l4 4" />
+            </svg>
+            <span>搜索会话、文件或指令</span>
+            <kbd>⌘ K</kbd>
+          </button>
+          <button class="icon-btn notify-btn" type="button" aria-label="通知" data-toast="暂无未读通知">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 8.5a6 6 0 10-12 0c0 7-2.2 7-2.2 7h16.4S18 15.5 18 8.5z" />
+              <path d="M10 20a2.3 2.3 0 004 0" />
+            </svg>
+            <span class="notify-dot" aria-hidden="true"></span>
+          </button>
+          <span class="top-divider" aria-hidden="true"></span>
+          <button class="icon-btn" id="detailsToggle" type="button" aria-label="收起运行详情" aria-controls="details" aria-expanded="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M15 4v16" />
+            </svg>
+          </button>
+          <button class="user-chip" type="button" aria-label="账户菜单" data-toast="账户菜单已打开">
+            <span class="avatar" aria-hidden="true">YL</span>
+          </button>
+        </div>
+      </header>
+
+      <div class="chat-scroll" id="chatScroll">
+        <div class="chat-stream" id="chatStream" aria-live="polite">
+          <div class="day-divider">今天 · 5 月 24 日</div>
+
+          <div class="system-note">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7l8-4z" />
+              <path d="M9 12l2 2 4-4" />
+            </svg>
+            Nova 已接入工作区 · 上下文继承自会话 #A-1039
+          </div>
+
+          <!-- User message -->
+          <article class="message user">
+            <div class="user-wrap">
+              <div class="message-meta">
+                <span class="name">你</span>
+                <span class="meta-dot" aria-hidden="true"></span>
+                <time datetime="2025-05-24T10:42">10:42</time>
+              </div>
+              <div class="bubble user-bubble">把支付网关从 Stripe 迁移到 Adyen，先出一版可回滚的方案。重点处理 webhook 幂等、失败重试和灰度切流，不要动生产流量。</div>
+            </div>
+          </article>
+
+          <!-- Assistant message -->
+          <article class="message assistant">
+            <div class="assistant-avatar" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
+                <path d="M16 8.4V13.6M11.4 19.7L7.9 22.1M20.6 19.7L24.1 22.1" stroke="#aafff4" stroke-width="1.15" stroke-linecap="round" opacity="0.9" />
+                <circle cx="16" cy="7.3" r="3.2" stroke="#bafff6" stroke-width="1.2" />
+                <circle cx="7.4" cy="23.4" r="3.2" stroke="#8fd7ff" stroke-width="1.2" />
+                <circle cx="24.6" cy="23.4" r="3.2" stroke="#8fd7ff" stroke-width="1.2" />
+                <circle cx="16" cy="17.3" r="2.6" fill="#aafff4" />
+              </svg>
+            </div>
+
+            <div class="assistant-main">
+              <div class="assistant-meta">
+                <span class="name">Nova</span>
+                <span class="model-tag">ORCHESTRATOR</span>
+                <span class="meta-dot" aria-hidden="true"></span>
+                <time datetime="2025-05-24T10:43">10:43</time>
+              </div>
+
+              <!-- Thinking card -->
+              <div class="thinking-card" id="thinkingCard">
+                <button class="thinking-toggle" id="thinkingToggle" type="button" aria-expanded="false" aria-controls="thinkingBody">
+                  <span class="thinking-spark" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 3.5l1.8 5.2 5.2 1.8-5.2 1.8L12 17.5l-1.8-5.2L5 10.5l5.2-1.8L12 3.5z" />
+                      <path d="M19 16.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7.7-2z" />
+                    </svg>
+                  </span>
+                  <span class="thinking-label"><strong>思考过程</strong> · 已完成</span>
+                  <span class="thinking-time">24s · 6 次调用</span>
+                  <svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+                <div class="thinking-body" id="thinkingBody">
+                  <div class="thinking-inner">
+                    <div class="thinking-steps">
+                      <div class="thinking-step done"><strong>解析目标与约束</strong> · 识别出支付调用、回滚窗口与灰度要求</div>
+                      <div class="thinking-step done"><strong>扫描代码路径</strong> · 在 payments/ 与 webhook/ 找到 14 个调用点</div>
+                      <div class="thinking-step done"><strong>对比幂等语义</strong> · Stripe event.id 与 Adyen pspReference 的差异已记录</div>
+                      <div class="thinking-step done"><strong>生成迁移阶段</strong> · 3 个可独立回滚的阶段与验收条件</div>
+                    </div>
+                    <div class="tool-chips" aria-label="调用的工具">
+                      <span class="tool-chip">Read ×4</span>
+                      <span class="tool-chip">Grep ×2</span>
+                      <span class="tool-chip">Shell ×1</span>
+                      <span class="tool-chip">Plan</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bubble assistant-bubble markdown">
+                <p>已梳理现有 14 个支付调用点，并生成一版 <strong>可回滚迁移方案</strong>。核心原则是先旁路、后切流，任何阶段都能在 30 秒内退回原网关。</p>
+
+                <ol>
+                  <li>
+                    <strong>双写代理</strong>
+                    新增 gateway-proxy，将请求同时写入 Stripe 与 Adyen，以 Adyen 响应为准做差异对账。
+                  </li>
+                  <li>
+                    <strong>Webhook 幂等层</strong>
+                    用 <code>pspReference</code> + 事件类型建立去重键，并把重试窗口从 3 次扩展到 8 次。
+                  </li>
+                  <li>
+                    <strong>灰度切流</strong>
+                    按商户维度 1% → 5% → 25% 递增，每档观察 2 小时；异常时自动回切并保留现场。
+                  </li>
+                </ol>
+
+                <blockquote>
+                  建议先在 <code>staging</code> 跑 24 小时差异对账，再批准生产灰度。下方是 webhook 幂等入口的草稿。
+                </blockquote>
+
+                <div class="code-shell">
+                  <div class="code-head">
+                    <span class="traffic" aria-hidden="true"><i></i><i></i><i></i></span>
+                    webhook-handler.ts
+                    <button class="code-copy" id="copyCode" type="button">复制</button>
+                  </div>
+                  <pre id="codeSnippet"><code><span class="tok-key">export async function</span> <span class="tok-fn">onAdyenWebhook</span>(req: Request) {
+  <span class="tok-key">const</span> event = <span class="tok-key">await</span> verify(req);
+  <span class="tok-key">if</span> (<span class="tok-key">await</span> ledger.seen(event.pspReference)) <span class="tok-key">return</span> ack();
+  <span class="tok-key">await</span> ledger.record(event.pspReference);
+  <span class="tok-key">return</span> enqueue(event);
+}</code></pre>
+                </div>
+
+                <div class="result-chips">
+                  <span class="result-chip">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4L19 6" /></svg>
+                    预计 3.5 天
+                  </span>
+                  <span class="result-chip">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7l8-4z" /></svg>
+                    风险 中
+                  </span>
+                  <span class="result-chip">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5" /></svg>
+                    影响 3 个文件
+                  </span>
+                </div>
+              </div>
+
+              <div class="msg-actions" aria-label="消息操作">
+                <button class="msg-action" type="button" data-toast="回复已复制">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="8" y="8" width="11" height="11" rx="1.5" />
+                    <path d="M16 8V5.5A1.5 1.5 0 0014.5 4h-9A1.5 1.5 0 004 5.5v9A1.5 1.5 0 005.5 16H8" />
+                  </svg>
+                  <span>复制</span>
+                </button>
+                <button class="msg-action" type="button" data-toast="正在重新生成方案">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6" />
+                  </svg>
+                  <span>重新生成</span>
+                </button>
+                <button class="msg-action" type="button" data-toast="已在新会话中引用">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M10 13a4.2 4.2 0 006 0l2.5-2.5a4.2 4.2 0 00-6-6L11 6" />
+                    <path d="M14 11a4.2 4.2 0 00-6 0l-2.5 2.5a4.2 4.2 0 006 6L13 18" />
+                  </svg>
+                  <span>引用</span>
+                </button>
+              </div>
+
+              <!-- Acceptance card -->
+              <section class="decision-card" id="decisionCard" data-state="pending" aria-labelledby="decisionTitle">
+                <div class="decision-top">
+                  <span class="decision-status" id="decisionStatus"><i></i>等待确认</span>
+                  <span class="decision-id">RUN-1042 · GATE 01</span>
+                </div>
+                <h3 id="decisionTitle">阶段一 · 双写代理</h3>
+                <p class="decision-desc">在 staging 开启 Adyen 双写并记录 24h 差异，生产流量保持不变，旧网关继续兜底。</p>
+                <div class="decision-checks">
+                  <span class="decision-check">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4L19 6" /></svg>
+                    变更 3 个文件
+                  </span>
+                  <span class="decision-check">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4L19 6" /></svg>
+                    运行 12 个测试
+                  </span>
+                  <span class="decision-check">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4L19 6" /></svg>
+                    30 秒回滚
+                  </span>
+                </div>
+                <div class="decision-actions">
+                  <button class="btn btn-primary" type="button" data-decision="approve">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l4 4L19 6" /></svg>
+                    批准并执行
+                  </button>
+                  <button class="btn btn-secondary" type="button" data-decision="revise">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4zM14 6l4 4" /></svg>
+                    要求修改
+                  </button>
+                  <button class="btn btn-ghost" type="button" data-decision="reject">拒绝</button>
+                </div>
+                <div class="decision-result" id="decisionResult">
+                  <span class="result-glyph" id="decisionResultGlyph" aria-hidden="true">✓</span>
+                  <div class="decision-result-copy">
+                    <strong id="decisionResultTitle">已批准执行</strong>
+                    <p id="decisionResultText">阶段一已加入执行队列，Nova 将在 staging 启动双写。</p>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div class="composer-shell">
+        <form class="composer" id="composerForm">
+          <label class="sr-only" for="composerInput">输入消息</label>
+          <textarea id="composerInput" name="message" rows="1" placeholder="回复 Nova，或输入 / 查看指令…"></textarea>
+          <div class="composer-bar">
+            <button class="composer-tool" type="button" aria-label="添加附件" data-toast="打开文件选择器">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 11.5l-8.2 8.2a5.4 5.4 0 01-7.6-7.6l8.2-8.2a3.6 3.6 0 015.1 5.1l-8.2 8.2a1.8 1.8 0 01-2.6-2.6l7.6-7.6" />
+              </svg>
+            </button>
+            <button class="composer-tool" type="button" aria-label="命令" data-toast="输入 /plan 生成执行方案">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                <path d="M14 4l6 6-9 9H5v-6l9-9zM12 6l6 6" />
+              </svg>
+            </button>
+            <button class="model-pill" type="button" data-toast="模型切换器已打开">
+              <i></i>
+              <span>Nova 2.5 · Agentic</span>
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M7 10l5 5 5-5" />
+              </svg>
+            </button>
+            <div class="composer-right">
+              <span class="composer-hint">Enter 发送 · Shift + Enter 换行</span>
+              <button class="send-btn" id="sendBtn" type="submit" aria-label="发送消息">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 19V5M6.5 10.5L12 5l5.5 5.5" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </form>
+        <p class="composer-note">Nova 会先规划再执行 · 涉及生产环境的操作始终需要你的确认</p>
+      </div>
+    </main>
+
+    <!-- ============ RIGHT / RUN DETAILS ============ -->
+    <aside class="details-panel glass-panel" id="details" aria-label="运行详情">
+      <div class="details-head">
+        <div>
+          <p class="eyebrow">Run detail</p>
+          <h2>运行详情</h2>
+        </div>
+        <button class="icon-btn" id="detailsClose" type="button" aria-label="收起运行详情">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="details-scroll">
+        <section class="run-hero" aria-label="运行概览">
+          <div class="run-topline">
+            <span class="status-pill"><i></i>等待确认</span>
+            <span class="run-id">RUN-1042</span>
+          </div>
+          <h3>支付网关迁移</h3>
+          <p>阶段 1 / 3 · 双写代理</p>
+          <div class="progress-row">
+            <div class="progress-track" role="progressbar" aria-label="运行进度" aria-valuenow="42" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+            <span class="progress-value">42%</span>
+          </div>
+          <div class="run-stats">
+            <div class="run-stat"><span>已用时</span><strong>04:18</strong></div>
+            <div class="run-stat"><span>代理</span><strong>3 active</strong></div>
+            <div class="run-stat"><span>动作</span><strong>18 steps</strong></div>
+          </div>
+        </section>
+
+        <section class="details-section" aria-labelledby="topologyTitle">
+          <div class="details-section-head">
+            <h3 id="topologyTitle">编排拓扑</h3>
+            <span>3 agents</span>
+          </div>
+          <div class="topo">
+            <div class="topo-item done">
+              <span class="topo-node" aria-hidden="true"></span>
+              <span class="topo-avatar">N</span>
+              <span class="topo-copy"><strong>Nova</strong><small>Planner · 方案已生成</small></span>
+              <span class="topo-state">完成</span>
+            </div>
+            <div class="topo-item running">
+              <span class="topo-node" aria-hidden="true"></span>
+              <span class="topo-avatar blue">C</span>
+              <span class="topo-copy"><strong>Codex</strong><small>Builder · 等待批准</small></span>
+              <span class="topo-state">待确认</span>
+            </div>
+            <div class="topo-item">
+              <span class="topo-node" aria-hidden="true"></span>
+              <span class="topo-avatar violet">L</span>
+              <span class="topo-copy"><strong>Lens</strong><small>Reviewer · 队列中</small></span>
+              <span class="topo-state">排队</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="context-card" aria-label="上下文用量">
+          <div class="context-ring" style="--p: 62%" aria-hidden="true"><span>62%</span></div>
+          <div class="context-copy">
+            <strong>上下文窗口 <span>78.4k / 128k</span></strong>
+            <p>6 个文件 · 4 次工具结果</p>
+            <div class="context-track" aria-hidden="true"><i></i></div>
+          </div>
+        </section>
+
+        <section class="details-section" aria-labelledby="artifactsTitle">
+          <div class="details-section-head">
+            <h3 id="artifactsTitle">工作产物</h3>
+            <span>3 files</span>
+          </div>
+          <div class="artifact-list">
+            <div class="artifact-row">
+              <span class="file-badge">MD</span>
+              <span class="artifact-copy"><strong>migration-plan.md</strong><small>12.4 KB · 刚刚</small></span>
+              <button class="artifact-action" type="button" aria-label="打开 migration-plan.md" data-toast="migration-plan.md 已打开">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l4 4v13H7z" /><path d="M14 3.5v4h4" /></svg>
+              </button>
+            </div>
+            <div class="artifact-row">
+              <span class="file-badge blue">TS</span>
+              <span class="artifact-copy"><strong>webhook-handler.ts</strong><small>4.1 KB · 刚刚</small></span>
+              <button class="artifact-action" type="button" aria-label="打开 webhook-handler.ts" data-toast="webhook-handler.ts 已打开">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l4 4v13H7z" /><path d="M14 3.5v4h4" /></svg>
+              </button>
+            </div>
+            <div class="artifact-row">
+              <span class="file-badge violet">SH</span>
+              <span class="artifact-copy"><strong>rollback.sh</strong><small>1.8 KB · 2 分钟前</small></span>
+              <button class="artifact-action" type="button" aria-label="打开 rollback.sh" data-toast="rollback.sh 已打开">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5h7l4 4v13H7z" /><path d="M14 3.5v4h4" /></svg>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="details-section" aria-labelledby="permissionsTitle">
+          <div class="details-section-head">
+            <h3 id="permissionsTitle">权限与连接</h3>
+            <span>sandboxed</span>
+          </div>
+          <div class="permission-row">
+            <span class="permission-icon" aria-hidden="true">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16v12H4zM4 10h16" /></svg>
+            </span>
+            <span class="permission-copy"><strong>文件系统</strong><small>当前工作区读写</small></span>
+            <span class="permission-state">已授权</span>
+          </div>
+          <div class="permission-row">
+            <span class="permission-icon" aria-hidden="true">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l5 5-5 5M12 17h7" /></svg>
+            </span>
+            <span class="permission-copy"><strong>Shell 命令</strong><small>逐条审批后执行</small></span>
+            <span class="permission-state pending">需确认</span>
+          </div>
+        </section>
+      </div>
+
+      <div class="details-foot">
+        <button class="log-link" type="button" data-toast="正在打开完整运行日志">
+          查看完整运行日志
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7" /></svg>
+        </button>
+      </div>
+    </aside>
+  </div>
+
+  <div class="scrim" id="scrim" aria-hidden="true"></div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite">
+    <span class="toast-dot" aria-hidden="true"></span>
+    <span id="toastText">已复制</span>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      const $ = (selector, root) => (root || document).querySelector(selector);
+      const $$ = (selector, root) => Array.from((root || document).querySelectorAll(selector));
+
+      const app = $("#app");
+      const body = document.body;
+      const scrim = $("#scrim");
+      const toast = $("#toast");
+      const toastText = $("#toastText");
+      const detailsToggle = $("#detailsToggle");
+      const desktopQuery = window.matchMedia("(min-width: 1280px)");
+
+      let toastTimer = null;
+
+      function showToast(message) {
+        toastText.textContent = message;
+        toast.classList.add("is-visible");
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(function () {
+          toast.classList.remove("is-visible");
+        }, 2400);
+      }
+
+      /* Tabs */
+      const tabs = $$(".tab-btn");
+      const panels = $$(".tab-panel");
+
+      function activateTab(tab, shouldFocus) {
+        tabs.forEach(function (item) {
+          const active = item === tab;
+          item.classList.toggle("is-active", active);
+          item.setAttribute("aria-selected", active ? "true" : "false");
+          item.tabIndex = active ? 0 : -1;
+        });
+
+        panels.forEach(function (panel) {
+          const active = panel.id === "panel-" + tab.dataset.tab;
+          panel.classList.toggle("is-active", active);
+          panel.setAttribute("aria-hidden", active ? "false" : "true");
+        });
+
+        if (shouldFocus) tab.focus();
+      }
+
+      tabs.forEach(function (tab, index) {
+        tab.addEventListener("click", function () {
+          activateTab(tab, false);
+        });
+
+        tab.addEventListener("keydown", function (event) {
+          let nextIndex = null;
+          if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+          if (event.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+          if (event.key === "Home") nextIndex = 0;
+          if (event.key === "End") nextIndex = tabs.length - 1;
+
+          if (nextIndex !== null) {
+            event.preventDefault();
+            activateTab(tabs[nextIndex], true);
+          }
+        });
+      });
+
+      /* Thinking card */
+      const thinkingToggle = $("#thinkingToggle");
+      const thinkingCard = $("#thinkingCard");
+
+      thinkingToggle.addEventListener("click", function () {
+        const isOpen = thinkingCard.classList.toggle("is-open");
+        thinkingToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      });
+
+      /* Run details */
+      function syncScrim() {
+        const visible = body.classList.contains("sidebar-open") || body.classList.contains("details-open");
+        scrim.classList.toggle("is-visible", visible);
+        scrim.setAttribute("aria-hidden", visible ? "false" : "true");
+      }
+
+      function closeMobileOverlays() {
+        body.classList.remove("sidebar-open", "details-open");
+        syncScrim();
+      }
+
+      $("#menuBtn").addEventListener("click", function () {
+        body.classList.remove("details-open");
+        const opened = body.classList.toggle("sidebar-open");
+        this.setAttribute("aria-expanded", opened ? "true" : "false");
+        syncScrim();
+      });
+
+      $("#sidebarClose").addEventListener("click", function () {
+        body.classList.remove("sidebar-open");
+        $("#menuBtn").setAttribute("aria-expanded", "false");
+        syncScrim();
+      });
+
+      detailsToggle.addEventListener("click", function () {
+        if (desktopQuery.matches) {
+          const collapsed = app.classList.toggle("details-collapsed");
+          detailsToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+          detailsToggle.setAttribute("aria-label", collapsed ? "展开运行详情" : "收起运行详情");
+        } else {
+          body.classList.remove("sidebar-open");
+          const opened = body.classList.toggle("details-open");
+          detailsToggle.setAttribute("aria-expanded", opened ? "true" : "false");
+          syncScrim();
+        }
+      });
+
+      $("#detailsClose").addEventListener("click", function () {
+        if (desktopQuery.matches) {
+          app.classList.add("details-collapsed");
+          detailsToggle.setAttribute("aria-expanded", "false");
+          detailsToggle.setAttribute("aria-label", "展开运行详情");
+        } else {
+          body.classList.remove("details-open");
+          detailsToggle.setAttribute("aria-expanded", "false");
+          syncScrim();
+        }
+      });
+
+      scrim.addEventListener("click", function () {
+        closeMobileOverlays();
+        $("#menuBtn").setAttribute("aria-expanded", "false");
+        detailsToggle.setAttribute("aria-expanded", desktopQuery.matches ? "true" : "false");
+      });
+
+      document.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") {
+          if (body.classList.contains("sidebar-open") || body.classList.contains("details-open")) {
+            closeMobileOverlays();
+            $("#menuBtn").setAttribute("aria-expanded", "false");
+            detailsToggle.setAttribute("aria-expanded", desktopQuery.matches ? "true" : "false");
+          }
+        }
+      });
+
+      desktopQuery.addEventListener("change", function () {
+        closeMobileOverlays();
+        app.classList.remove("details-collapsed");
+        detailsToggle.setAttribute("aria-expanded", "true");
+        detailsToggle.setAttribute("aria-label", "收起运行详情");
+      });
+
+      /* Decision card */
+      const decisionCard = $("#decisionCard");
+      const decisionStatus = $("#decisionStatus");
+      const decisionResultGlyph = $("#decisionResultGlyph");
+      const decisionResultTitle = $("#decisionResultTitle");
+      const decisionResultText = $("#decisionResultText");
+
+      const decisions = {
+        approve: {
+          state: "approved",
+          label: "已批准",
+          glyph: "✓",
+          title: "已批准执行",
+          text: "阶段一已加入执行队列，Nova 将在 staging 启动双写。",
+          toast: "已批准 · 阶段一已加入执行队列"
+        },
+        revise: {
+          state: "revise",
+          label: "已退回修改",
+          glyph: "↺",
+          title: "已发送修改意见",
+          text: "Nova 将重新编排阶段一，并补充回滚验证细节。",
+          toast: "已退回 · Nova 正在重新编排"
+        },
+        reject: {
+          state: "rejected",
+          label: "已拒绝",
+          glyph: "×",
+          title: "已拒绝执行",
+          text: "本次运行已暂停，不会对 staging 产生任何变更。",
+          toast: "已拒绝 · 运行已暂停"
+        }
+      };
+
+      $$("[data-decision]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          const decision = decisions[button.dataset.decision];
+          if (!decision) return;
+
+          decisionCard.dataset.state = decision.state;
+          decisionStatus.innerHTML = "<i></i>" + decision.label;
+          decisionResultGlyph.textContent = decision.glyph;
+          decisionResultTitle.textContent = decision.title;
+          decisionResultText.textContent = decision.text;
+          showToast(decision.toast);
+        });
+      });
+
+      /* Generic prototype actions */
+      $$("[data-toast]").forEach(function (element) {
+        element.addEventListener("click", function () {
+          showToast(element.dataset.toast || "操作已触发");
+        });
+      });
+
+      /* New chat */
+      $("#newChatBtn").addEventListener("click", function () {
+        showToast("空白会话已创建");
+      });
+
+      /* Copy code */
+      $("#copyCode").addEventListener("click", function () {
+        const code = $("#codeSnippet").innerText;
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(code).then(function () {
+            showToast("代码已复制");
+          }).catch(function () {
+            showToast("复制失败，请手动选择");
+          });
+        } else {
+          showToast("复制失败，请手动选择");
+        }
+      });
+
+      /* Composer */
+      const form = $("#composerForm");
+      const input = $("#composerInput");
+      const chatScroll = $("#chatScroll");
+      const chatStream = $("#chatStream");
+
+      function autoGrow() {
+        input.style.height = "auto";
+        input.style.height = Math.min(input.scrollHeight, 116) + "px";
+      }
+
+      function scrollToBottom() {
+        window.requestAnimationFrame(function () {
+          chatScroll.scrollTop = chatScroll.scrollHeight;
+        });
+      }
+
+      input.addEventListener("input", autoGrow);
+
+      input.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+          event.preventDefault();
+          form.requestSubmit();
+        }
+      });
+
+      form.addEventListener("submit", function (event) {
+        event.preventDefault();
+        const message = input.value.trim();
+        if (!message) return;
+
+        const now = new Date();
+        const time = now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+        const userRow = document.createElement("article");
+        userRow.className = "message user";
+        userRow.innerHTML =
+          '<div class="user-wrap">' +
+            '<div class="message-meta"><span class="name">你</span><span class="meta-dot" aria-hidden="true"></span><time>' + time + "</time></div>" +
+            '<div class="bubble user-bubble"></div>' +
+          "</div>";
+        userRow.querySelector(".user-bubble").textContent = message;
+        chatStream.appendChild(userRow);
+
+        input.value = "";
+        autoGrow();
+        scrollToBottom();
+        showToast("已发送 · Nova 正在规划");
+
+        window.setTimeout(function () {
+          const replyRow = document.createElement("article");
+          replyRow.className = "message assistant";
+          replyRow.innerHTML =
+            '<div class="assistant-avatar" aria-hidden="true">' +
+              '<svg width="18" height="18" viewBox="0 0 32 32" fill="none">' +
+                '<path d="M16 8.4V13.6M11.4 19.7L7.9 22.1M20.6 19.7L24.1 22.1" stroke="#aafff4" stroke-width="1.15" stroke-linecap="round" opacity="0.9"/>' +
+                '<circle cx="16" cy="7.3" r="3.2" stroke="#bafff6" stroke-width="1.2"/>' +
+                '<circle cx="7.4" cy="23.4" r="3.2" stroke="#8fd7ff" stroke-width="1.2"/>' +
+                '<circle cx="24.6" cy="23.4" r="3.2" stroke="#8fd7ff" stroke-width="1.2"/>' +
+                '<circle cx="16" cy="17.3" r="2.6" fill="#aafff4"/>' +
+              "</svg>" +
+            "</div>" +
+            '<div class="assistant-main">' +
+              '<div class="assistant-meta"><span class="name">Nova</span><span class="model-tag">ORCHESTRATOR</span><span class="meta-dot" aria-hidden="true"></span><time>' + time + "</time></div>" +
+              '<div class="bubble assistant-bubble markdown"><p>收到。我先读取相关文件并拆解任务，完成后会在这里给出一版可验收的执行方案。</p></div>' +
+            "</div>";
+          chatStream.appendChild(replyRow);
+          scrollToBottom();
+        }, 900);
+      });
+
+      autoGrow();
+    })();
+  </script>
+</body>
+</html>

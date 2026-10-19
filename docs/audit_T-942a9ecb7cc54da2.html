@@ -1,0 +1,74 @@
+<!doctype html><html lang=zh-CN><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>审计时间轴 · T-942a9ecb7cc54da2</title><style>
+:root{--bg:#0f1115;--panel:#151922;--line:#262b36;--fg:#e6e6e6;--muted:#8b93a1;--accent:#8ab4f8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.65 -apple-system,"PingFang SC",Segoe UI,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:36px 22px 80px}
+h1{font-size:24px;margin:0 0 18px;letter-spacing:.02em}
+h2{font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+   margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+p{margin:6px 0;color:var(--muted)}
+p strong{color:var(--fg)}
+ul{margin:8px 0 8px 18px;padding:0;color:var(--muted)}
+table{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);padding:7px 9px;white-space:nowrap}
+td{border-bottom:1px solid #1d222c;padding:7px 9px;vertical-align:top;word-break:break-word}
+tr:hover td{background:#12161e}
+td:first-child{color:#a9b4c4;font-variant-numeric:tabular-nums;white-space:nowrap}
+code{background:#1b2029;padding:1px 5px;border-radius:4px;font-size:12.5px}
+.tag{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11.5px;background:#22303f;color:#9dc6ff}
+</style></head>
+<body><div class=wrap><h1>审计时间轴 · T-942a9ecb7cc54da2</h1>
+<p>标题：写一篇 300 字的秋季护肤短文</p>
+<p>业务包：content-v1　实体：LE-GROUP-HQ　状态：<strong>completed</strong></p>
+<p>创建：2026-10-18 15:10:01　更新：2026-10-18 15:12:57</p>
+<p>运行次数：1　累计 tokens：<strong>8,859</strong>　产物：1</p>
+<h2>判据快照</h2>
+<table>
+<tr><th>seq</th><th>acceptance_layer</th><th>state</th><th>criterion</th><th>check_type</th><th>note</th></tr>
+<tr><td>1</td><td>L2</td><td>passed</td><td>产出文件存在、可读且非空</td><td>script_exec</td><td>文件 可用（1047 字节）</td></tr>
+<tr><td>2</td><td>L2</td><td>passed</td><td>正文 300-480 字（CJK 字符 + 英文单词，去空白）</td><td>script_exec</td><td>字数 301（区间 300-480）</td></tr>
+<tr><td>3</td><td>L0</td><td>passed</td><td>命中至少 3 组护肤关键词</td><td>rule_auto</td><td>命中 3/3 个关键词组</td></tr>
+<tr><td>4</td><td>L0</td><td>passed</td><td>不含广告法禁用词（最好/最佳/第一品牌/绝对/100%/根治/治愈…）</td><td>rule_auto</td><td>无禁用词</td></tr>
+<tr><td>5</td><td>L1</td><td>passed</td><td>品牌调性：语气亲切、不夸大功效（人工判定，须附原文片段）</td><td>human_check</td><td>企微审批通过 202610180001</td></tr>
+<tr><td>6</td><td>L1</td><td>na</td><td>配图版权合规（M0 未启用）</td><td>human_check</td><td>—</td></tr>
+</table>
+<h2>运行记录</h2>
+<table>
+<tr><th>id</th><th>run_seq</th><th>state</th><th>runner</th><th>usage_tokens</th><th>exit_code</th><th>started_at</th><th>ended_at</th><th>actor_identity</th></tr>
+<tr><td>RUN-39f49bf9a05846af</td><td>1</td><td>succeeded</td><td>acp</td><td>8859</td><td>0</td><td>2026-10-18 15:10:07</td><td>2026-10-18 15:10:27</td><td>ID-7f3ed41c41ae45f9</td></tr>
+</table>
+<h2>产物</h2>
+<table>
+<tr><th>run_id</th><th>file_path</th><th>bytes</th><th>created_at</th></tr>
+<tr><td>RUN-39f49bf9a05846af</td><td>C:\oaagent-m0\workspace\ID-7f3ed41c41ae45f9\T-942a9ecb7cc54da2\article.md</td><td>1047</td><td>2026-10-18 15:10:27</td></tr>
+</table>
+<h2>预算</h2>
+<table>
+<tr><th>id</th><th>identity_id</th><th>limit_tokens</th><th>used_tokens</th><th>limit_amount</th><th>used_amount</th></tr>
+<tr><td>B-f0d68fabc9f14fad</td><td>ID-7f3ed41c41ae45f9</td><td>200000</td><td>8859</td><td>100000.0</td><td>0.0</td></tr>
+</table>
+<h2>企微推送</h2>
+<p>_（无）_</p>
+<h2>事件时间轴</h2>
+<table>
+<tr><th>时间</th><th>动作</th><th>阶段</th><th>执行者</th><th>摘要</th></tr>
+</table>
+<table>
+<tr><th>2026-10-18 15:10:01</th><th>create_task</th><th>system</th><th>system</th><th>criteria_count=6</th></tr>
+<tr><td>2026-10-18 15:10:07</td><td>state_transition</td><td>system</td><td>shell</td><td>event=run_spawned</td></tr>
+<tr><td>2026-10-18 15:10:07</td><td>spawn_run</td><td>system</td><td>system</td><td>RUN-39f49bf9a05846af task_id=T-942a9ecb7cc54da2 run_seq=1</td></tr>
+<tr><td>2026-10-18 15:10:07</td><td>reserve_budget</td><td>system</td><td>system</td><td>reason=None</td></tr>
+<tr><td>2026-10-18 15:10:07</td><td>state_transition</td><td>system</td><td>adapter</td><td>event=run_started</td></tr>
+<tr><td>2026-10-18 15:10:07</td><td>emit_event</td><td>system</td><td>system</td><td>event=run_started</td></tr>
+<tr><td>2026-10-18 15:10:07 → 2026-10-18 15:10:22</td><td>心跳 ×2</td><td>system</td><td>system</td><td>运行存活探针</td></tr>
+<tr><td>2026-10-18 15:10:27</td><td>attach_artifact</td><td>system</td><td>system</td><td>ART-063ba970d6c34a58 art_seq=1 file_path=C:\oaagent-m0\workspace\ID-7f3ed41c41ae45f9\T-942a9ecb7cc54da2\article.md</td></tr>
+<tr><td>2026-10-18 15:10:27</td><td>state_transition</td><td>system</td><td>adapter</td><td>event=run_succeeded</td></tr>
+<tr><td>2026-10-18 15:10:27</td><td>emit_event</td><td>system</td><td>system</td><td>event=run_succeeded</td></tr>
+<tr><td>2026-10-18 15:10:27</td><td>run_executed</td><td>system</td><td>system</td><td>runner=acp, exit_code=0, event=run_succeeded, usage_tokens=8859, artifacts=1</td></tr>
+<tr><td>2026-10-18 15:10:28</td><td>acceptance_run</td><td>system</td><td>system</td><td>verdict=pending</td></tr>
+<tr><td>2026-10-18 15:12:57</td><td>manual_check</td><td>L1</td><td>ID-da610f30a4e94e0d</td><td>C-38879e315e684abc passed=True note=企微审批通过 202610180001</td></tr>
+<tr><td>2026-10-18 15:12:57</td><td>state_transition</td><td>system</td><td>acceptance</td><td>event=review_passed</td></tr>
+<tr><td>2026-10-18 15:12:57</td><td>acceptance_run</td><td>system</td><td>system</td><td>verdict=completed</td></tr>
+</table></div></body></html>

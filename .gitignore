@@ -1,0 +1,19 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+data/
+workspace/
+docs/raw/
+docs/runs/
+*.db
+.pytest_cache/
+acp_test.md
+.env.drill
+
+# archived Octo sources, kept on disk but not versioned
+vendor/
+
+web/node_modules/
+web/src-tauri/target/
+web/src-tauri/gen/

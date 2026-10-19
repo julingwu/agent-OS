@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OA Agent · M0 验收台</title>
+<style>
+  :root { --fg:#1f2328; --muted:#656d76; --line:#d0d7de; --bg:#fff; --ok:#1a7f37; --bad:#cf222e; --wait:#9a6700; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 28px; font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; color:var(--fg); background:var(--bg); }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:18px; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+  input[type=text] { padding:6px 9px; border:1px solid var(--line); border-radius:6px; font:inherit; min-width:260px; }
+  button { padding:6px 12px; border:1px solid var(--line); border-radius:6px; background:#f6f8fa; font:inherit; cursor:pointer; }
+  button:hover { background:#eef1f4; }
+  button.primary { background:#1f6feb; border-color:#1f6feb; color:#fff; }
+  button.ghost { padding:3px 8px; font-size:12px; }
+  table { border-collapse:collapse; width:100%; margin-top:8px; }
+  th,td { border-bottom:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; font-size:13px; }
+  th { color:var(--muted); font-weight:600; font-size:12px; }
+  .badge { display:inline-block; padding:1px 7px; border-radius:10px; font-size:12px; border:1px solid var(--line); }
+  .passed { color:var(--ok); border-color:var(--ok); }
+  .failed { color:var(--bad); border-color:var(--bad); }
+  .pending { color:var(--wait); border-color:var(--wait); }
+  .na { color:var(--muted); }
+  .mono { font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  .note { color:var(--muted); font-size:12px; margin-top:2px; }
+  .block { margin-top:22px; border-top:1px solid var(--line); padding-top:14px; }
+  pre { background:#f6f8fa; border:1px solid var(--line); border-radius:6px; padding:10px; overflow:auto; max-height:340px; font-size:12px; }
+  .ev { border-bottom:1px dashed var(--line); padding:4px 0; }
+  .ev b { font-weight:600; }
+</style>
+</head>
+<body>
+<h1>OA Agent · M0 验收台</h1>
+<div class="sub">判据只认库里的状态；L1 人工判定必须附证据片段。页面不依赖外网资源。</div>
+
+<div class="row">
+  <input id="tid" type="text" placeholder="task_id（T-...）">
+  <button class="primary" onclick="load()">载入任务</button>
+  <button onclick="runAcceptance()">跑 L0/L2 验收</button>
+  <button onclick="loadTimeline()">看时间轴</button>
+</div>
+
+<div id="head"></div>
+<div id="criteria"></div>
+<div id="timeline" class="block" style="display:none"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let current = null;
+
+// Every string below comes from the database (task text is user input), so all
+// interpolations go through esc(). No server-side HTML is trusted.
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+  (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+function badge(s) {
+  const cls = s === 'passed' || s === 'completed' ? 'passed'
+    : s === 'failed' || s === 'rejected' ? 'failed'
+    : s === 'na' ? 'na' : 'pending';
+  return `<span class="badge ${cls}">${esc(s)}</span>`;
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(JSON.stringify(body.detail || body));
+  return body;
+}
+
+async function load() {
+  const tid = $('tid').value.trim();
+  if (!tid) return;
+  try {
+    const data = await api(`/tasks/${tid}`);
+    current = data;
+    const t = data.task;
+    $('head').innerHTML = `
+      <div class="mono">${esc(t.id)}</div>
+      <div><b>${esc(t.title)}</b> · 状态 ${badge(t.state)} <span class="mono">${esc(t.state)}</span>
+      · 运行 ${data.runs.length} 次 · 产出 ${data.artifacts.length} 个</div>`;
+    $('criteria').innerHTML = `<table><thead><tr>
+      <th style="width:44px">#</th><th>判据</th><th style="width:64px">层</th>
+      <th style="width:64px">阻塞</th><th style="width:78px">状态</th><th>说明 / 人工</th></tr></thead>
+      <tbody>${data.criteria.map(c => `
+        <tr>
+          <td>${c.seq}</td>
+          <td>${esc(c.criterion)}</td>
+          <td class="mono">${esc(c.acceptance_layer)}</td>
+          <td>${c.is_blocking ? '是' : '否'}</td>
+          <td>${badge(c.state)}</td>
+          <td>${c.check_type === 'human_check' ? manualCell(c) : `<div class="note">${esc(c.note)}</div><div class="mono">${esc(c.check_ref)}</div>`}</td>
+        </tr>`).join('')}</tbody></table>`;
+  } catch (e) { alert('载入失败：' + e.message); }
+}
+
+function manualCell(c) {
+  const actions = c.state === 'na' ? '<div class="note">M0 未启用</div>'
+    : c.state !== 'pending' ? '' : `
+    <input type="text" id="note-${c.id}" placeholder="判定说明" style="min-width:180px">
+    <input type="text" id="ev-${c.id}" placeholder="原文片段（必填）" style="min-width:220px">
+    <button class="ghost" onclick="manual('${c.id}', true)">通过</button>
+    <button class="ghost" onclick="manual('${c.id}', false)">不通过</button>`;
+  return `${actions}
+    <div class="note">${c.checked_by ? '已由 ' + esc(c.checked_by) + ' 判定：' + esc(c.note) : ''}</div>`;
+}
+
+async function manual(cid, passed) {
+  const body = {
+    passed,
+    checked_by: 'human',
+    note: $('note-' + cid).value || null,
+    evidence_snippet: $('ev-' + cid).value || null,
+  };
+  try { await api(`/criteria/${cid}/check`, {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body)}); }
+  catch (e) { alert('判定失败：' + e.message); }
+  await load();
+}
+
+async function runAcceptance() {
+  const tid = $('tid').value.trim();
+  if (!tid) return;
+  try {
+    const r = await api(`/tasks/${tid}/acceptance/run`, {method:'POST'});
+    alert(`验收完成：verdict=${r.verdict}，task_state=${r.task_state}`);
+  } catch (e) { alert('执行失败：' + e.message); }
+  await load();
+}
+
+async function loadTimeline() {
+  const tid = $('tid').value.trim();
+  if (!tid) return;
+  const d = await api(`/tasks/${tid}/timeline`);
+  $('timeline').style.display = 'block';
+  $('timeline').innerHTML = `<b>审计时间轴</b>（${d.count} 条）
+    <pre>${d.events.map(e => `<span class="ev"><b>${esc(e.verb)}</b> <span class="mono">${esc(e.layer)}</span> ${esc(e.action)}
+${e.payload ? ' · ' + esc(e.payload) : ''}</span>`).join('\n')}</pre>`;
+}
+
+const q = new URLSearchParams(location.search).get('task_id');
+if (q) { $('tid').value = q; load(); }
+</script>
+</body>
+</html>

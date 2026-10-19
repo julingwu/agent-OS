@@ -1,0 +1,1342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>双十一限时礼遇 · AURUM</title>
+  <meta name="description" content="双十一限时专场，三档精选礼遇方案，活动期间可享限时价格与对应赠礼。活动细则以官方公布为准。">
+  <style>
+    :root {
+      --bg: #07080a;
+      --panel: #101319;
+      --text: #f4f0e6;
+      --muted: #9d998f;
+      --muted-2: #767268;
+      --gold: #c8a96a;
+      --gold-light: #eedcb4;
+      --gold-deep: #9c7c45;
+      --line: rgba(200, 169, 106, 0.18);
+      --line-soft: rgba(244, 240, 230, 0.08);
+      --font-display: "Songti SC", "Noto Serif SC", "Source Han Serif SC", STSong, Georgia, serif;
+      --font-sans: "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      background:
+        radial-gradient(1000px 680px at 72% -8%, rgba(200, 169, 106, 0.13), transparent 60%),
+        radial-gradient(800px 560px at 4% 18%, rgba(80, 104, 150, 0.1), transparent 65%),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(244, 240, 230, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(244, 240, 230, 0.025) 1px, transparent 1px);
+      background-size: 88px 88px;
+      -webkit-mask-image: radial-gradient(ellipse at 50% 0%, #000 0%, transparent 72%);
+      mask-image: radial-gradient(ellipse at 50% 0%, #000 0%, transparent 72%);
+    }
+
+    body.modal-open {
+      overflow: hidden;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    button {
+      font: inherit;
+      color: inherit;
+    }
+
+    svg {
+      display: block;
+    }
+
+    ::selection {
+      background: rgba(200, 169, 106, 0.35);
+      color: #fff;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 4px;
+    }
+
+    .page-glow {
+      position: fixed;
+      top: -320px;
+      left: 50%;
+      z-index: 0;
+      width: min(1100px, 94vw);
+      height: 600px;
+      transform: translateX(-50%);
+      pointer-events: none;
+      background: radial-gradient(closest-side, rgba(200, 169, 106, 0.16), transparent);
+      filter: blur(50px);
+    }
+
+    /* ---------- Header ---------- */
+    .site-header {
+      position: fixed;
+      top: 0;
+      right: 0;
+      left: 0;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 18px clamp(20px, 4vw, 56px);
+      border-bottom: 1px solid rgba(244, 240, 230, 0.04);
+      background: linear-gradient(180deg, rgba(7, 8, 10, 0.9), rgba(7, 8, 10, 0.45) 70%, transparent);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #f5efe2;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.26em;
+    }
+
+    .brand-tag {
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--gold);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+    }
+
+    .site-nav {
+      display: flex;
+      gap: 30px;
+      color: var(--muted);
+      font-size: 12.5px;
+      letter-spacing: 0.12em;
+    }
+
+    .site-nav a {
+      transition: color 0.25s ease;
+    }
+
+    .site-nav a:hover {
+      color: var(--gold-light);
+    }
+
+    .header-cta {
+      padding: 9px 18px;
+      border: 1px solid rgba(200, 169, 106, 0.4);
+      border-radius: 999px;
+      color: var(--gold-light);
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      transition: background 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+    }
+
+    .header-cta:hover {
+      border-color: var(--gold);
+      background: var(--gold);
+      color: #171208;
+    }
+
+    /* ---------- Hero ---------- */
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(150px, 19vh, 210px) clamp(20px, 4vw, 56px) clamp(64px, 9vh, 104px);
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .hero-inner {
+      position: relative;
+      z-index: 2;
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0;
+      padding: 8px 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(200, 169, 106, 0.05);
+      color: #d6c7a8;
+      font-size: 11px;
+      letter-spacing: 0.24em;
+    }
+
+    .eyebrow .dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--gold);
+      box-shadow: 0 0 0 4px rgba(200, 169, 106, 0.12);
+      animation: pulse 2.6s ease-in-out infinite;
+    }
+
+    .hero h1 {
+      margin: 28px 0 26px;
+      color: #f7f2e7;
+      font-family: var(--font-display);
+      font-size: clamp(64px, 10.5vw, 130px);
+      font-weight: 600;
+      letter-spacing: -0.045em;
+      line-height: 0.94;
+    }
+
+    .hero h1 em {
+      display: block;
+      padding-bottom: 0.08em;
+      background: linear-gradient(100deg, var(--gold-light) 8%, var(--gold) 48%, var(--gold-deep) 92%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      font-style: normal;
+    }
+
+    .lede {
+      max-width: 560px;
+      margin: 0 0 36px;
+      color: #a8a49a;
+      font-size: clamp(15px, 1.5vw, 17px);
+      line-height: 1.95;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: clamp(28px, 5vw, 56px);
+      margin: 54px 0 0;
+      padding: 26px 0 0;
+      border-top: 1px solid var(--line-soft);
+      list-style: none;
+    }
+
+    .hero-meta li {
+      display: grid;
+      gap: 4px;
+    }
+
+    .hero-meta strong {
+      color: #eadbb8;
+      font-family: var(--font-display);
+      font-size: 24px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+
+    .hero-meta span {
+      color: var(--muted-2);
+      font-size: 11px;
+      letter-spacing: 0.16em;
+    }
+
+    .hero-mark {
+      position: absolute;
+      right: clamp(-90px, -4vw, -20px);
+      bottom: -0.22em;
+      z-index: 1;
+      color: transparent;
+      font-family: var(--font-sans);
+      font-size: clamp(180px, 34vw, 480px);
+      font-weight: 700;
+      letter-spacing: -0.08em;
+      line-height: 0.8;
+      pointer-events: none;
+      user-select: none;
+      -webkit-text-stroke: 1px rgba(200, 169, 106, 0.1);
+    }
+
+    .hero-orb {
+      position: absolute;
+      top: 6%;
+      right: 8%;
+      z-index: 1;
+      width: 520px;
+      height: 520px;
+      border-radius: 50%;
+      pointer-events: none;
+      background: radial-gradient(circle, rgba(200, 169, 106, 0.18), transparent 65%);
+      filter: blur(30px);
+    }
+
+    .hero-ring {
+      position: absolute;
+      top: 14%;
+      right: 7%;
+      z-index: 1;
+      width: clamp(280px, 30vw, 440px);
+      aspect-ratio: 1;
+      border: 1px solid rgba(200, 169, 106, 0.13);
+      border-radius: 50%;
+      pointer-events: none;
+      transform: rotate(-18deg);
+    }
+
+    .hero-ring::before {
+      content: "";
+      position: absolute;
+      top: 12%;
+      left: 16%;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--gold-light);
+      box-shadow: 0 0 24px 6px rgba(200, 169, 106, 0.35);
+    }
+
+    .hero-ring::after {
+      content: "";
+      position: absolute;
+      inset: 12%;
+      border: 1px dashed rgba(200, 169, 106, 0.09);
+      border-radius: 50%;
+    }
+
+    /* ---------- Buttons ---------- */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 15px 30px;
+      border: 1px solid transparent;
+      border-radius: 999px;
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      line-height: 1.2;
+      cursor: pointer;
+      transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+    }
+
+    .btn-gold {
+      border-color: transparent;
+      background: linear-gradient(135deg, #f0dfb6, var(--gold) 60%, #b39255);
+      color: #191307;
+      box-shadow: 0 12px 34px -16px rgba(200, 169, 106, 0.7);
+    }
+
+    .btn-gold:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 18px 44px -18px rgba(200, 169, 106, 0.8);
+    }
+
+    .btn-ghost {
+      border-color: rgba(200, 169, 106, 0.3);
+      background: rgba(255, 255, 255, 0.02);
+      color: var(--text);
+    }
+
+    .btn-ghost:hover {
+      border-color: var(--gold);
+      color: var(--gold-light);
+    }
+
+    .btn-outline {
+      border-color: var(--line);
+      background: transparent;
+      color: var(--text);
+    }
+
+    .btn-outline:hover {
+      border-color: rgba(200, 169, 106, 0.55);
+      color: var(--gold-light);
+    }
+
+    /* ---------- Sections ---------- */
+    .section {
+      position: relative;
+      z-index: 1;
+      padding: clamp(72px, 9vw, 112px) clamp(20px, 4vw, 56px);
+      scroll-margin-top: 80px;
+    }
+
+    .section-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    .section-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 40px;
+      margin-bottom: clamp(36px, 5vw, 52px);
+    }
+
+    .section-kicker {
+      margin: 0 0 14px;
+      color: var(--gold);
+      font-size: 11px;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+    }
+
+    .section-head h2 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: clamp(34px, 4.4vw, 56px);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.12;
+    }
+
+    .section-note {
+      max-width: 400px;
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.9;
+    }
+
+    /* ---------- Pricing cards ---------- */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      align-items: stretch;
+      padding-top: 12px;
+    }
+
+    .card {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      padding: 32px 28px 28px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.012));
+      transition: transform 0.35s ease, border-color 0.35s ease, box-shadow 0.35s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(200, 169, 106, 0.4);
+      box-shadow: 0 40px 80px -50px rgba(0, 0, 0, 0.9);
+      transform: translateY(-6px);
+    }
+
+    .card.is-featured {
+      border-color: rgba(200, 169, 106, 0.5);
+      background: linear-gradient(180deg, rgba(200, 169, 106, 0.14), rgba(255, 255, 255, 0.02) 42%, rgba(255, 255, 255, 0.01));
+      box-shadow: 0 30px 90px -50px rgba(200, 169, 106, 0.55);
+      transform: translateY(-12px);
+    }
+
+    .card.is-featured:hover {
+      transform: translateY(-18px);
+    }
+
+    .card.is-featured::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      right: 12%;
+      left: 12%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(238, 220, 180, 0.8), transparent);
+    }
+
+    .card-flag {
+      position: absolute;
+      top: -12px;
+      left: 28px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #f0dfb6, var(--gold));
+      color: #191307;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+    }
+
+    .card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .tier-name {
+      color: #d8c7a4;
+      font-size: 12px;
+      letter-spacing: 0.2em;
+    }
+
+    .card-index {
+      color: rgba(238, 220, 180, 0.45);
+      font-family: var(--font-display);
+      font-size: 13px;
+      letter-spacing: 0.1em;
+    }
+
+    .card h3 {
+      margin: 20px 0 10px;
+      font-family: var(--font-display);
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .card-desc {
+      min-height: 49px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.8;
+    }
+
+    .price-row {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      margin-top: 28px;
+    }
+
+    .price-row .currency {
+      align-self: flex-start;
+      margin-top: 12px;
+      color: var(--gold);
+      font-size: 20px;
+    }
+
+    .amount {
+      color: #f7f1e4;
+      font-family: var(--font-display);
+      font-size: clamp(52px, 5vw, 66px);
+      letter-spacing: -0.04em;
+      line-height: 0.9;
+    }
+
+    .term {
+      margin-left: 4px;
+      color: var(--muted-2);
+      font-size: 13px;
+    }
+
+    .compare {
+      margin: 10px 0 0;
+      color: #7f7b72;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+    }
+
+    .compare s {
+      text-decoration-color: rgba(200, 169, 106, 0.45);
+    }
+
+    .features {
+      display: grid;
+      flex: 1;
+      align-content: start;
+      gap: 13px;
+      margin: 26px 0 28px;
+      padding: 24px 0 0;
+      border-top: 1px solid var(--line-soft);
+      list-style: none;
+    }
+
+    .feature {
+      display: flex;
+      gap: 10px;
+      color: #c6c1b7;
+      font-size: 13.5px;
+      line-height: 1.6;
+    }
+
+    .feature svg {
+      flex: none;
+      width: 13px;
+      height: 13px;
+      margin-top: 4px;
+      color: var(--gold);
+    }
+
+    .card .btn {
+      border-radius: 12px;
+      padding: 14px 20px;
+      font-size: 13px;
+    }
+
+    .card .btn-gold {
+      box-shadow: 0 12px 30px -18px rgba(200, 169, 106, 0.75);
+    }
+
+    /* ---------- Promo copy ---------- */
+    .promo {
+      position: relative;
+      display: grid;
+      grid-template-columns: 0.85fr 1.15fr;
+      gap: clamp(32px, 5vw, 64px);
+      margin-top: clamp(56px, 8vw, 88px);
+      padding: clamp(32px, 5vw, 56px);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background:
+        radial-gradient(700px 380px at 0% 0%, rgba(200, 169, 106, 0.12), transparent 62%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01));
+    }
+
+    .promo::after {
+      content: "11";
+      position: absolute;
+      right: 20px;
+      bottom: -40px;
+      color: transparent;
+      font-family: var(--font-display);
+      font-size: clamp(150px, 18vw, 260px);
+      line-height: 0.8;
+      pointer-events: none;
+      -webkit-text-stroke: 1px rgba(200, 169, 106, 0.08);
+    }
+
+    .promo-copy,
+    .promo-body {
+      position: relative;
+      z-index: 1;
+    }
+
+    .promo h2 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: clamp(36px, 5vw, 58px);
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.12;
+    }
+
+    .promo-body p {
+      max-width: 560px;
+      margin: 0 0 16px;
+      color: #a8a49a;
+      font-size: 14.5px;
+      line-height: 1.95;
+    }
+
+    .promo-body p:first-child {
+      color: #d8d2c5;
+      font-size: 15.5px;
+    }
+
+    .notes {
+      display: grid;
+      gap: 14px;
+      margin: 28px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .notes li {
+      position: relative;
+      padding-left: 22px;
+      color: #8f8b82;
+      font-size: 13px;
+      line-height: 1.8;
+    }
+
+    .notes li::before {
+      content: "";
+      position: absolute;
+      top: 9px;
+      left: 2px;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--gold);
+      box-shadow: 0 0 12px rgba(200, 169, 106, 0.55);
+    }
+
+    .notes strong {
+      color: #d9d3c7;
+      font-weight: 500;
+    }
+
+    /* ---------- Final CTA ---------- */
+    .final {
+      position: relative;
+      z-index: 1;
+      padding: clamp(80px, 10vw, 130px) clamp(20px, 4vw, 56px);
+      border-top: 1px solid var(--line-soft);
+      text-align: center;
+      scroll-margin-top: 80px;
+    }
+
+    .final-inner {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    .final h2 {
+      margin: 16px 0 18px;
+      font-family: var(--font-display);
+      font-size: clamp(40px, 6.5vw, 76px);
+      font-weight: 600;
+      letter-spacing: -0.035em;
+      line-height: 1.05;
+    }
+
+    .final p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14.5px;
+      line-height: 1.9;
+    }
+
+    .final .btn {
+      margin-top: 34px;
+    }
+
+    /* ---------- Footer ---------- */
+    .site-footer {
+      position: relative;
+      z-index: 1;
+      padding: 28px clamp(20px, 4vw, 56px);
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .footer-inner {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 18px 32px;
+      max-width: 1180px;
+      margin: 0 auto;
+      color: var(--muted-2);
+      font-size: 11.5px;
+      letter-spacing: 0.04em;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 22px;
+    }
+
+    .footer-links a:hover {
+      color: var(--gold);
+    }
+
+    .footer-note {
+      grid-column: 1 / -1;
+      margin: 0;
+      color: #5f5c55;
+      font-size: 11px;
+      line-height: 1.7;
+    }
+
+    /* ---------- Modal ---------- */
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .modal[hidden] {
+      display: none;
+    }
+
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(4, 5, 7, 0.72);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+
+    .modal-card {
+      position: relative;
+      z-index: 1;
+      width: min(440px, 92vw);
+      padding: 36px;
+      border: 1px solid rgba(200, 169, 106, 0.24);
+      border-radius: 20px;
+      background: #101216;
+      box-shadow: 0 40px 120px -40px rgba(0, 0, 0, 0.9);
+      animation: modalIn 0.25s ease both;
+    }
+
+    .modal-close {
+      position: absolute;
+      top: 12px;
+      right: 16px;
+      padding: 4px;
+      border: 0;
+      background: none;
+      color: var(--muted);
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+      transition: color 0.2s ease;
+    }
+
+    .modal-close:hover {
+      color: var(--gold-light);
+    }
+
+    .modal-card h3 {
+      margin: 10px 0 8px;
+      font-family: var(--font-display);
+      font-size: 30px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .modal-desc {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13.5px;
+      line-height: 1.8;
+    }
+
+    .modal-plan {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin: 22px 0 16px;
+      padding: 18px 0;
+      border-top: 1px solid var(--line-soft);
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .modal-plan span {
+      color: #d9d3c7;
+      font-size: 14px;
+    }
+
+    .modal-plan strong {
+      color: var(--gold);
+      font-family: var(--font-display);
+      font-size: 38px;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+    }
+
+    .modal-note {
+      margin: 0;
+      color: var(--muted-2);
+      font-size: 12px;
+      line-height: 1.8;
+    }
+
+    .modal-confirm {
+      display: flex;
+      margin-top: 22px;
+    }
+
+    /* ---------- Toast ---------- */
+    .toast {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      z-index: 60;
+      max-width: 90vw;
+      padding: 12px 20px;
+      border-radius: 999px;
+      background: rgba(238, 220, 180, 0.96);
+      color: #171208;
+      font-size: 13px;
+      line-height: 1.5;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 8px);
+      transition: opacity 0.25s ease, transform 0.25s ease;
+    }
+
+    .toast.is-visible {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+
+    /* ---------- Motion ---------- */
+    @keyframes pulse {
+      from {
+        box-shadow: 0 0 0 4px rgba(200, 169, 106, 0.14);
+      }
+      50% {
+        box-shadow: 0 0 0 7px rgba(200, 169, 106, 0.04);
+      }
+      to {
+        box-shadow: 0 0 0 4px rgba(200, 169, 106, 0.14);
+      }
+    }
+
+    @keyframes modalIn {
+      from {
+        opacity: 0;
+        transform: translateY(12px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* ---------- Responsive ---------- */
+    @media (max-width: 960px) {
+      .site-nav {
+        display: none;
+      }
+
+      .hero {
+        padding-top: 132px;
+      }
+
+      .hero-ring {
+        display: none;
+      }
+
+      .hero-mark {
+        right: -50px;
+        opacity: 0.7;
+      }
+
+      .section-head {
+        display: block;
+      }
+
+      .section-note {
+        max-width: 600px;
+        margin-top: 18px;
+      }
+
+      .cards {
+        grid-template-columns: minmax(0, 1fr);
+        max-width: 560px;
+        margin: 0 auto;
+        padding-top: 0;
+      }
+
+      .card.is-featured,
+      .card.is-featured:hover {
+        transform: none;
+      }
+
+      .promo {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .site-header {
+        padding: 14px 20px;
+      }
+
+      .brand {
+        gap: 8px;
+        font-size: 13px;
+        letter-spacing: 0.18em;
+      }
+
+      .brand-tag {
+        padding: 3px 7px;
+        font-size: 9px;
+      }
+
+      .header-cta {
+        padding: 8px 14px;
+        font-size: 11px;
+      }
+
+      .hero {
+        padding: 120px 20px 64px;
+      }
+
+      .hero h1 {
+        font-size: clamp(54px, 17vw, 78px);
+      }
+
+      .hero-meta {
+        justify-content: space-between;
+        gap: 22px;
+      }
+
+      .hero-meta strong {
+        font-size: 20px;
+      }
+
+      .hero-mark {
+        right: -30px;
+        opacity: 0.55;
+      }
+
+      .hero-orb {
+        right: -180px;
+        width: 380px;
+        height: 380px;
+      }
+
+      .btn {
+        padding: 13px 22px;
+      }
+
+      .card {
+        padding: 28px 22px 24px;
+      }
+
+      .card-flag {
+        left: 22px;
+      }
+
+      .promo {
+        padding: 28px 22px;
+      }
+
+      .modal-card {
+        padding: 28px 22px;
+      }
+
+      .footer-inner {
+        display: block;
+      }
+
+      .footer-links {
+        margin-top: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-glow" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand" href="#top">
+      AURUM
+      <span class="brand-tag">双十一</span>
+    </a>
+    <nav class="site-nav" aria-label="主导航">
+      <a href="#pricing">礼遇方案</a>
+      <a href="#notes">活动说明</a>
+      <a href="#final">立即购买</a>
+    </nav>
+    <a class="header-cta" href="#pricing">立即购买</a>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="hero-orb" aria-hidden="true"></div>
+      <div class="hero-ring" aria-hidden="true"></div>
+      <span class="hero-mark" aria-hidden="true">11.11</span>
+
+      <div class="hero-inner">
+        <p class="eyebrow"><span class="dot" aria-hidden="true"></span>双十一 · 限时专场</p>
+        <h1>双十一<br><em>限时礼遇</em></h1>
+        <p class="lede">精选三档方案，覆盖日常入门到深度进阶。活动期间下单，可享限时价格与对应赠礼；部分权益数量有限，赠完即止。</p>
+        <div class="hero-actions">
+          <a class="btn btn-gold" href="#pricing">立即购买</a>
+          <a class="btn btn-ghost" href="#notes">了解活动规则</a>
+        </div>
+        <ul class="hero-meta">
+          <li><strong>三档</strong><span>礼遇方案</span></li>
+          <li><strong>限时</strong><span>活动价格</span></li>
+          <li><strong>专属</strong><span>赠礼与服务</span></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" id="pricing">
+      <div class="section-inner">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">The Offer</p>
+            <h2>选一档，开启进阶日常</h2>
+          </div>
+          <p class="section-note">三档方案逐级包含，按需选择。页面价格为活动限时价，具体以结算页展示为准。</p>
+        </div>
+
+        <div class="cards">
+          <article class="card">
+            <div class="card-top">
+              <span class="tier-name">入门</span>
+              <span class="card-index">01</span>
+            </div>
+            <h3>轻享版</h3>
+            <p class="card-desc">适合日常使用，覆盖核心功能与基础服务。</p>
+            <div class="price-row">
+              <span class="currency">¥</span>
+              <span class="amount">299</span>
+              <span class="term">/ 年</span>
+            </div>
+            <p class="compare">日常价 <s>¥399</s></p>
+            <ul class="features">
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                核心功能使用权限
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                标准在线客服
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                双十一限定电子礼包
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                12 个月服务期
+              </li>
+            </ul>
+            <button class="btn btn-outline" type="button" data-buy data-plan="轻享版" data-price="¥299" aria-label="立即购买轻享版">立即购买</button>
+          </article>
+
+          <article class="card is-featured">
+            <span class="card-flag">限时推荐</span>
+            <div class="card-top">
+              <span class="tier-name">进阶</span>
+              <span class="card-index">02</span>
+            </div>
+            <h3>进阶版</h3>
+            <p class="card-desc">面向高频使用场景，协作与数据能力同步进阶。</p>
+            <div class="price-row">
+              <span class="currency">¥</span>
+              <span class="amount">599</span>
+              <span class="term">/ 年</span>
+            </div>
+            <p class="compare">日常价 <s>¥799</s></p>
+            <ul class="features">
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                含轻享版主要权益
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                高级功能与数据面板
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                优先技术支持
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                双十一限定实物赠礼
+              </li>
+            </ul>
+            <button class="btn btn-gold" type="button" data-buy data-plan="进阶版" data-price="¥599" aria-label="立即购买进阶版">立即购买</button>
+          </article>
+
+          <article class="card">
+            <div class="card-top">
+              <span class="tier-name">尊享</span>
+              <span class="card-index">03</span>
+            </div>
+            <h3>尊享版</h3>
+            <p class="card-desc">为深度需求准备，专属服务与定制方案一并到位。</p>
+            <div class="price-row">
+              <span class="currency">¥</span>
+              <span class="amount">999</span>
+              <span class="term">/ 年</span>
+            </div>
+            <p class="compare">日常价 <s>¥1,299</s></p>
+            <ul class="features">
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                含进阶版主要权益
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                一对一顾问服务
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                专属定制方案
+              </li>
+              <li class="feature">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                年度线下活动席位
+              </li>
+            </ul>
+            <button class="btn btn-outline" type="button" data-buy data-plan="尊享版" data-price="¥999" aria-label="立即购买尊享版">立即购买</button>
+          </article>
+        </div>
+
+        <div class="promo" id="notes">
+          <div class="promo-copy">
+            <p class="section-kicker">Limited Offer</p>
+            <h2>限时礼遇，<br>不止于价格</h2>
+          </div>
+          <div class="promo-body">
+            <p>一年一度的双十一如约而至。我们准备了更从容的选择：三档方案按需搭配，活动期间下单可享限时价格与对应赠礼。从日常入门到深度进阶，礼赠体验大幅提升。</p>
+            <p>部分赠礼数量有限，赠完即止。页面所示价格与权益为活动期限时内容，具体以结算页及官方公告为准。</p>
+            <ul class="notes">
+              <li><strong>限时价格：</strong>活动期间下单可享，结束时间以官方公告为准。</li>
+              <li><strong>赠礼规则：</strong>部分赠礼数量有限，赠完即止，不与其他活动叠加。</li>
+              <li><strong>权益说明：</strong>各档方案权益逐级包含，具体内容以购买页面为准。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="final" id="final">
+      <div class="final-inner">
+        <p class="section-kicker">Ready When You Are</p>
+        <h2>现在，选好你的那一档</h2>
+        <p>限时价格与赠礼同步进行中，选好方案即可下单。</p>
+        <a class="btn btn-gold" href="#pricing">立即购买</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <span>© AURUM · 双十一限时专场</span>
+      <nav class="footer-links" aria-label="页脚导航">
+        <a href="#pricing">礼遇方案</a>
+        <a href="#notes">活动说明</a>
+        <a href="#top">返回顶部</a>
+      </nav>
+      <p class="footer-note">本页面为活动展示页，价格与权益以正式结算页面及官方公告为准。</p>
+    </div>
+  </footer>
+
+  <div class="modal" id="purchase-modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-desc">
+      <button class="modal-close" type="button" data-close aria-label="关闭购买确认">×</button>
+      <p class="section-kicker">Checkout</p>
+      <h3 id="modal-title">确认礼遇方案</h3>
+      <p class="modal-desc" id="modal-desc">你选择的方案如下，限时价格与赠礼以正式结算页面为准。</p>
+      <div class="modal-plan">
+        <span id="modal-plan-name">进阶版</span>
+        <strong id="modal-plan-price">¥599</strong>
+      </div>
+      <p class="modal-note">数量有限，赠完即止；活动规则以官方公告为准。</p>
+      <button class="btn btn-gold modal-confirm" type="button" id="confirm-buy">立即购买</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const modal = document.getElementById("purchase-modal");
+      const planName = document.getElementById("modal-plan-name");
+      const planPrice = document.getElementById("modal-plan-price");
+      const confirmBuy = document.getElementById("confirm-buy");
+      const toast = document.getElementById("toast");
+      let lastTrigger = null;
+      let toastTimer = null;
+
+      const showToast = (message) => {
+        toast.textContent = message;
+        toast.classList.add("is-visible");
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => {
+          toast.classList.remove("is-visible");
+        }, 3200);
+      };
+
+      const openModal = (name, price, trigger) => {
+        lastTrigger = trigger;
+        planName.textContent = name;
+        planPrice.textContent = price;
+        modal.hidden = false;
+        document.body.classList.add("modal-open");
+        confirmBuy.focus();
+      };
+
+      const closeModal = () => {
+        modal.hidden = true;
+        document.body.classList.remove("modal-open");
+        if (lastTrigger) {
+          lastTrigger.focus();
+        }
+      };
+
+      document.querySelectorAll("[data-buy]").forEach((button) => {
+        button.addEventListener("click", () => {
+          openModal(button.dataset.plan, button.dataset.price, button);
+        });
+      });
+
+      modal.querySelectorAll("[data-close]").forEach((element) => {
+        element.addEventListener("click", closeModal);
+      });
+
+      confirmBuy.addEventListener("click", () => {
+        const name = planName.textContent;
+        closeModal();
+        showToast("已选择「" + name + "」，请前往正式活动页面完成结算。");
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !modal.hidden) {
+          closeModal();
+        }
+      });
+
+      modal.addEventListener("keydown", (event) => {
+        if (event.key !== "Tab" || modal.hidden) {
+          return;
+        }
+        const focusable = modal.querySelectorAll("button:not([disabled])");
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

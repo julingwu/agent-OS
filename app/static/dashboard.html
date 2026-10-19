@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OA Agent · 工作台</title>
+<style>
+  :root{--fg:#1f2328;--muted:#656d76;--line:#d0d7de;--bg:#fff;--ok:#1a7f37;--bad:#cf222e;--wait:#9a6700;--accent:#1f6feb}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;color:var(--fg);background:#f6f8fa}
+  header{background:#fff;border-bottom:1px solid var(--line);padding:14px 24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0}
+  nav{display:flex;gap:6px;margin-left:auto}
+  nav button{border:1px solid var(--line);background:#f6f8fa;border-radius:6px;padding:6px 12px;cursor:pointer;font:inherit}
+  nav button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  main{padding:20px 24px;max-width:1280px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px}
+  .kpi b{display:block;font-size:24px;line-height:1.2}
+  .kpi span{color:var(--muted);font-size:12px}
+  table{border-collapse:collapse;width:100%}
+  th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;font-size:13px}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  button.act{border:1px solid var(--line);background:#fff;border-radius:6px;padding:3px 9px;font-size:12px;cursor:pointer}
+  button.ok{color:var(--ok);border-color:var(--ok)}
+  button.bad{color:var(--bad);border-color:var(--bad)}
+  button.primary{background:var(--accent);color:#fff;border-color:var(--accent);padding:7px 14px}
+  .badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;border:1px solid var(--line)}
+  .passed{color:var(--ok);border-color:var(--ok)}.failed{color:var(--bad);border-color:var(--bad)}
+  .pending{color:var(--wait);border-color:var(--wait)}.na{color:var(--muted)}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+  .muted{color:var(--muted);font-size:12px}
+  input,select{padding:6px 9px;border:1px solid var(--line);border-radius:6px;font:inherit}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  .err{color:var(--bad);font-size:13px;margin-top:8px;min-height:18px}
+  .toast{position:fixed;right:20px;bottom:20px;background:#1f2328;color:#fff;padding:10px 14px;border-radius:8px;opacity:0;transition:.2s}
+  .toast.on{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>OA Agent · 工作台</h1>
+  <span id="who" class="muted"></span>
+  <button id="switch" class="act" hidden onclick="logout()">换身份</button>
+  <nav>
+    <button data-tab="board" class="on">董事长看板</button>
+    <button data-tab="sched">调度看板</button>
+    <button data-tab="detail">任务详情</button>
+  </nav>
+</header>
+
+<main>
+  <section id="login" class="card" style="max-width:640px">
+    <b>用签名身份登录</b>
+    <div class="muted">工作台不绕过 API：浏览器用你输入的密钥对每个请求做 HMAC 签名。密钥只存在本地 sessionStorage。</div>
+    <div class="row" style="margin-top:10px">
+      <input id="lid" placeholder="身份 ID（ID-…）" style="min-width:280px">
+      <input id="lsec" placeholder="secret" type="password" style="min-width:280px">
+      <button class="primary" onclick="login()">登录</button>
+    </div>
+    <div class="muted">在服务器上执行 <span class="mono">python tools/auth_admin.py issue --name ceo-01 --role ceo</span> 获取。</div>
+    <div id="loginerr" class="err"></div>
+  </section>
+
+  <section id="tab-board" hidden>
+    <div class="cards" id="kpis"></div>
+    <div class="card">
+      <b>业务线消耗</b>
+      <table><thead><tr><th>业务包</th><th>任务</th><th>完成</th><th>失败</th><th>成功率</th><th>Token</th></tr></thead>
+      <tbody id="packs-body"></tbody></table>
+    </div>
+    <div class="card">
+      <b>待我审批的决策包</b>
+      <table><thead><tr><th>标题</th><th>金额</th><th>路由</th><th>理由</th><th>操作</th></tr></thead>
+      <tbody id="dec-body"></tbody></table>
+    </div>
+  </section>
+
+  <section id="tab-sched" hidden>
+    <div class="cards" id="states"></div>
+    <div class="row">
+      <select id="fstate"><option value="">全部状态</option>
+        <option>todo</option><option>assigned</option><option>in_progress</option>
+        <option>pending_review</option><option>rejected</option><option>failed</option>
+        <option>completed</option></select>
+      <button class="act" onclick="loadTasks()">刷新</button>
+      <span class="muted" id="task-count"></span>
+    </div>
+    <div class="card"><table><thead><tr>
+      <th>任务</th><th>业务包</th><th>状态</th><th>运行</th><th>产出</th><th>操作</th>
+    </tr></thead><tbody id="tasks-body"></tbody></table></div>
+  </section>
+
+  <section id="tab-detail" hidden>
+    <div class="row">
+      <input id="tid" placeholder="任务 ID（T-…）" style="min-width:320px">
+      <button class="act" onclick="loadDetail()">载入</button>
+      <button class="act" onclick="runAcceptance()">跑验收</button>
+      <span class="muted" id="detail-state"></span>
+    </div>
+    <div class="card"><table><thead><tr><th>#</th><th>判据</th><th>层</th><th>状态</th><th>说明 / 人工判定</th></tr></thead>
+      <tbody id="crit-body"></tbody></table></div>
+    <div class="card"><b>产出与时间轴</b><div id="artifacts" class="muted"></div>
+      <pre id="timeline" class="mono" style="max-height:260px;overflow:auto;background:#f6f8fa;padding:10px;border-radius:6px"></pre></div>
+  </section>
+</main>
+<div id="toast" class="toast"></div>
+
+<script>
+// All HTML strings below go through esc(); server data is never trusted raw.
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+let S = { id: sessionStorage.getItem('oa_id') || '', secret: sessionStorage.getItem('oa_secret') || '' };
+let current = null;
+
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 2200); }
+
+const enc = new TextEncoder();
+async function sha256hex(buf) {
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function hmacHex(secret, msg) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(msg));
+  return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function api(method, path, { params, json } = {}) {
+  const body = json === undefined ? '' : JSON.stringify(json);
+  const q = params ? Object.keys(params).sort().map(k => `${k}=${params[k]}`).join('&') : '';
+  const ts = String(Math.floor(Date.now() / 1000));
+  const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+  const canon = [method, path, q, ts, nonce, await sha256hex(enc.encode(body))].join('\n');
+  const sig = await hmacHex(S.secret, canon);
+  const url = path + (q ? '?' + q : '');
+  const r = await fetch(url, {
+    method, body: body || undefined,
+    headers: {
+      'X-OA-Key': S.id, 'X-OA-Ts': ts, 'X-OA-Nonce': nonce, 'X-OA-Sig': sig,
+      ...(body ? { 'content-type': 'application/json' } : {})
+    }
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((data.detail && (data.detail.code || data.detail.message)) || r.status);
+  return data;
+}
+
+function login() {
+  const id = $('lid').value.trim(), sec = $('lsec').value.trim();
+  $('loginerr').textContent = '';
+  if (!/^ID-[0-9a-f]{8,}$/i.test(id)) {
+    $('loginerr').textContent = '身份 ID 形如 ID-0123456789abcdef —— 刚才那串不像（不能填岗位名或工号）';
+    return;
+  }
+  if (!sec) { $('loginerr').textContent = '密钥不能为空'; return; }
+  S.id = id; S.secret = sec;
+  sessionStorage.setItem('oa_id', id); sessionStorage.setItem('oa_secret', sec);
+  boot(true);
+}
+
+function logout() {
+  sessionStorage.removeItem('oa_id'); sessionStorage.removeItem('oa_secret');
+  location.reload();
+}
+
+async function verify() {
+  try { await api('GET', '/reports/usage'); return null; }
+  catch (e) {
+    const m = String(e.message || e);
+    if (m.includes('UnknownIdentity')) return '服务器不认识这个身份 ID —— 请核对 ID（不是姓名/工号）';
+    if (m.includes('BadSignature') || m.includes('Signature')) return '密钥与该身份不匹配';
+    if (m.includes('Stale')) return '本机时间与服务端差太多，检查系统时间';
+    return m;
+  }
+}
+
+function tab(name) {
+  for (const b of document.querySelectorAll('nav button')) b.classList.toggle('on', b.dataset.tab === name);
+  for (const t of ['board', 'sched', 'detail']) $('tab-' + t).hidden = (t !== name);
+  if (name === 'board') loadBoard();
+  if (name === 'sched') loadTasks();
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => tab(b.dataset.tab));
+
+async function loadBoard() {
+  try {
+    const rep = await api('GET', '/reports/usage');
+    const t = rep.totals;
+    $('kpis').innerHTML = `
+      <div class="kpi"><b>${t.tokens.toLocaleString()}</b><span>Token 消耗</span></div>
+      <div class="kpi"><b>${t.tasks}</b><span>任务总数</span></div>
+      <div class="kpi"><b>${t.task_success_rate == null ? '—' : Math.round(t.task_success_rate * 100) + '%'}</b><span>任务成功率</span></div>
+      <div class="kpi"><b>${t.artifacts}</b><span>产出文件</span></div>`;
+    $('packs-body').innerHTML = rep.by_pack.length ? rep.by_pack.map(p => `
+      <tr><td>${esc(p.pack)}</td><td>${p.tasks}</td><td>${p.completed}</td><td>${p.failed}</td>
+      <td>${Math.round(p.success_rate * 100)}%</td><td class="mono">${p.tokens.toLocaleString()}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="muted">暂无任务</td></tr>';
+
+    const dec = await api('GET', '/decisions', { params: { limit: 50 } });
+    const pending = dec.decisions.filter(d => d.state.startsWith('escalated'));
+    $('dec-body').innerHTML = pending.length ? pending.map(d => `
+      <tr><td>${esc(d.title)}</td><td class="mono">${Number(d.amount).toLocaleString()}</td>
+      <td class="mono">${esc(d.state)}</td><td class="muted">${esc(d.filter_reason || '')}</td>
+      <td><button class="act ok" onclick="decide('${d.id}',true)">同意</button>
+          <button class="act bad" onclick="decide('${d.id}',false)">驳回</button></td></tr>`).join('')
+      : '<tr><td colspan="5" class="muted">没有待审批事项</td></tr>';
+  } catch (e) { toast('看板加载失败：' + e.message); }
+}
+
+async function decide(id, approved) {
+  try {
+    await api('POST', `/decisions/${id}/decide`, { json: { approved, note: approved ? '工作台批准' : '工作台驳回' } });
+    toast(approved ? '已批准' : '已驳回'); loadBoard();
+  } catch (e) { toast('操作失败：' + e.message); }
+}
+
+async function loadTasks() {
+  try {
+    const params = { limit: 50 };
+    if ($('fstate').value) params.state = $('fstate').value;
+    const r = await api('GET', '/tasks', { params });
+    $('states').innerHTML = Object.entries(r.counts || {}).map(([k, v]) =>
+      `<div class="kpi"><b>${v}</b><span>${esc(k)}</span></div>`).join('') || '<div class="muted">暂无任务</div>';
+    $('task-count').textContent = `共 ${r.total} 个任务`;
+    $('tasks-body').innerHTML = r.tasks.map(t => `
+      <tr><td><div class="mono">${esc(t.id)}</div><div class="muted">${esc(t.title)}</div></td>
+      <td>${esc(t.pack_id || '')}</td><td>${badge(t.state)}</td>
+      <td class="mono">${t.run_count || 0}</td><td class="mono">${esc(t.task_type || '')}</td>
+      <td><button class="act" onclick="openTask('${t.id}')">详情</button>
+          <button class="act ok" onclick="accept('${t.id}')">验收</button>
+          ${t.state === 'rejected' || t.state === 'failed'
+            ? `<button class="act bad" onclick="retry('${t.id}')">打回重做</button>` : ''}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="muted">没有任务</td></tr>';
+  } catch (e) { toast('任务列表失败：' + e.message); }
+}
+
+function badge(s) {
+  const cls = s === 'completed' ? 'passed' : (s === 'rejected' || s === 'failed') ? 'failed'
+    : s === 'na' ? 'na' : 'pending';
+  return `<span class="badge ${cls}">${esc(s)}</span>`;
+}
+
+async function accept(tid) {
+  try { const r = await api('POST', `/tasks/${tid}/acceptance/run`);
+    toast(`验收：${r.verdict}`); loadTasks();
+  } catch (e) { toast('验收失败：' + e.message); }
+}
+
+async function retry(tid) {
+  if (!confirm('打回重做会真的重新跑一次（消耗 token），继续？')) return;
+  try { toast('已派单，执行中…'); const r = await api('POST', `/tasks/${tid}/retry`, { json: {} });
+    toast(`重跑完成：${r.task_state}`); loadTasks();
+  } catch (e) { toast('重跑失败：' + e.message); }
+}
+
+function openTask(tid) { $('tid').value = tid; tab('detail'); loadDetail(); }
+
+async function loadDetail() {
+  const tid = $('tid').value.trim(); if (!tid) return;
+  try {
+    const d = await api('GET', `/tasks/${tid}`);
+    current = d;
+    $('detail-state').innerHTML = `状态 ${badge(d.task.state)}`;
+    $('crit-body').innerHTML = d.criteria.map(c => `
+      <tr><td>${c.seq}</td><td>${esc(c.criterion)}</td><td class="mono">${esc(c.acceptance_layer)}</td>
+      <td>${badge(c.state)}</td>
+      <td>${c.check_type === 'human_check' && c.state === 'pending' ? `
+        <input id="n-${c.id}" placeholder="说明" style="min-width:150px">
+        <input id="e-${c.id}" placeholder="证据片段（必填）" style="min-width:200px">
+        <button class="act ok" onclick="judge('${c.id}',true)">通过</button>
+        <button class="act bad" onclick="judge('${c.id}',false)">不通过</button>`
+        : `<span class="muted">${esc(c.note || (c.checked_by ? '已判定' : ''))}</span>`}</td></tr>`).join('');
+    $('artifacts').innerHTML = (d.artifacts || []).map(a =>
+      `<div class="mono">${esc(a.file_path)} · ${a.bytes}B · ${esc(a.checksum.slice(0, 12))}</div>`).join('') || '暂无产出';
+    api('GET', `/tasks/${tid}/timeline`).then(tl => {
+      $('timeline').textContent = tl.events.map(e => `${e.verb} ${e.layer || ''} ${e.action || ''}`).join('\n');
+    });
+  } catch (e) { toast('载入失败：' + e.message); }
+}
+
+async function judge(cid, passed) {
+  const note = ($('n-' + cid) || {}).value || null;
+  const ev = ($('e-' + cid) || {}).value || null;
+  try {
+    await api('POST', `/criteria/${cid}/check`, { json: { passed, note, evidence_snippet: ev } });
+    if (current && current.task) {                       // judge, then re-run acceptance at once
+      const r = await api('POST', `/tasks/${current.task.id}/acceptance/run`);
+      toast(`已判定，验收结果：${r.verdict}`);
+    } else {
+      toast(passed ? '已通过' : '已不通过');
+    }
+    loadDetail();
+  } catch (e) { toast('判定失败：' + e.message); }
+}
+
+async function runAcceptance() { const tid = $('tid').value.trim(); if (tid) accept(tid); }
+
+async function boot(fresh) {
+  $('who').textContent = S.id;
+  const bad = await verify();
+  if (bad) {
+    $('login').hidden = false;
+    $('switch').hidden = true;
+    $('tab-board').hidden = true;
+    $('loginerr').textContent = bad;
+    sessionStorage.removeItem('oa_admin_ok');
+    return;
+  }
+  $('loginerr').textContent = '';
+  $('login').hidden = true;
+  $('switch').hidden = false;
+  tab('board');
+}
+if (S.id && S.secret) boot(); else { $('login').hidden = false; $('tab-board').hidden = true; }
+</script>
+</body>
+</html>

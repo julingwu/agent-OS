@@ -1,0 +1,74 @@
+<!doctype html><html lang=zh-CN><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>AI 集团 · 首份业务档案（闭环版）</title><style>
+:root{--bg:#0f1115;--panel:#151922;--line:#262b36;--fg:#e6e6e6;--muted:#8b93a1;--accent:#8ab4f8}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.65 -apple-system,"PingFang SC",Segoe UI,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:36px 22px 80px}
+h1{font-size:24px;margin:0 0 18px;letter-spacing:.02em}
+h2{font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);
+   margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+p{margin:6px 0;color:var(--muted)}
+p strong{color:var(--fg)}
+ul{margin:8px 0 8px 18px;padding:0;color:var(--muted)}
+table{width:100%;border-collapse:collapse;margin:10px 0 4px;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);padding:7px 9px;white-space:nowrap}
+td{border-bottom:1px solid #1d222c;padding:7px 9px;vertical-align:top;word-break:break-word}
+tr:hover td{background:#12161e}
+td:first-child{color:#a9b4c4;font-variant-numeric:tabular-nums;white-space:nowrap}
+code{background:#1b2029;padding:1px 5px;border-radius:4px;font-size:12.5px}
+.tag{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11.5px;background:#22303f;color:#9dc6ff}
+</style></head>
+<body><div class=wrap><h1>AI 集团 · 首份业务档案（闭环版）</h1>
+<p>生成时间：2026-10-18 23:13</p>
+<p>范围：两条真实业务任务，全部走「建群/接单 → 真模型执行 → 判据验收 → 人工签字 → 完成」</p>
+<h2>一、总览</h2>
+<table>
+<tr><th>任务</th><th>业务包</th><th>状态</th><th>运行</th><th>tokens</th><th>产物</th><th>签字方式</th></tr>
+<tr><td>T-2059eaa6cb184855</td><td>web-v1</td><td><strong>completed</strong></td><td>3</td><td>124,012</td><td>3</td><td>企微卡片人工通过</td></tr>
+<tr><td>T-942a9ecb7cc54da2</td><td>content-v1</td><td><strong>completed</strong></td><td>1</td><td>8,859</td><td>1</td><td>企微审批通过 202610180001</td></tr>
+</table>
+<p>合计 tokens：<strong>132,871</strong></p>
+<h2>二、落地页任务（链接签字）</h2>
+<p>任务：T-2059eaa6cb184855　地页任务（链接签字）</p>
+<p>标题：做一个双十一大促的商品落地页 index.html，深色高级感，含主标题、三档价格卡、立即购买按钮和一段促销文案</p>
+<p>周期：2026-10-18 14:11:15 → 2026-10-18 14:51:54</p>
+<table>
+<tr><th>轮次</th><th>引擎</th><th>状态</th><th>tokens</th><th>说明</th></tr>
+<tr><td>1</td><td>acp</td><td>succeeded</td><td>51,198</td><td>成功</td></tr>
+<tr><td>2</td><td>acp</td><td>failed</td><td>50,978</td><td>预算熔断</td></tr>
+<tr><td>3</td><td>acp</td><td>succeeded</td><td>21,836</td><td>成功</td></tr>
+</table>
+<table>
+<tr><th>判据</th><th>层</th><th>结果</th><th>证据</th></tr>
+<tr><td>产出 HTML 落地页文件、可读且非空（≥2000</td><td>L2</td><td>passed</td><td>文件 可用（36288 字节）</td></tr>
+<tr><td>页面结构完整（含 &lt;html 根节点）</td><td>L0</td><td>passed</td><td>命中 &lt;html</td></tr>
+<tr><td>自带样式（内联 &lt;style&gt; 或外链 &lt;link）</td><td>L0</td><td>passed</td><td>命中 &lt;style</td></tr>
+<tr><td>含可点击的行动按钮（&lt;button / 立即购买 /</td><td>L0</td><td>passed</td><td>命中 &lt;button</td></tr>
+<tr><td>不含广告法禁用词（最好/最佳/第一品牌/绝对/100</td><td>L0</td><td>passed</td><td>无禁用词</td></tr>
+<tr><td>页面视觉与文案质量（人工判定，须附页面片段）</td><td>L1</td><td>passed</td><td>企微卡片人工通过</td></tr>
+<tr><td>移动端适配检查（M0 未启用）</td><td>L1</td><td>na</td><td></td></tr>
+</table>
+<h2>三、内容任务（企微原生审批）</h2>
+<p>任务：T-942a9ecb7cc54da2　容任务（企微原生审批）</p>
+<p>标题：写一篇 300 字的秋季护肤短文</p>
+<p>周期：2026-10-18 15:10:01 → 2026-10-18 15:12:57</p>
+<table>
+<tr><th>轮次</th><th>引擎</th><th>状态</th><th>tokens</th><th>说明</th></tr>
+<tr><td>1</td><td>acp</td><td>succeeded</td><td>8,859</td><td>成功</td></tr>
+</table>
+<table>
+<tr><th>判据</th><th>层</th><th>结果</th><th>证据</th></tr>
+<tr><td>产出文件存在、可读且非空</td><td>L2</td><td>passed</td><td>文件 可用（1047 字节）</td></tr>
+<tr><td>正文 300-480 字（CJK 字符 + 英文单词</td><td>L2</td><td>passed</td><td>字数 301（区间 300-480）</td></tr>
+<tr><td>命中至少 3 组护肤关键词</td><td>L0</td><td>passed</td><td>命中 3/3 个关键词组</td></tr>
+<tr><td>不含广告法禁用词（最好/最佳/第一品牌/绝对/100</td><td>L0</td><td>passed</td><td>无禁用词</td></tr>
+<tr><td>品牌调性：语气亲切、不夸大功效（人工判定，须附原文片</td><td>L1</td><td>passed</td><td>企微审批通过 202610180001</td></tr>
+<tr><td>配图版权合规（M0 未启用）</td><td>L1</td><td>na</td><td></td></tr>
+</table>
+<h2>四、企微原生审批记录</h2>
+<table>
+<tr><th>SP 单号</th><th>任务</th><th>状态</th><th>结果</th><th>创建</th><th>更新</th></tr>
+<tr><td>202610180001</td><td>T-942a9ecb7cc54da2</td><td>approved</td><td>签字完成，验收 completed</td><td>2026-10-18 15:12:02</td><td>2026-10-18 15:12:57</td></tr>
+</table>
+<p>&gt; 审批走 <code>oa/applyevent</code> 建单 + <code>oa/getapprovaldetail</code> 轮询，全程出站，无公网回调依赖。</p></div></body></html>
