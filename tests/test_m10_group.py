@@ -36,6 +36,7 @@ def test_roles_are_pm_member_reviewer(conn):
 
 
 def test_hop_budget_stops_the_group_talking(conn):
+    _emp(conn, "AI-7")
     chat = store.create_group(conn, "g2", ["AI-7"])
     for _ in range(4):
         assert store.hop_allows(conn, chat["id"])

@@ -22,12 +22,14 @@ def actor(conn, token, *, deciding=False):
 
 
 def _scope(who):
+    tenant_scope = "a.tenant_id=?"
+    args = [who.get("tenant_id") or "TENANT-HQ"]
     if who["role"] == "system":
-        return "1=1", []
+        return tenant_scope, args
     # Reading down does not authorize an approval that grants another entity's
     # permissions. Task ownership wins over an optional agent association.
     return ("COALESCE(t.legal_entity_id,r.legal_entity_id,e.legal_entity_id,"
-            "i.legal_entity_id)=?", [tenant.entity_of(who)])
+            "i.legal_entity_id)=? AND " + tenant_scope, [tenant.entity_of(who), *args])
 
 
 def require_owned(conn, approval_id, who):

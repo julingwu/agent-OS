@@ -175,6 +175,8 @@ def create_role(conn, *, name: str, tag: str, prompt: str = "", model: str = "de
 
 def instantiate(conn, role_id: str, entity_id: str = "LE-GROUP-HQ") -> str:
     """把角色模板落地成一个可调度的 AI 员工（幂等：同一角色同一条线只建一个）。"""
+    from ..tenancy import of_entity
+    tenant_id = of_entity(conn, entity_id)
     role = conn.execute("SELECT * FROM role_templates WHERE id=?", (role_id,)).fetchone()
     if role is None:
         raise ValueError(f"unknown role {role_id}")
@@ -196,11 +198,11 @@ def instantiate(conn, role_id: str, entity_id: str = "LE-GROUP-HQ") -> str:
                  (emp_id, entity_id, role["name"], pos_id, role["model"],
                   role["prompt"] or f"你是{role['name']}。", "按判据交付", role_id))
     conn.execute("""INSERT INTO identities
-                    (id, name, role, legal_entity_id, secret, scopes, state, employee_id)
+                    (id, name, role, legal_entity_id, secret, scopes, state, employee_id,tenant_id)
                     VALUES (?,?,'agent',?,?, '["task:create","task:read","accept:judge"]',
-                            'active', ?)""",
+                            'active', ?,?)""",
                  ("ID-" + secrets.token_hex(8), role["name"], entity_id,
-                  secrets.token_hex(16), emp_id))
+                  secrets.token_hex(16), emp_id, tenant_id))
     store.get_or_create_dm(conn, emp_id, role["name"], entity_id)
     conn.commit()
     return emp_id

@@ -1,7 +1,17 @@
 -- M0 schema: 11 tables + 1 state-machine guard trigger
+CREATE TABLE IF NOT EXISTS tenants (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  plan TEXT DEFAULT 'internal',
+  state TEXT DEFAULT 'active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO tenants (id, name, plan) VALUES ('TENANT-HQ', '集团总部', 'internal');
+
 CREATE TABLE IF NOT EXISTS legal_entities (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  tenant_id TEXT DEFAULT 'TENANT-HQ',
   type TEXT NOT NULL DEFAULT 'group_hq',
   parent_entity_id TEXT,
   data_boundary TEXT DEFAULT 'transparent',
@@ -52,6 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_mem_emp_scope ON memory_entries(employee_id, scop
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   legal_entity_id TEXT NOT NULL REFERENCES legal_entities(id),
+  tenant_id TEXT DEFAULT 'TENANT-HQ',
   group_id TEXT,
   owner_position_id TEXT REFERENCES positions(id),
   task_type TEXT,
@@ -104,6 +115,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   task_id TEXT NOT NULL REFERENCES tasks(id),
   run_seq INTEGER NOT NULL,
   legal_entity_id TEXT NOT NULL REFERENCES legal_entities(id),
+  tenant_id TEXT DEFAULT 'TENANT-HQ',
   state TEXT NOT NULL DEFAULT 'spawned',
   session_id TEXT,
   pid INTEGER,
@@ -117,12 +129,15 @@ CREATE TABLE IF NOT EXISTS task_runs (
   exit_code INTEGER,
   usage_tokens INTEGER DEFAULT 0,      -- cumulative per session, as reported
   usage_baseline INTEGER DEFAULT 0,    -- session usage when this run started
+  error TEXT,                          -- human-readable failure reason (v3.1)
+  mcp_fingerprint TEXT,                -- hash of the authority bound to this ACP session
   UNIQUE(task_id, run_seq)
 );
 
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL REFERENCES task_runs(id),
+  tenant_id TEXT DEFAULT 'TENANT-HQ',
   art_seq INTEGER NOT NULL,
   file_path TEXT NOT NULL,
   content TEXT,
@@ -334,6 +349,7 @@ CREATE TABLE IF NOT EXISTS identities (
   name TEXT NOT NULL,
   role TEXT NOT NULL,                 -- system / ceo / manager / agent
   legal_entity_id TEXT,
+  tenant_id TEXT DEFAULT 'TENANT-HQ',
   employee_id TEXT,                  -- optional link to ai_employees (entity + pack)
   secret TEXT NOT NULL,               -- HMAC key (see DESIGN_GAPS §20)
   scopes JSON,

@@ -25,7 +25,7 @@ from ..audit import write_audit
 from ..db import get_conn
 from ..engine import dsh_adapter
 from ..identity import ROLE_SCOPES  # noqa: F401  (kept for parity with the API)
-from .. import tenant
+from .. import tenant, tenancy
 from . import intel, store
 
 router = APIRouter(prefix="/ui", tags=["ui"])
@@ -82,6 +82,15 @@ def _require(token: str | None) -> str:
     return ident
 
 
+def _tenant_of(conn, ident: str, header: str | None = None) -> str:
+    try:
+        return tenancy.resolve(conn, ident, header)
+    except PermissionError as exc:
+        code = str(exc)
+        raise HTTPException(401 if code == "UnknownIdentity" else 403,
+                            detail={"code": code}) from None
+
+
 class LoginIn(BaseModel):
     identity_id: str
     secret: str
@@ -98,7 +107,7 @@ def login(payload: LoginIn, response: Response):
     response.set_cookie(COOKIE, token, httponly=True, samesite="lax",
                         max_age=SESSION_TTL, path="/")
     return {"ok": True, "identity_id": row["id"], "name": row["name"], "role": row["role"],
-            "token": token}
+            "tenant_id": row["tenant_id"], "token": token}
 
 
 @router.get("/dev-login")
@@ -128,12 +137,15 @@ def logout(response: Response):
 def me(oa_ui: str | None = Depends(_token)):
     ident = _require(oa_ui)
     with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:read")
         row = conn.execute(
             """SELECT i.*, e.name AS entity_name FROM identities i
                LEFT JOIN legal_entities e ON e.id = i.legal_entity_id WHERE i.id=?""",
             (ident,)).fetchone()
+        tenant_name = tenancy.name_of(conn, actor["tenant_id"])
     return {"identity_id": row["id"], "name": row["name"], "role": row["role"],
-            "entity_id": row["legal_entity_id"], "entity_name": row["entity_name"]}
+            "entity_id": row["legal_entity_id"], "entity_name": row["entity_name"],
+            "tenant_id": actor["tenant_id"], "tenant_name": tenant_name}
 
 
 # ------------------------------------------------------------------ org tree
@@ -141,12 +153,15 @@ def me(oa_ui: str | None = Depends(_token)):
 def org(oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:read")
+        from .access import visible_entities
+        allowed = set(visible_entities(conn, actor))
         entities = [dict(r) for r in conn.execute(
-            "SELECT * FROM legal_entities WHERE state='active' ORDER BY parent_entity_id, name")]
+            "SELECT * FROM legal_entities WHERE state='active' ORDER BY parent_entity_id, name") if r["id"] in allowed]
         positions = [dict(r) for r in conn.execute(
-            "SELECT * FROM positions WHERE state='active'")]
+            "SELECT * FROM positions WHERE state='active'") if r["legal_entity_id"] in allowed]
         employees = [dict(r) for r in conn.execute(
-            "SELECT * FROM ai_employees")]
+            "SELECT * FROM ai_employees") if r["legal_entity_id"] in allowed]
     by_parent: dict[str, list] = {}
     for e in entities:
         by_parent.setdefault(e["parent_entity_id"] or "", []).append(e)
@@ -161,7 +176,7 @@ def org(oa_ui: str | None = Depends(_token)):
                               for e in employees if e["position_id"] == p["id"]]
         return {**entity, "children": kids, "positions": pos}
 
-    roots = [build(x) for x in by_parent.get("", [])]
+    roots = [build(x) for x in entities if not x["parent_entity_id"] or x["parent_entity_id"] not in allowed]
     return {"roots": roots,
             "employees": [{"id": e["id"], "name": e["name"], "model": e["model"],
                            "status": e["status"], "entity_id": e["legal_entity_id"],
@@ -182,12 +197,16 @@ class MemberIn(BaseModel):
 def add_member(payload: MemberIn, oa_ui: str | None = Depends(_token)):
     """Create position (if needed) + AI employee + signed identity, then a DM."""
     _require(oa_ui)
-    slug = hashlib.sha1(payload.name.encode()).hexdigest()[:6].upper()
+    slug = hashlib.sha256((payload.entity_id + ":" + payload.name).encode()).hexdigest()[:12].upper()
     pos_id = f"POS-{slug}"
     emp_id = f"AI-{slug}"
     ident_id = f"ID-{secrets.token_hex(8)}"
     with get_conn() as conn:
         store.ensure(conn)
+        actor = _task_actor(conn, oa_ui, "task:*")
+        tenant.resolve(actor, payload.entity_id)
+        if tenancy.of_entity(conn, payload.entity_id) != actor["tenant_id"]:
+            raise HTTPException(403, detail={"code": "TenantMismatch"})
         if conn.execute("SELECT 1 FROM positions WHERE id=?", (pos_id,)).fetchone() is None:
             conn.execute("""INSERT INTO positions (id, legal_entity_id, title, pack_id, state)
                             VALUES (?,?,?, 'content-v1', 'active')""",
@@ -198,10 +217,10 @@ def add_member(payload: MemberIn, oa_ui: str | None = Depends(_token)):
                      (emp_id, payload.entity_id, payload.name, pos_id, payload.model,
                       payload.persona, "按判据交付，不夸大、不越权"))
         conn.execute("""INSERT INTO identities
-                        (id, name, role, legal_entity_id, secret, scopes, state, employee_id)
-                        VALUES (?,?, 'agent', ?,?,?, 'active', ?)""",
+                        (id, name, role, legal_entity_id, secret, scopes, state, employee_id,tenant_id)
+                        VALUES (?,?, 'agent', ?,?,?, 'active', ?,?)""",
                      (ident_id, payload.name, payload.entity_id, secrets.token_hex(16),
-                      '["task:create","task:read","accept:judge"]', emp_id))
+                      '["task:create","task:read","accept:judge"]', emp_id, actor["tenant_id"]))
         conn.commit()
         chat = store.get_or_create_dm(conn, emp_id, payload.name, payload.entity_id)
     if payload.api_key:
@@ -214,13 +233,18 @@ def add_member(payload: MemberIn, oa_ui: str | None = Depends(_token)):
 
 
 # ------------------------------------------------------------------ chats
-def _ensure_chats(conn: sqlite3.Connection) -> None:
+def _ensure_chats(conn: sqlite3.Connection, actor: dict | None = None) -> None:
     store.ensure(conn)
     from . import dispatcher
     from . import roles as roles_mod
     roles_mod.ensure(conn)
-    dispatcher.ensure_ceo_chat(conn)
-    for e in conn.execute("SELECT * FROM ai_employees").fetchall():
+    dispatcher.ensure_ceo_chat(conn, tenant_id=(actor or {}).get("tenant_id"),
+                               entity_id=(actor or {}).get("legal_entity_id"))
+    from .access import visible_entities
+    allowed = set(visible_entities(conn, actor)) if actor else None
+    for e in conn.execute("SELECT * FROM ai_employees WHERE status<>'fired'").fetchall():
+        if allowed is not None and e["legal_entity_id"] not in allowed:
+            continue
         store.get_or_create_dm(conn, e["id"], e["name"], e["legal_entity_id"])
 
 
@@ -228,10 +252,13 @@ def _ensure_chats(conn: sqlite3.Connection) -> None:
 def employees(oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:read")
+        from .access import visible_entities
+        where, args = tenant._in("e.legal_entity_id", visible_entities(conn, actor))
         rows = conn.execute(
-            """SELECT e.id, e.name, e.model, e.status, e.legal_entity_id, e.preset, p.title
+            f"""SELECT e.id, e.name, e.model, e.status, e.legal_entity_id, e.preset, p.title
                FROM ai_employees e LEFT JOIN positions p ON p.id = e.position_id
-               ORDER BY e.name""").fetchall()
+               WHERE {where} ORDER BY e.name""", args).fetchall()
     return {"employees": [dict(r) for r in rows]}
 
 
@@ -247,7 +274,13 @@ def create_group(payload: GroupIn, oa_ui: str | None = Depends(_token)):
         raise HTTPException(400, detail={"code": "NoMembers"})
     with get_conn() as conn:
         store.ensure(conn)
-        chat = store.create_group(conn, payload.name or "新群聊", payload.employee_ids)
+        actor = _task_actor(conn, oa_ui, "task:*")
+        from .access import owned
+        for eid in payload.employee_ids:
+            owned(conn, "employees", eid, actor, write=True, code="EmployeeNotFound")
+        chat = store.create_group(conn, payload.name or "新群聊", payload.employee_ids,
+                                  tenant_id=actor["tenant_id"])
+        conn.execute("UPDATE chats SET entity_id=? WHERE id=?", (tenant.entity_of(actor), chat["id"]))
         store.add_message(conn, chat["id"], "system", f"群聊已创建，成员 {len(payload.employee_ids)} 人")
     return {"chat_id": chat["id"], "title": chat["title"]}
 
@@ -256,8 +289,18 @@ def create_group(payload: GroupIn, oa_ui: str | None = Depends(_token)):
 def chats(oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
-        _ensure_chats(conn)
-        return {"chats": store.list_chats(conn)}
+        actor = _task_actor(conn, oa_ui, "task:read")
+        _ensure_chats(conn, actor)
+        rows = store.list_chats(conn, tenant_id=actor["tenant_id"])
+        from .access import owned
+        result = []
+        for row in rows:
+            try:
+                owned(conn, "chats", row["id"], actor, code="ChatNotFound")
+                result.append(row)
+            except HTTPException:
+                continue
+        return {"chats": result, "tenant_id": actor["tenant_id"]}
 
 
 @router.get("/chats/{chat_id}/messages")
@@ -294,7 +337,9 @@ def post_message(chat_id: str, payload: MessageIn, oa_ui: str | None = Depends(_
                                   "我在。要派活就把需求说具体点：做什么、要什么产出。",
                                   author=dispatcher.CEO_TITLE)
                 return {"ok": True, "routed": False}
-            result = dispatcher.route(conn, text)
+            actor = _task_actor(conn, oa_ui, "task:*")
+            result = dispatcher.route(conn, text, entity_id=tenant.entity_of(actor),
+                                      tenant_id=actor["tenant_id"])
             # v1.5：CEO 建的是项目，不再直接拉群跑任务；项目内的 WBS 才起 run
             return {"ok": True, "routed": True, **result}
     if kind == "group":
@@ -478,6 +523,18 @@ def _run_turn(chat_id: str, employee_id: str | None, text: str, ident: str,
     run_id = None
     try:
         with get_conn() as conn:
+            from .. import identity
+            from .access import owned
+            actor_row = identity.get_identity(conn, ident)
+            if actor_row is None:
+                raise HTTPException(401, detail={"code": "UnknownIdentity"})
+            actor = dict(actor_row)
+            tenancy.resolve(conn, ident)
+            owned(conn, "chats", chat_id, actor, write=True, code="ChatNotFound")
+            if employee_id:
+                owned(conn, "employees", employee_id, actor, write=True, code="EmployeeNotFound")
+            if task_id:
+                owned(conn, "tasks", task_id, actor, write=True, code="TaskNotFound")
             emp = (conn.execute("SELECT * FROM ai_employees WHERE id=?",
                                 (employee_id,)).fetchone() if employee_id else None)
 
@@ -513,7 +570,7 @@ def _run_turn(chat_id: str, employee_id: str | None, text: str, ident: str,
                 return
 
         with get_conn() as conn:
-            entity = emp["legal_entity_id"] if emp else "LE-GROUP-HQ"
+            entity = emp["legal_entity_id"] if emp else tenant.entity_of(actor)
             if task_id is None:
                 gen = task_generator.generate(conn, text, legal_entity_id=entity,
                                               pack_id=pack_id)
@@ -734,10 +791,20 @@ def _start_project_from_dm(dm_chat_id: str, text: str, ident: str, emp) -> None:
     from . import pm as pm_mod
 
     with get_conn() as conn:
+        from .. import identity
+        from .access import owned
+        actor_row = identity.get_identity(conn, ident)
+        if actor_row is None:
+            return
+        actor = dict(actor_row)
+        chat_scope = owned(conn, "chats", dm_chat_id, actor, write=True, code="ChatNotFound")
         rows = conn.execute(
             """SELECT e.id AS employee_id, e.name, e.model, e.legal_entity_id, p.title
                FROM ai_employees e LEFT JOIN positions p ON p.id = e.position_id
-               WHERE COALESCE(e.status,'online') != 'fired'""").fetchall()
+               JOIN legal_entities le ON le.id=e.legal_entity_id
+               WHERE COALESCE(e.status,'online') != 'fired'
+                 AND e.legal_entity_id=? AND le.tenant_id=?""",
+            (chat_scope["legal_entity_id"], actor["tenant_id"])).fetchall()
     pool = [dict(r) for r in rows]
     pm_id = emp["id"] if emp else (pool[0]["employee_id"] if pool else None)
     pm_member = next((m for m in pool if m["employee_id"] == pm_id), None)
@@ -757,7 +824,10 @@ def _start_project_from_dm(dm_chat_id: str, text: str, ident: str, emp) -> None:
 
     title = "UI重构攻坚组" if "UI" in text.upper() else f"{text[:10]}·项目组"
     with get_conn() as conn:
-        chat = store.create_group(conn, title, [m["employee_id"] for m in picked])
+        chat = store.create_group(conn, title, [m["employee_id"] for m in picked],
+                                  tenant_id=actor["tenant_id"])
+        conn.execute("UPDATE chats SET entity_id=? WHERE id=?",
+                     (chat_scope["legal_entity_id"], chat["id"]))
         names = "、".join(m["name"] for m in picked)
         store.add_message(conn, chat["id"], "system",
                           f"小文 建了群「{title}」，成员：{names}", kind="text")
@@ -939,6 +1009,8 @@ def task_list(limit: int = 50, offset: int = 0, state: str | None = None,
     with get_conn() as conn:
         actor = _task_actor(conn, oa_ui, "task:read")
         where, args = tenant.clause(conn, actor, "t.legal_entity_id")
+        where += " AND t.tenant_id=?"
+        args.append(actor["tenant_id"])
         filtered, values = where, list(args)
         if state == "active":
             filtered += " AND t.state IN ('todo','assigned','in_progress')"
@@ -1071,6 +1143,15 @@ def task_action(task_id: str, payload: ActionIn, oa_ui: str | None = Depends(_to
             raise HTTPException(409, detail={"code": "TaskActionNotAllowed", "state": row["state"],
                                              "action": payload.action})
         if payload.action == "accept":
+            from .. import acceptance_run
+            mandatory = acceptance_run.validate_mandatory(
+                conn, task_id, entity=row["legal_entity_id"], tenant_id=row["tenant_id"],
+                commit=False)
+            if not mandatory["ok"]:
+                acceptance_run.run(conn, task_id, [row["legal_entity_id"]])
+                conn.commit()
+                raise HTTPException(409, detail={"code": "MandatoryCheckFailed",
+                                                 "message": mandatory["detail"]})
             from ..acceptance import l1_manual
             # 人工判据要求证据；老板点「验收通过」时，自动附上产物片段，
             # 免得因为没有 snippet 直接 500（真实业务闭环踩到）
@@ -1121,6 +1202,9 @@ def task_action(task_id: str, payload: ActionIn, oa_ui: str | None = Depends(_to
                     payload={"note": payload.note}, response={"ok": True})
         conn.commit()
         state = conn.execute("SELECT state FROM tasks WHERE id=?", (task_id,)).fetchone()["state"]
+    if payload.action == "accept" and state != "completed":
+        raise HTTPException(409, detail={"code": "AcceptanceNotPassed", "state": state,
+                                         "message": "自动验收尚未通过，请检查未通过的判据。"})
     return {"ok": True, "state": state}
 
 
@@ -1262,6 +1346,10 @@ def create_role(payload: RoleIn, oa_ui: str | None = Depends(_token)):
     with get_conn() as conn:
         from . import roles as roles_mod
         roles_mod.ensure(conn)
+        actor = _task_actor(conn, oa_ui, "task:*")
+        tenant.resolve(actor, payload.entity_id)
+        if tenancy.of_entity(conn, payload.entity_id) != actor["tenant_id"]:
+            raise HTTPException(403, detail={"code": "TenantMismatch"})
         role = roles_mod.create_role(conn, name=payload.name.strip(), tag=payload.tag.strip(),
                                      prompt=payload.prompt, model=payload.model,
                                      skills=payload.skills)
@@ -1321,7 +1409,8 @@ def decide_role_request(chat_id: str, message_id: int, payload: RoleDecisionIn,
             conn.commit()
             return {"ok": True, "state": "rejected"}
 
-        emp_id = roles_mod.instantiate(conn, meta["role_id"])
+        actor = _task_actor(conn, oa_ui, "task:*")
+        emp_id = roles_mod.instantiate(conn, meta["role_id"], tenant.entity_of(actor))
         conn.execute("""INSERT OR IGNORE INTO chat_members (chat_id, employee_id, role)
                         VALUES (?,?, 'member')""", (chat_id, emp_id))
         meta["state"] = "approved"
@@ -1341,10 +1430,14 @@ def list_projects(oa_ui: str | None = Depends(_token), limit: int = 50):
     with get_conn() as conn:
         from .. import pipeline
         pipeline.ensure(conn)
+        actor = _task_actor(conn, oa_ui, "task:read")
+        where, args = tenant.clause(conn, actor, "p.legal_entity_id")
         rows = conn.execute(
-            """SELECT p.*, (SELECT COUNT(*) FROM project_stages s
+            f"""SELECT p.*, (SELECT COUNT(*) FROM project_stages s
                             WHERE s.project_id=p.id AND s.state='done') AS done_stages
-               FROM projects p ORDER BY p.created_at DESC LIMIT ?""", (limit,)).fetchall()
+               FROM projects p WHERE {where} AND p.tenant_id=?
+               ORDER BY p.created_at DESC LIMIT ?""",
+            (*args, actor["tenant_id"], max(1, min(200, limit)))).fetchall()
     return {"projects": [dict(r) for r in rows]}
 
 
@@ -1360,13 +1453,17 @@ def patch_project(project_id: str, payload: ProjectPatch,
     with get_conn() as conn:
         from .. import pipeline
         pipeline.ensure(conn)
+        actor = _task_actor(conn, oa_ui, "task:*")
+        if actor["role"] not in {"ceo", "system"}:
+            raise HTTPException(403, detail={"code": "Forbidden"})
         if conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
             raise HTTPException(404, detail={"code": "ProjectNotFound"})
         if payload.use_llm_docs is not None:
             conn.execute("UPDATE projects SET use_llm_docs=? WHERE id=?",
                          (1 if payload.use_llm_docs else 0, project_id))
         if payload.state:
-            conn.execute("UPDATE projects SET state=? WHERE id=?", (payload.state, project_id))
+            raise HTTPException(422, detail={"code": "ProjectRecoveryRequired",
+                                             "message": "请提交修改后的需求重新检查项目。"})
         conn.commit()
         p = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     return {"ok": True, "project": dict(p)}
@@ -1381,6 +1478,7 @@ def project_detail(project_id: str, oa_ui: str | None = Depends(_token)):
         p = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         if p is None:
             raise HTTPException(404, detail={"code": "ProjectNotFound"})
+        actor = _task_actor(conn, oa_ui, "task:read")
         stages = [dict(r) for r in conn.execute(
             "SELECT * FROM project_stages WHERE project_id=? ORDER BY seq", (project_id,))]
         gates = [dict(r) for r in conn.execute(
@@ -1400,7 +1498,10 @@ def project_detail(project_id: str, oa_ui: str | None = Depends(_token)):
             "SELECT * FROM workshop_turns WHERE workshop_id=? ORDER BY round, rowid",
             (ws["id"],))] if ws else []
         tl = pipeline.timeline(conn, project_id)
-    return {"project": dict(p), "stages": stages, "gates": gates, "deliverables": dels,
+    can_manage = actor["role"] in {"ceo", "system"} and (
+        actor["role"] == "system" or p["legal_entity_id"] == tenant.entity_of(actor))
+    return {"project": dict(p), "allowed_actions": (["configure", "retry"] if can_manage else []),
+            "stages": stages, "gates": gates, "deliverables": dels,
             "wbs": wbs, "workshop": dict(ws) if ws else None, "turns": turns,
             "timeline": tl}
 
@@ -1417,12 +1518,23 @@ def tool_call(payload: ToolCallIn, oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     from .. import tools_acl
     with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:read")
+        from . import roles as roles_mod
+        roles_mod.ensure(conn)
+        role = conn.execute(
+            """SELECT rt.tag FROM ai_employees e JOIN role_templates rt ON rt.id=e.role_id
+               WHERE e.id=? AND e.legal_entity_id=?""",
+            (actor.get("employee_id"), tenant.entity_of(actor))).fetchone()
+        role_tag = role["tag"] if role else None
+        if actor["role"] not in {"ceo", "system"} and payload.role_tag != role_tag:
+            raise HTTPException(403, detail={"code": "ToolDenied"})
+        role_tag = role_tag or (payload.role_tag if actor["role"] in {"ceo", "system"} else None)
         try:
-            tools_acl.check(conn, role_tag=payload.role_tag, tool=payload.tool,
-                            sql=payload.sql, target=payload.tool)
+            tools_acl.check(conn, role_tag=role_tag, tool=payload.tool,
+                            sql=payload.sql, target=payload.tool, entity=tenant.entity_of(actor))
         except PermissionError as exc:
             raise HTTPException(403, detail={"code": "ToolDenied", "message": str(exc)})
-    return {"ok": True, "role": payload.role_tag, "tool": payload.tool}
+    return {"ok": True, "role": role_tag, "tool": payload.tool, "executed": False}
 
 
 # ------------------------------------------------------- 会话管理（v2.0 深度删除）
@@ -1466,32 +1578,15 @@ def delete_chat(chat_id: str, oa_ui: str | None = Depends(_token)):
 
         # 1) 杀掉该会话里所有未结束的 run
         runs = conn.execute(
-            """SELECT r.id, r.pid FROM task_runs r
+            """SELECT DISTINCT r.* FROM task_runs r
                JOIN chat_messages m ON m.task_id = r.task_id
-               WHERE m.chat_id=? AND r.state IN ('running','spawned')""", (chat_id,)).fetchall()
+               WHERE m.chat_id=? AND r.state IN ('running','spawned','awaiting_approval')""", (chat_id,)).fetchall()
         for r in runs:
-            if r["pid"]:
-                try:
-                    import subprocess
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(r["pid"])],
-                                   capture_output=True, timeout=10)
-                except Exception:            # noqa: BLE001
-                    pass
-            conn.execute("UPDATE task_runs SET state='failed', exit_code=-9 WHERE id=?",
-                         (r["id"],))
+            _stop_run(conn, r, ident=ident, cancelled=True)
             killed.append(r["id"])
 
-        # 2) 清理沙箱目录（该会话任务的工作区）
+        # Soft deletion retains artifacts/evidence and never trusts a persisted PID.
         removed = 0
-        tasks = {t["task_id"] for t in conn.execute(
-            "SELECT DISTINCT task_id FROM chat_messages WHERE chat_id=? AND task_id IS NOT NULL",
-            (chat_id,)).fetchall()}
-        for tid in tasks:
-            for base in (dsh_adapter.workspace() / "projects", dsh_adapter.workspace()):
-                for p in base.glob(f"*/{tid}"):
-                    if p.is_dir() and str(p).startswith(str(dsh_adapter.workspace())):
-                        shutil.rmtree(p, ignore_errors=True)
-                        removed += 1
 
         # 3) 软删 + 审计
         conn.execute("UPDATE chats SET deleted_at=CURRENT_TIMESTAMP, hidden=1 WHERE id=?",
@@ -1570,8 +1665,15 @@ async def upload_attachment(chat_id: str, file: UploadFile = File(...),
         workdir = chat["workdir"] or str(dsh_adapter.workspace() / "attachments" / chat_id)
     target_dir = _pl.Path(workdir) / "attachments"
     target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / (file.filename or "upload.bin")
-    data = await file.read()
+    filename = file.filename or "upload.bin"
+    if "/" in filename or "\\" in filename or _pl.Path(filename).name != filename or filename in {".", ".."}:
+        raise HTTPException(400, detail={"code": "InvalidFilename"})
+    target = (target_dir / filename).resolve()
+    if not target.is_relative_to(target_dir.resolve()):
+        raise HTTPException(400, detail={"code": "InvalidFilename"})
+    data = await file.read(10 * 1024 * 1024 + 1)
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, detail={"code": "AttachmentTooLarge"})
     target.write_bytes(data)
 
     # 文本提取：PDF 走 pypdf，文本/代码直接读，其它尽力而为
@@ -1693,6 +1795,11 @@ def grant_permission(payload: GrantIn, oa_ui: str | None = Depends(_token)):
     ident = _require(oa_ui)
     with get_conn() as conn:
         from .. import rbac
+        from .access import actor_for, owned
+        actor = actor_for(conn, oa_ui, manage=True)
+        owned(conn, "employees", payload.agent_id, actor, write=True, code="EmployeeNotFound")
+        if payload.permission not in rbac.LEVELS:
+            raise HTTPException(422, detail={"code": "InvalidPermission"})
         rbac.grant(conn, payload.agent_id, payload.resource_id, payload.permission,
                    granted_by=ident)
     return {"ok": True}
@@ -1703,6 +1810,9 @@ def check_permission(payload: GrantIn, oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
         from .. import rbac
+        from .access import actor_for, owned
+        actor = actor_for(conn, oa_ui)
+        owned(conn, "employees", payload.agent_id, actor, code="EmployeeNotFound")
         try:
             rbac.require(conn, payload.agent_id, payload.resource_id, payload.permission)
         except PermissionError as exc:
@@ -1742,8 +1852,13 @@ def guard_tool(payload: HighRiskIn, oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
         from .. import rbac
+        from .access import actor_for, owned
+        actor = actor_for(conn, oa_ui)
+        owned(conn, "employees", payload.agent_id, actor, write=True, code="EmployeeNotFound")
+        if actor["role"] == "agent" and actor.get("employee_id") != payload.agent_id:
+            raise HTTPException(403, detail={"code": "Forbidden"})
         return rbac.guard_tool(conn, agent_id=payload.agent_id, tool=payload.tool,
-                               args=payload.args)
+                               args=payload.args, entity=tenant.entity_of(actor))
 
 
 # ------------------------------------------------------- 审批中心（v2.3）
@@ -1766,6 +1881,9 @@ def revoke_permission(payload: GrantIn, oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
         from .. import rbac
+        from .access import actor_for, owned
+        actor = actor_for(conn, oa_ui, manage=True)
+        owned(conn, "employees", payload.agent_id, actor, write=True, code="EmployeeNotFound")
         n = rbac.revoke(conn, payload.agent_id, payload.resource_id,
                         payload.permission or None)
     return {"ok": True, "revoked": n}
@@ -1814,7 +1932,8 @@ def ui_finops(days: int = 30, oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
         from .. import finops
-        return finops.overview(conn, days=days)
+        actor = _task_actor(conn, oa_ui, "task:read")
+        return finops.overview(conn, days=days, tenant_id=actor["tenant_id"])
 
 
 # ------------------------------------------------------- 离线评测（v2.4）
@@ -1900,23 +2019,4 @@ def ui_eval_batch(batch_id: str, oa_ui: str | None = Depends(_token)):
 
 
 # ------------------------------------------------------- 组织经验（v2.4）
-class ExperienceQuery(BaseModel):
-    text: str
-    entity: str | None = None
-
-
-@router.get("/experiences")
-def ui_experiences(kind: str | None = None, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
-    with get_conn() as conn:
-        from .. import experience
-        return {"experiences": experience.list_all(conn, kind=kind),
-                "stats": experience.stats(conn)}
-
-
-@router.post("/experiences/preview")
-def ui_experience_preview(payload: ExperienceQuery, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
-    with get_conn() as conn:
-        from .. import experience
-        return experience.context_for(conn, payload.text, entity=payload.entity, record=False)
+# Experience review and project recovery live in ui.governance.

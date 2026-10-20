@@ -76,10 +76,16 @@ def estimate(model: str | None, tokens: int) -> float:
     return round(max(0, int(tokens or 0)) * blended_price(model) / 1_000_000, 4)
 
 
-def overview(conn: sqlite3.Connection, days: int = 30) -> dict:
+def overview(conn: sqlite3.Connection, days: int = 30,
+             tenant_id: str | None = None) -> dict:
     days = max(1, min(365, int(days)))
+    where = "r.usage_tokens > 0 AND date(r.started_at) >= date('now', ?)"
+    args: list = [f"-{days - 1} days"]
+    if tenant_id:
+        where += " AND COALESCE(t.tenant_id,'TENANT-HQ')=?"
+        args.append(tenant_id)
     rows = conn.execute(
-        """SELECT r.id AS run_id, r.task_id, r.usage_tokens, r.usage_baseline,
+        f"""SELECT r.id AS run_id, r.task_id, r.usage_tokens, r.usage_baseline,
                   r.started_at, r.state, t.title,
                   t.owner_employee_id AS agent_id, e.name AS agent_name, e.model,
                   COALESCE(e.legal_entity_id, t.legal_entity_id) AS dept_id,
@@ -87,8 +93,8 @@ def overview(conn: sqlite3.Connection, days: int = 30) -> dict:
            FROM task_runs r JOIN tasks t ON t.id = r.task_id
            LEFT JOIN ai_employees e ON e.id = t.owner_employee_id
            LEFT JOIN legal_entities le ON le.id = COALESCE(e.legal_entity_id, t.legal_entity_id)
-           WHERE r.usage_tokens > 0 AND date(r.started_at) >= date('now', ?)
-           ORDER BY r.started_at""", (f"-{days - 1} days",)).fetchall()
+           WHERE {where}
+           ORDER BY r.started_at""", args).fetchall()
 
     total_tokens = 0.0
     total_cost = 0.0

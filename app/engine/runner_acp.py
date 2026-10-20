@@ -14,6 +14,7 @@ tool call is recorded as its own trace span.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -50,6 +51,59 @@ def _agent_context(conn, task_id: str) -> tuple[str | None, str | None]:
     except Exception:                        # noqa: BLE001
         pass
     return agent_id, chat_id
+
+
+def _mcp_authority(conn, run_id, task_id, agent_id, resume_session):
+    from .. import mcp, tenant, tenancy
+    task = conn.execute("SELECT tenant_id,legal_entity_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+    try:
+        initiating = conn.execute("SELECT actor_identity FROM task_runs WHERE id=?", (run_id,)).fetchone()
+        if initiating and initiating["actor_identity"] not in {None, "", "system"}:
+            identity_id = initiating["actor_identity"]
+            ident = dict(conn.execute("SELECT * FROM identities WHERE id=?", (identity_id,)).fetchone() or {})
+            if (tenancy.of_identity(conn, identity_id) != task["tenant_id"]
+                    or task["legal_entity_id"] not in tenant.visible_entities(conn, ident)):
+                raise PermissionError("RunIdentityScopeChanged")
+        mcp.ensure(conn)
+        configs = mcp.session_configs(conn, agent_id, tenant_id=task["tenant_id"],
+                                      entity_id=task["legal_entity_id"])
+    except (KeyError, ValueError, PermissionError) as exc:
+        raise AcpError("McpAuthorityDenied") from exc
+    digest = hashlib.sha256(json.dumps(configs, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    if resume_session:
+        owner = conn.execute(
+            """SELECT r.task_id,t.tenant_id,t.legal_entity_id FROM task_runs r
+               JOIN tasks t ON t.id=r.task_id WHERE r.session_id=? AND r.id<>?
+               ORDER BY r.rowid DESC LIMIT 1""", (resume_session, run_id)).fetchone()
+        if owner is None:
+            owner = conn.execute(
+                """SELECT r.task_id,t.tenant_id,t.legal_entity_id FROM task_runs r
+                   JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.session_id=?""",
+                (run_id, resume_session)).fetchone()
+        if (owner is None or owner["task_id"] != task_id or owner["tenant_id"] != task["tenant_id"]
+                or owner["legal_entity_id"] != task["legal_entity_id"]):
+            raise AcpError("McpSessionScopeMismatch")
+        prior = conn.execute(
+            """SELECT mcp_fingerprint FROM task_runs WHERE session_id=?
+               AND mcp_fingerprint IS NOT NULL ORDER BY rowid DESC LIMIT 1""",
+            (resume_session,)).fetchone()
+        if (prior and prior["mcp_fingerprint"] != digest) or (not prior and configs):
+            raise AcpError("McpAuthorityChanged: 工具授权已改变，请使用新会话重新提交任务")
+    conn.execute("UPDATE task_runs SET mcp_fingerprint=? WHERE id=?", (digest, run_id))
+    return configs, digest
+
+
+def _redact_mcp(value, secrets):
+    if isinstance(value, dict):
+        return {_redact_mcp(key, secrets): _redact_mcp(item, secrets)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_mcp(item, secrets) for item in value]
+    if isinstance(value, str):
+        for secret in sorted(set(secrets), key=len, reverse=True):
+            if secret:
+                value = value.replace(secret, "[redacted]")
+    return value
 
 
 def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: str,
@@ -108,10 +162,19 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
           "sid": resume_session, "updates": 0, "tool_calls": 0, "policy_violation": None,
           "approval": None, "last_used": 0}
     prompt_started = False
+    credential_values = []
     started = time.time()
 
     try:
         base.ensure_not_stopped(conn, run_id)
+        mcp_cfg, mcp_digest = ([], None)
+        if runner == "acp":
+            mcp_cfg, mcp_digest = _mcp_authority(conn, run_id, task_id, agent_id, resume_session)
+            for config in mcp_cfg:
+                for header in config.get("headers", []):
+                    value = header.get("value") or ""
+                    credential_values.extend([value, value.split(" ", 1)[-1]])
+            conn.commit()
         client.start()
         base.ensure_not_stopped(conn, run_id)
         if resume_session:
@@ -137,9 +200,9 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
             if resume_session:
                 sid = resume_session
             else:
-                sid = client.new_session()["sessionId"]
+                sid = (client.new_session(mcp_servers=mcp_cfg) if mcp_cfg else client.new_session())["sessionId"]
         else:
-            sid = client.new_session()["sessionId"]
+            sid = (client.new_session(mcp_servers=mcp_cfg) if mcp_cfg else client.new_session())["sessionId"]
         st["sid"] = sid
         baseline = base.session_baseline(conn, sid, run_id)
         cap = baseline + est_tokens      # usage_update is cumulative per session
@@ -157,6 +220,7 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
         conn.commit()
 
         def on_update(update: dict) -> None:
+            update = _redact_mcp(update, credential_values)
             kind = update.get("sessionUpdate")
             event_ms, prev_event = rec._now(), rec.last_event
             rec.last_event = event_ms
@@ -279,6 +343,11 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
                 st["final"] += ((update.get("content") or {}).get("text") or "")
 
         base.ensure_not_stopped(conn, run_id)
+        if runner == "acp":
+            _, fresh_digest = _mcp_authority(conn, run_id, task_id, agent_id, sid)
+            if fresh_digest != mcp_digest:
+                raise AcpError("McpAuthorityChanged")
+            conn.commit()
         prompt_started = True
         out = client.prompt(sid, prompt, on_update=on_update, timeout=timeout)
         st["stop_reason"] = (out.get("result") or {}).get("stopReason")
@@ -288,7 +357,7 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
             # A stop can close stdio during initialize; preserve a parked run's
             # existing usage instead of treating that EOF as a new model turn.
             base.ensure_not_stopped(conn, run_id)
-        st["error"] = str(exc)
+        st["error"] = _redact_mcp(str(exc), credential_values)
     except HTTPException:
         raise
     finally:
@@ -302,7 +371,8 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
             base.unregister_process(run_id)
 
     base._log_path(run_id).write_text(
-        json.dumps({"events": client.log, "stderr": client.stderr[-80:], "state": st},
+        json.dumps(_redact_mcp({"events": client.log, "stderr": client.stderr[-80:], "state": st},
+                              credential_values),
                    ensure_ascii=False, indent=1),
         encoding="utf-8")
 

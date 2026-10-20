@@ -5,7 +5,7 @@ import os
 import pathlib
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,9 @@ from .ui import api as ui_api
 from .ui import admin as ui_admin
 from .ui import ops as ui_ops
 from .ui import store as ui_store
+from .ui import access as ui_access
+from .ui import extensions as ui_extensions
+from .ui import governance as ui_governance
 from .octo import runner as octo_runner
 from .wecom import api as wecom_api
 from .wecom import sign_page
@@ -33,6 +36,12 @@ STATIC = pathlib.Path(__file__).resolve().parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    from . import mcp, mailer, pipeline
+    with connect() as conn:
+        mcp.ensure(conn)
+        mailer.ensure(conn)
+        pipeline.ensure(conn)
+        pipeline.recover_interrupted(conn)
     if os.environ.get("WECOM_WATCHER", "0") == "1":
         wecom_watcher.start(interval=float(os.environ.get("WECOM_TICK", "3")))
     # Background threads must never start under pytest: they would leak across
@@ -64,7 +73,7 @@ async def lifespan(app: FastAPI):
         wecom_watcher.stop()
 
 
-app = FastAPI(title="OA Agent M0", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Agent OS", version="3.2.1", lifespan=lifespan)
 
 # the desktop shell (tauri://localhost) talks to 127.0.0.1:8077 with a Bearer token,
 # so no credentials are involved and a permissive origin list is safe here.
@@ -84,9 +93,11 @@ app.include_router(reports.router)
 app.include_router(wecom_api.router)
 app.include_router(sign_page.router)
 app.include_router(octo_api.router)
-app.include_router(ui_api.router)
-app.include_router(ui_admin.router)
-app.include_router(ui_ops.router)
+app.include_router(ui_api.router, dependencies=[Depends(ui_access.request_access)])
+app.include_router(ui_admin.router, dependencies=[Depends(ui_access.request_access)])
+app.include_router(ui_ops.router, dependencies=[Depends(ui_access.request_access)])
+app.include_router(ui_extensions.router)
+app.include_router(ui_governance.router, dependencies=[Depends(ui_access.request_access)])
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 _UI_DIST = pathlib.Path(__file__).resolve().parent.parent / "web" / "dist"
 if _UI_DIST.exists():

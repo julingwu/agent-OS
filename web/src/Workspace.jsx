@@ -32,7 +32,11 @@ export default function Workspace({ chats, pendingCount, onChat, onSelectTask, o
   const queryKey = JSON.stringify([filter, search, page, pageSize]);
   const latestQuery = useRef(queryKey);
   latestQuery.current = queryKey;
-  useEffect(() => { const timer = setTimeout(() => { setSearch(query.trim()); setPage(0); }, 250); return () => clearTimeout(timer); }, [query]);
+  useEffect(() => {
+    if (query.trim() === search) return;
+    const timer = setTimeout(() => { setSearch(query.trim()); setPage(0); }, 250);
+    return () => clearTimeout(timer);
+  }, [query, search]);
 
   const load = useCallback(async () => {
     if (queryKey !== latestQuery.current) return;

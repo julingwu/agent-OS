@@ -5,6 +5,8 @@ import { api, ping } from "./api.js";
 import Workspace from "./Workspace.jsx";
 import NewTaskModal from "./NewTaskModal.jsx";
 import DialogAccessibility from "./DialogAccessibility.jsx";
+import ExtensionsView from "./ExtensionsView.jsx";
+import GovernanceView, { ProjectRecovery } from "./GovernanceView.jsx";
 import "./styles.css";
 
 // Model output is untrusted. marked drops raw HTML (renderer.html = "") and
@@ -1681,102 +1683,6 @@ function EvalsView() {
 }
 
 /* ------------------------------------------------------- 组织经验（v2.4） */
-const EXP_KIND = { rejection: "驳回经验", consensus: "共识结论", decision: "决策否决" };
-
-function ExperienceView() {
-  const [data, setData] = useState({ experiences: [], stats: { layers: {}, by_kind: {} } });
-  const [q, setQ] = useState("再做一个小程序，要求金额计算准确、可回滚");
-  const [preview, setPreview] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => {
-    try { setData(await api.experiences()); } catch { /* ignore */ }
-  }, []);
-  useEffect(() => { load(); }, [load]);
-
-  async function runPreview() {
-    if (!q.trim()) return;
-    setBusy(true);
-    try { setPreview(await api.previewExperience(q)); }
-    catch { setPreview(null); }
-    finally { setBusy(false); }
-  }
-
-  const layers = data.stats?.layers || {};
-  return (
-    <div className="main">
-      <div className="topbar">
-        <div className="avatar">忆</div>
-        <div>
-          <div className="who">组织经验 · 分层记忆</div>
-          <div className="sub">个人偏好 {layers.preferences || 0} · 项目记忆 {layers.project_memories || 0} ·
-            组织经验 {layers.org_experiences || 0}</div>
-        </div>
-        <div className="spacer" />
-        <button className="btn ghost" onClick={load}>刷新</button>
-      </div>
-      <div className="stream">
-        <div className="stream-inner">
-          <div className="fin-hero memory-hero">
-            <div className="fin-kpi"><span>① 个人偏好</span><b>{layers.preferences || 0}</b>
-              <span className="hint">称呼 / 口味（user_preferences）</span></div>
-            <div className="fin-kpi"><span>② 项目记忆</span><b>{layers.project_memories || 0}</b>
-              <span className="hint">按 entity / pack 隔离</span></div>
-            <div className="fin-kpi"><span>③ 组织经验</span><b>{layers.org_experiences || 0}</b>
-              <span className="hint">驳回 / 共识 / 否决</span></div>
-          </div>
-
-          <div className="fin-card">
-            <h5>新项目注入预览</h5>
-            <div className="row">
-              <input className="search" style={{ flex: 1, width: "auto" }} value={q}
-                     onChange={(e) => setQ(e.target.value)}
-                     placeholder="输入新需求，看会命中哪些历史经验…" />
-              <button className="btn primary" disabled={busy} onClick={runPreview}>
-                {busy ? "检索中…" : "预览注入"}
-              </button>
-            </div>
-            {preview && (
-              <div className="exp-preview">
-                {preview.count > 0 ? (
-                  <>
-                    <div className="hint">命中 {preview.count} 条 · 标签 {preview.tags.join(" / ") || "—"}</div>
-                    <pre>{preview.text}</pre>
-                  </>
-                ) : <div className="hint">没有命中经验；立项时会跳过注入。</div>}
-              </div>
-            )}
-          </div>
-
-          <div className="fin-card">
-            <h5>经验库</h5>
-            {data.experiences.length === 0 && (
-              <div className="hint">还没有沉淀。任务被驳回、研讨会结束或决策被否决时会自动写入。</div>
-            )}
-            {data.experiences.map((e) => (
-              <div className="exp-row" key={e.id}>
-                <div className="exp-head">
-                  <span className={cls("pill", e.kind === "rejection" ? "bad" : e.kind === "consensus" ? "ok" : "warn")}>
-                    {EXP_KIND[e.kind] || e.kind}
-                  </span>
-                  <b>{e.title}</b>
-                  <span className="spacer" />
-                  <span className="hint">用过 {e.uses} 次 · {e.created_at}</span>
-                </div>
-                <div className="exp-content">{e.content}</div>
-                <div className="exp-tags">
-                  {(e.tags || "").split(",").filter(Boolean).map((t) => <span className="chip" key={t}>{t}</span>)}
-                  {e.project_id && <span className="chip">项目 {e.project_id}</span>}
-                  {e.task_id && <span className="chip">任务 {e.task_id}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------------------------------------- 文件库 */
 function FilesTab() {
   const [files, setFiles] = useState([]);
@@ -2335,7 +2241,7 @@ function App() {
   const [bootMsg, setBootMsg] = useState("载入中…");
   const [tab, setTab] = useState(() => {
     const selected = new URLSearchParams(location.search).get("tab");
-    return ["overview", "tasks", "chats", "files", "approvals", "org", "roles", "finops", "evals", "experience"].includes(selected) ? selected : "overview";
+    return ["overview", "tasks", "chats", "files", "approvals", "org", "roles", "finops", "evals", "experience", "extensions"].includes(selected) ? selected : "overview";
   });
   const [chats, setChats] = useState([]);
   const [active, setActive] = useState(null);
@@ -2458,7 +2364,8 @@ function App() {
     ["approvals", "shield", "审批中心"], ["org", "org", "组织与团队"],
     ["roles", "role", "角色库"], ["finops", "wallet", "用量与费用"],
     ["evals", "flask", "评测中心"], ["experience", "brain", "组织经验"],
-  ];
+    ["extensions", "gear", "工具与集成"],
+  ].filter(([key]) => key !== "extensions" || ["ceo", "system"].includes(me.role));
   const pageName = navItems.find(([key]) => key === tab)?.[2] || "工作台";
   const chatLayout = tab === "chats";
   const openChat = (chat) => { setActive(chat); setTab("chats"); };
@@ -2515,7 +2422,8 @@ function App() {
         {tab === "overview" || tab === "tasks" ? <Workspace key={tab} chats={chats} pendingCount={pendingCount} Icon={Icon} onChat={openChat} onSelectTask={setFocusedTask} onNavigate={setTab} onNewTask={() => setTaskCreating(true)} tasksOnly={tab === "tasks"} />
           : tab === "finops" ? <FinOpsView />
           : tab === "evals" ? <EvalsView />
-          : tab === "experience" ? <ExperienceView />
+          : tab === "experience" ? <GovernanceView me={me} />
+          : tab === "extensions" ? (["ceo", "system"].includes(me.role) ? <ExtensionsView /> : <div className="empty" role="status">请由管理员配置工具连接。</div>)
           : tab === "roles" ? <RolesView onChanged={boot} />
           : tab === "org" ? <><div className="org-actions"><span>组织与团队</span><button className="btn" onClick={() => setDepting(true)}><Icon name="plus" /> 新建部门</button><button className="btn primary" onClick={() => setAdding(true)}><Icon name="plus" /> 添加员工</button></div><OrgView org={org} onPick={(emp) => setEmpPanel(emp)} departments={depts} onRenameDept={renameDept} onDeleteDept={removeDept} /></>
           : tab === "approvals" ? <ApprovalsView onChanged={refreshApprovals} />
@@ -2778,12 +2686,19 @@ const STAGE_LABEL = {
 function ProjectCard({ projectId }) {
   const [v, setV] = useState(null);
   const [showTl, setShowTl] = useState(false);
+  const [configError, setConfigError] = useState("");
 
   useEffect(() => {
     let alive = true;
     api.project(projectId).then((d) => { if (alive) setV(d); }).catch(() => {});
     return () => { alive = false; };
   }, [projectId]);
+
+  useEffect(() => {
+    if (v?.project.state !== "retrying") return;
+    const timer = setInterval(() => api.project(projectId).then(setV).catch(() => {}), 2000);
+    return () => clearInterval(timer);
+  }, [projectId, v?.project.state]);
 
   if (!v) return <div className="card">项目 {projectId} 载入中…</div>;
 
@@ -2795,8 +2710,9 @@ function ProjectCard({ projectId }) {
       <h4>项目 {v.project.id} · {v.project.name}</h4>
       <div className="hint">
         {done}/{v.stages.length} 阶段完成
-        {blocked ? " · ⛔ 已被否决停摆" : ""} · 闸门 {v.gates.filter((g) => g.state === "passed").length}/{v.gates.length} 通过
+        {blocked ? " · ⛔ 已被否决停摆" : ""} · 闸门 {v.gates.filter((g) => !g.superseded && g.state === "passed").length}/{v.gates.filter(g => !g.superseded).length} 通过
       </div>
+      <ProjectRecovery data={v} onChanged={setV} />
       <div className="stages">
         {v.stages.map((s) => (
           <div key={s.id} className={cls("stage", s.state)}>
@@ -2827,15 +2743,18 @@ function ProjectCard({ projectId }) {
         <button className="btn ghost" onClick={() => setShowTl((x) => !x)}>
           {showTl ? "收起审计时间轴" : "查看审计时间轴"}
         </button>
-        <button className="btn ghost" onClick={async () => {
-          const next = v.project.use_llm_docs ? 0 : 1;
-          await api.patchProject(v.project.id, { use_llm_docs: next });
-          const d = await api.project(v.project.id);
-          setV(d);
+        {v.allowed_actions?.includes("configure") && <button className="btn ghost" onClick={async () => {
+          setConfigError("");
+          try {
+            const next = v.project.use_llm_docs ? 0 : 1;
+            await api.patchProject(v.project.id, { use_llm_docs: next });
+            setV(await api.project(v.project.id));
+          } catch (error) { setConfigError(error.message); }
         }}>
           文档模式：{v.project.use_llm_docs ? "模型生成" : "模板（省 token）"}
-        </button>
+        </button>}
       </div>
+      {configError && <p role="alert">{configError}</p>}
       {showTl && (
         <div className="timeline">
           {v.timeline.slice(-24).map((t, i) => (

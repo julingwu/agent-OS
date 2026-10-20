@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS chats (
   kind TEXT NOT NULL DEFAULT 'dm',          -- dm | group
   employee_id TEXT,                          -- dm partner (ai_employees.id)
   entity_id TEXT,
+  tenant_id TEXT DEFAULT 'TENANT-HQ',
   pinned INTEGER DEFAULT 0,
   hidden INTEGER DEFAULT 0,
   deleted_at TIMESTAMP,
@@ -109,20 +110,38 @@ CREATE INDEX IF NOT EXISTS idx_run_stream_run ON run_stream(run_id, id);
 
 
 def ensure(conn: sqlite3.Connection) -> None:
-    conn.executescript(DDL)
-    conn.commit()
+    # DDL is tables/indexes only; execute individually to preserve transactions.
+    for statement in DDL.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(chats)")}
+    if "tenant_id" not in cols:
+        conn.execute("ALTER TABLE chats ADD COLUMN tenant_id TEXT DEFAULT 'TENANT-HQ'")
+        from ..db import _backfill_tenants
+        _backfill_tenants(conn, {"chats"})
 
 
 def get_or_create_dm(conn: sqlite3.Connection, employee_id: str, title: str,
-                     entity_id: str | None) -> sqlite3.Row:
-    row = conn.execute("SELECT * FROM chats WHERE employee_id = ? AND kind='dm'",
+                     entity_id: str | None, tenant_id: str | None = None) -> sqlite3.Row:
+    from ..tenancy import checked_entity_tenant
+    emp = conn.execute("SELECT legal_entity_id FROM ai_employees WHERE id=?",
                        (employee_id,)).fetchone()
+    if emp is None:
+        raise ValueError("UnknownEmployee")
+    if entity_id and entity_id != emp["legal_entity_id"]:
+        raise ValueError("EmployeeEntityMismatch")
+    entity_id = emp["legal_entity_id"]
+    tenant_id = checked_entity_tenant(conn, entity_id, tenant_id)
+    row = conn.execute("SELECT * FROM chats WHERE employee_id = ? AND kind='dm'"
+                       " AND COALESCE(tenant_id,'TENANT-HQ')=?",
+                       (employee_id, tenant_id)).fetchone()
     if row:
         return row
     import secrets
     cid = "C-" + secrets.token_hex(8)
-    conn.execute("""INSERT INTO chats (id, title, kind, employee_id, entity_id)
-                    VALUES (?,?, 'dm', ?, ?)""", (cid, title, employee_id, entity_id))
+    conn.execute("""INSERT INTO chats (id, title, kind, employee_id, entity_id, tenant_id)
+                    VALUES (?,?, 'dm', ?, ?, ?)""",
+                 (cid, title, employee_id, entity_id, tenant_id))
     conn.commit()
     return conn.execute("SELECT * FROM chats WHERE id = ?", (cid,)).fetchone()
 
@@ -147,9 +166,8 @@ def messages(conn: sqlite3.Connection, chat_id: str, after_id: int = 0,
     return [dict(r) for r in rows]
 
 
-def list_chats(conn: sqlite3.Connection) -> list[dict]:
-    rows = conn.execute(
-        """SELECT c.*, e.name AS employee_name, e.status AS employee_status,
+def list_chats(conn: sqlite3.Connection, tenant_id: str | None = None) -> list[dict]:
+    sql = """SELECT c.*, e.name AS employee_name, e.status AS employee_status,
                   (SELECT content FROM chat_messages m WHERE m.chat_id = c.id
                    ORDER BY m.id DESC LIMIT 1) AS last_message,
                   (SELECT role FROM chat_messages m WHERE m.chat_id = c.id
@@ -157,9 +175,13 @@ def list_chats(conn: sqlite3.Connection) -> list[dict]:
                   (SELECT created_at FROM chat_messages m WHERE m.chat_id = c.id
                    ORDER BY m.id DESC LIMIT 1) AS last_at
            FROM chats c LEFT JOIN ai_employees e ON e.id = c.employee_id
-           WHERE COALESCE(c.hidden,0)=0 AND c.deleted_at IS NULL
-           ORDER BY COALESCE(c.pinned,0) DESC, COALESCE(last_at, c.created_at) DESC""").fetchall()
-    return [dict(r) for r in rows]
+           WHERE COALESCE(c.hidden,0)=0 AND c.deleted_at IS NULL"""
+    args = []
+    if tenant_id:
+        sql += " AND COALESCE(c.tenant_id,'TENANT-HQ')=?"
+        args.append(tenant_id)
+    sql += " ORDER BY COALESCE(c.pinned,0) DESC, COALESCE(last_at, c.created_at) DESC"
+    return [dict(r) for r in conn.execute(sql, args).fetchall()]
 
 
 def stream(conn: sqlite3.Connection, run_id: str, after_id: int = 0,
@@ -176,10 +198,20 @@ def add_stream(conn: sqlite3.Connection, run_id: str, kind: str, text: str) -> N
     conn.commit()
 
 
-def create_group(conn: sqlite3.Connection, name: str, employee_ids: list[str]) -> sqlite3.Row:
+def create_group(conn: sqlite3.Connection, name: str, employee_ids: list[str],
+                 tenant_id: str | None = None) -> sqlite3.Row:
     import secrets
+    from ..tenancy import DEFAULT_TENANT, checked_entity_tenant
+    for employee_id in employee_ids:
+        emp = conn.execute("SELECT legal_entity_id FROM ai_employees WHERE id=?",
+                           (employee_id,)).fetchone()
+        if emp is None:
+            raise ValueError("UnknownEmployee")
+        tenant_id = checked_entity_tenant(conn, emp["legal_entity_id"], tenant_id)
+    tenant_id = tenant_id or DEFAULT_TENANT
     cid = "G-" + secrets.token_hex(8)
-    conn.execute("INSERT INTO chats (id, title, kind) VALUES (?,?, 'group')", (cid, name))
+    conn.execute("INSERT INTO chats (id, title, kind, tenant_id) VALUES (?,?, 'group', ?)",
+                 (cid, name, tenant_id))
     n = len(employee_ids)
     for i, emp in enumerate(employee_ids):
         role = "pm" if i == 0 else ("reviewer" if (n >= 3 and i == n - 1) else "member")

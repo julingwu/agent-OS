@@ -150,6 +150,9 @@ def manual_check(criterion_id: str, req: ManualCheckIn, _ident: dict = Depends(r
             raise HTTPException(404, detail={"code": "CriterionNotFound", "message": str(exc)})
         except l1_manual.EvidenceRequired as exc:
             raise HTTPException(400, detail={"code": "EvidenceRequired", "message": str(exc)})
+        except ValueError as exc:
+            raise HTTPException(409, detail={"code": "AutomaticCriterionRequired",
+                                             "message": str(exc)}) from exc
 
 
 @router.post("/tasks/{task_id}/acceptance/run")
@@ -212,10 +215,11 @@ def prepare_retry(conn: sqlite3.Connection, task_id: str, req: RetryIn, ident: d
     runner = (req.runner or os.environ.get("RUNNER") or "mock").lower()
     run_id = new_id("RUN")
     conn.execute(
-        """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state, runner,
+        """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, tenant_id, state, runner,
                                  session_id, actor_identity)
-           VALUES (?,?,?,?, 'spawned', ?, ?, ?)""",
-        (run_id, task_id, run_seq, t["legal_entity_id"], runner, session_id, ident["id"]))
+           VALUES (?,?,?,?,?, 'spawned', ?, ?, ?)""",
+        (run_id, task_id, run_seq, t["legal_entity_id"], t["tenant_id"] or "TENANT-HQ",
+         runner, session_id, ident["id"]))
     transition(conn, task_id, "retry", actor=ident["id"],
                payload={"run_seq": run_seq, "resumed": bool(session_id)})
     # A retry is a new submission; previous manual verdicts must be checked again.

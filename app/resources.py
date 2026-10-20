@@ -169,10 +169,11 @@ def start_drill(conn, *, resource_id: str = "RES-FIN", agent_id: str = "AI-QUANT
     target_rel = f"shared/{resource_id}/{target_name}"
     title = text or f"权限演练：把测试内容写入 {resource_id}/{target_name}"
     task_id = new_id("T")
-    conn.execute("""INSERT INTO tasks (id, legal_entity_id, task_type, title, state,
-                                      owner_employee_id)
-                    VALUES (?,?, 'rbac_drill', ?, 'todo', ?)""",
-                 (task_id, entity, title, agent_id))
+    from .tenancy import of_entity
+    conn.execute("""INSERT INTO tasks (id, legal_entity_id, tenant_id, task_type, title,
+                                      state, owner_employee_id)
+                    VALUES (?,?,?, 'rbac_drill', ?, 'todo', ?)""",
+                 (task_id, entity, of_entity(conn, entity), title, agent_id))
     conn.commit()
     store.add_message(conn, chat_id, "human",
                       f"演练指令：把一行测试文本写入 `{target_rel}`（相对当前工作目录），只写这一处。",

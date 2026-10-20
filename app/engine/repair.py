@@ -95,16 +95,18 @@ def maybe_repair(conn: sqlite3.Connection, task_id: str, ident: str | None = Non
         run_id = "RUN-" + os.urandom(4).hex()
         seq = (conn.execute("SELECT COALESCE(MAX(run_seq),0)+1 n FROM task_runs WHERE task_id=?",
                             (task_id,)).fetchone()["n"])
-        entity = conn.execute("SELECT legal_entity_id FROM tasks WHERE id=?",
-                              (task_id,)).fetchone()["legal_entity_id"]
+        trow = conn.execute("SELECT legal_entity_id, tenant_id FROM tasks WHERE id=?",
+                            (task_id,)).fetchone()
+        entity = trow["legal_entity_id"]
         prev = conn.execute(
             """SELECT session_id FROM task_runs WHERE task_id=?
                ORDER BY rowid DESC LIMIT 1""", (task_id,)).fetchone()
         conn.execute(
-            """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state, runner,
-                                      actor_identity, session_id)
-               VALUES (?,?,?,?, 'spawned', 'acp', ?, ?)""",
-            (run_id, task_id, seq, entity, ident, prev["session_id"] if prev else None))
+            """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, tenant_id,
+                                      state, runner, actor_identity, session_id)
+               VALUES (?,?,?,?,?, 'spawned', 'acp', ?, ?)""",
+            (run_id, task_id, seq, entity, trow["tenant_id"] or "TENANT-HQ", ident,
+             prev["session_id"] if prev else None))
         conn.commit()
         write_audit(conn, legal_entity_id=entity, verb="repair", task_id=task_id,
                     run_id=run_id, layer="system", action="repair_attempt", target=run_id,

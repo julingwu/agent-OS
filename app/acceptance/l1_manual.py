@@ -43,6 +43,8 @@ def apply(
     ).fetchone()
     if c is None:
         raise KeyError(f"criterion not found: {criterion_id}")
+    if c["check_ref"] == "redline":
+        raise ValueError("企业红线必须重新执行自动校验，不能人工改判")
     if c["evidence_required"] and not (evidence_snippet or file_path):
         raise EvidenceRequired(f"判据 {criterion_id} 要求证据（content_snippet 或 file_path）")
 

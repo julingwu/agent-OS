@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   requirement TEXT NOT NULL,
   legal_entity_id TEXT DEFAULT 'LE-GROUP-HQ',
+  tenant_id TEXT NOT NULL DEFAULT 'TENANT-HQ',
+  veto_note TEXT,
+  retry_token TEXT,
+  last_error TEXT,
   state TEXT DEFAULT 'active',              -- active | blocked | done
   use_llm_docs INTEGER DEFAULT 0,           -- 1=模型写文档（贵） 0=模板（省 token）
   current_seq INTEGER DEFAULT 0,
@@ -65,6 +69,7 @@ CREATE TABLE IF NOT EXISTS stage_gates (
   required_role TEXT,
   state TEXT DEFAULT 'pending',             -- pending | passed | failed | vetoed
   note TEXT,
+  superseded INTEGER NOT NULL DEFAULT 0,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -106,17 +111,14 @@ CREATE TABLE IF NOT EXISTS wbs_items (
   role_tag TEXT,
   pack_id TEXT,
   depends_on TEXT DEFAULT '[]',             -- JSON array of codes
+  task_id TEXT,
+  validation_error TEXT,
   state TEXT DEFAULT 'todo'
 );
 """
 
 TRIGGERS = """
-DROP TRIGGER IF EXISTS trg_stage_no_skip;
-DROP TRIGGER IF EXISTS trg_stage_gate_guard;
-DROP TRIGGER IF EXISTS trg_gate_veto_ins;
-DROP TRIGGER IF EXISTS trg_gate_veto_upd;
-
-CREATE TRIGGER trg_stage_no_skip
+CREATE TRIGGER IF NOT EXISTS trg_stage_no_skip
 BEFORE UPDATE OF state ON project_stages
 WHEN NEW.state = 'active' AND NEW.seq > 0
 BEGIN
@@ -127,32 +129,34 @@ BEGIN
 END;
 
 -- 阶段要 done：既要有通过记录，也不能有未通过/被否决的闸门
-CREATE TRIGGER trg_stage_gate_guard
+CREATE TRIGGER IF NOT EXISTS trg_stage_gate_guard
 BEFORE UPDATE OF state ON project_stages
 WHEN NEW.state = 'done'
 BEGIN
   SELECT CASE WHEN NOT EXISTS (
       SELECT 1 FROM stage_gates
-      WHERE project_id = NEW.project_id AND stage_key = NEW.key AND state = 'passed'
+      WHERE project_id = NEW.project_id AND stage_key = NEW.key
+        AND superseded=0 AND state = 'passed'
   ) THEN RAISE(ABORT, 'GateNotPassed') END;
   SELECT CASE WHEN EXISTS (
       SELECT 1 FROM stage_gates
-      WHERE project_id = NEW.project_id AND stage_key = NEW.key AND state <> 'passed'
+      WHERE project_id = NEW.project_id AND stage_key = NEW.key
+        AND superseded=0 AND state <> 'passed'
   ) THEN RAISE(ABORT, 'GateNotPassed') END;
 END;
 
-CREATE TRIGGER trg_gate_veto_ins
+CREATE TRIGGER IF NOT EXISTS trg_gate_veto_ins
 AFTER INSERT ON stage_gates
-WHEN NEW.state = 'vetoed'
+WHEN NEW.state = 'vetoed' AND NEW.superseded=0
 BEGIN
   UPDATE projects SET state = 'blocked' WHERE id = NEW.project_id;
   UPDATE project_stages SET state = 'blocked'
    WHERE project_id = NEW.project_id AND key = NEW.stage_key;
 END;
 
-CREATE TRIGGER trg_gate_veto_upd
+CREATE TRIGGER IF NOT EXISTS trg_gate_veto_upd
 AFTER UPDATE OF state ON stage_gates
-WHEN NEW.state = 'vetoed'
+WHEN NEW.state = 'vetoed' AND NEW.superseded=0
 BEGIN
   UPDATE projects SET state = 'blocked' WHERE id = NEW.project_id;
   UPDATE project_stages SET state = 'blocked'
@@ -175,17 +179,53 @@ def ensure(conn: sqlite3.Connection) -> None:
     pcols = [r[1] for r in conn.execute("PRAGMA table_info(projects)")]
     if "use_llm_docs" not in pcols:
         conn.execute("ALTER TABLE projects ADD COLUMN use_llm_docs INTEGER DEFAULT 0")
+    for name, ddl in {"tenant_id": "TEXT NOT NULL DEFAULT 'TENANT-HQ'",
+                      "veto_note": "TEXT", "retry_token": "TEXT", "last_error": "TEXT"}.items():
+        if name not in pcols:
+            conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {ddl}")
+    if "tenant_id" not in pcols:
+        conn.execute("""UPDATE projects SET tenant_id=COALESCE(
+            (SELECT tenant_id FROM legal_entities WHERE id=legal_entity_id),'TENANT-HQ')""")
+    wcols = {r[1] for r in conn.execute("PRAGMA table_info(wbs_items)")}
+    for name in ("task_id", "validation_error"):
+        if name not in wcols:
+            conn.execute(f"ALTER TABLE wbs_items ADD COLUMN {name} TEXT")
+    gcols = {r[1] for r in conn.execute("PRAGMA table_info(stage_gates)")}
+    if "superseded" not in gcols:
+        conn.execute("ALTER TABLE stage_gates ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0")
+    conn.execute("CREATE TABLE IF NOT EXISTS pipeline_migrations (name TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    if not conn.execute("SELECT 1 FROM pipeline_migrations WHERE name='gate-history-v1'").fetchone():
+        # One-time replacement of old guards; concurrent normal ensure calls never
+        # open a window without triggers.
+        for trigger in ("trg_stage_gate_guard", "trg_gate_veto_ins", "trg_gate_veto_upd"):
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        statement = ""
+        for line in TRIGGERS.splitlines(True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                conn.execute(statement)
+                statement = ""
+        conn.execute("INSERT INTO pipeline_migrations(name) VALUES ('gate-history-v1')")
+    conn.commit()
     conn.executescript(TRIGGERS)
     conn.commit()
 
 
 def create_project(conn, *, name: str, requirement: str, entity: str = "LE-GROUP-HQ",
-                   owner: str | None = None, use_llm_docs: int = 0) -> dict:
+                   owner: str | None = None, use_llm_docs: int = 0,
+                   tenant_id: str | None = None) -> dict:
     ensure(conn)
+    from . import tenancy
+    actual_tenant = tenancy.of_entity(conn, entity)
+    if tenant_id is not None and tenant_id != actual_tenant:
+        raise PermissionError("TenantMismatch")
+    tenant_id = actual_tenant
     pid = _id("P")
     conn.execute("""INSERT INTO projects (id, name, requirement, legal_entity_id,
-                                           owner_identity, use_llm_docs)
-                    VALUES (?,?,?,?,?,?)""", (pid, name, requirement, entity, owner,
+                                           tenant_id,owner_identity, use_llm_docs)
+                    VALUES (?,?,?,?,?,?,?)""", (pid, name, requirement, entity,tenant_id,owner,
                                              1 if use_llm_docs else 0))
     for seq, (key, title) in enumerate(STAGES):
         conn.execute("""INSERT INTO project_stages (id, project_id, seq, key, title)
@@ -211,11 +251,13 @@ def _wdir(project_id: str) -> pathlib.Path:
 
 
 def _write(conn, pid: str, stage_key: str, kind: str, name: str, text: str) -> str:
-    path = _wdir(pid) / name
+    delivery_id = _id("D")
+    path = _wdir(pid) / "deliveries" / delivery_id / pathlib.Path(name).name
+    path.parent.mkdir(parents=True, exist_ok=False)
     path.write_text(text, encoding="utf-8")
     conn.execute("""INSERT INTO stage_deliverables (id, project_id, stage_key, kind, file_path, bytes)
                     VALUES (?,?,?,?,?,?)""",
-                 (_id("D"), pid, stage_key, kind, str(path), path.stat().st_size))
+                 (delivery_id, pid, stage_key, kind, str(path), path.stat().st_size))
     conn.commit()
     return str(path)
 
@@ -261,7 +303,8 @@ def finish_stage(conn, pid: str, key: str) -> None:
 
 
 # ------------------------------------------------------------------ 研讨会
-WORKSHOP_ROLES = [("architect", "架构师"), ("qa", "测试"), ("audit", "审计/合规")]
+WORKSHOP_ROLES = [("architect", "架构师"), ("qa", "测试"), ("audit", "审计/合规"),
+                  ("legal", "法务")]
 
 
 def run_workshop(conn, pid: str, requirement: str, llm_minutes: bool = False) -> dict:
@@ -288,31 +331,43 @@ def run_workshop(conn, pid: str, requirement: str, llm_minutes: bool = False) ->
         "proposal", "提案：" + requirement[:80] + "。先做最小可用版本，四步推进。")
 
     statements = []
+    prior = conn.execute("SELECT veto_note FROM projects WHERE id=?", (pid,)).fetchone()
     for role, title in WORKSHOP_ROLES:
         got = gen.workshop_statement(pid, requirement, role, title) if llm_minutes else None
-        if got:
-            q, risk, stance = got["question"], got["risk"], got.get("stance", "有条件同意")
+        if gen.valid_statement(got):
+            q, risk, stance = got["question"], got["risk"], got["stance"]
         else:
             q = title + "质询：预算与边界如何界定？失败如何回滚？"
             risk = title + "风险：相关风险已登记，需人工复核。"
-            stance = "有条件同意"
+            stance = ("反对" if (llm_minutes or prior and prior["veto_note"])
+                      and role in {"audit", "legal"}
+                      else "有条件同意")
+            if stance == "反对":
+                risk = "评审未完成：模型不可用或未返回有效的明确结论，请重新评审。"
         say(2, role, title, "question", q)
         say(2, role, title, "risk", risk)
         say(4, role, title, "vote", stance)
         statements.append({"role": role, "title": title, "question": q,
                            "risk": risk, "stance": stance})
 
+    vetoes = [s for s in statements if s["role"] in {"audit", "legal"}
+              and s.get("stance") == "反对"]
+    veto_note = "；".join(f"{s['title']}：{s['question']}；{s['risk']}" for s in vetoes)
+    conn.execute("UPDATE projects SET veto_note=? WHERE id=?", (veto_note or None, pid))
     say(3, "product", "产品经理", "revision",
-        "修订：接受上述质询与风险，补充回滚方案与验收口径。")
-    say(4, "product", "产品经理", "vote", "表决通过（附条件）")
+        ("【一票否决】请按审计/法务意见修改需求后重新评审，禁止强行推进。"
+         if vetoes else "修订：接受上述质询与风险，补充回滚方案与验收口径。"))
+    say(4, "product", "产品经理", "vote", "提案被否决，退回重写" if vetoes else "表决通过（附条件）")
     conn.commit()
 
     minutes = gen.minutes(pid, requirement, statements) if llm_minutes else None
     if not minutes:
         lines = ["# 研讨会纪要", "项目：" + pid, "议题：" + requirement, "", "## 风险与反对意见"]
         lines += ["- " + s["title"] + "：" + s["risk"] for s in statements]
-        lines += ["", "## 结论", "通过（附风险清单）"]
+        lines += ["", "## 结论", ("否决：" + veto_note) if vetoes else "通过（附风险清单）"]
         minutes = "\n".join(lines)
+    elif vetoes:
+        minutes += "\n\n## 系统记录的否决结论\n" + veto_note + "\n必须重新评审，当前未通过。"
     path = _write(conn, pid, "workshop", "minutes", "02_workshop_minutes.md", minutes)
     conn.execute("UPDATE workshops SET state='closed' WHERE id=?", (wid,))
     conn.commit()
@@ -326,7 +381,8 @@ def run_workshop(conn, pid: str, requirement: str, llm_minutes: bool = False) ->
     except Exception:                        # noqa: BLE001
         pass
     return {"workshop_id": wid, "turns": turns, "minutes": path,
-            "llm": bool(llm_minutes)}
+            "llm": bool(llm_minutes), "vetoes": [s["role"] for s in vetoes],
+            "veto_note": veto_note}
 
 
 def build_wbs(conn, pid: str, requirement: str, llm: bool = False) -> dict:
@@ -344,6 +400,9 @@ def build_wbs(conn, pid: str, requirement: str, llm: bool = False) -> dict:
 
 
     for code, title, role, pack, deps in items:
+        if conn.execute("SELECT 1 FROM wbs_items WHERE project_id=? AND code=?",
+                         (pid, code)).fetchone():
+            continue
         conn.execute(
             "INSERT INTO wbs_items (id, project_id, code, title, role_tag, pack_id, depends_on)"
             " VALUES (?,?,?,?,?,?,?)",
@@ -395,14 +454,33 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
     """执行单个阶段：进入 → 产物（优先模型生成）→ 闸门 → 结束。"""
     from . import pipeline_llm as gen
 
-    row = conn.execute("SELECT use_llm_docs FROM projects WHERE id=?", (pid,)).fetchone()
+    row = conn.execute("SELECT use_llm_docs,state FROM projects WHERE id=?", (pid,)).fetchone()
+    if row is None:
+        raise KeyError(pid)
+    if row["state"] == "blocked":
+        raise PermissionError("ProjectRevisionRequired")
     llm_docs = bool(row and row["use_llm_docs"])
     enter_stage(conn, pid, key)
-    # 重跑某阶段时，清掉上一轮未通过的闸门（否则触发器永远不让 done）
-    conn.execute("DELETE FROM stage_gates WHERE project_id=? AND stage_key=? AND state<>'passed'",
-                 (pid, key))
-    conn.execute("UPDATE projects SET state='active' WHERE id=? AND state='blocked'", (pid,))
-    conn.commit()
+    previous_vetoes = conn.execute("""SELECT * FROM stage_gates WHERE project_id=?
+        AND stage_key=? AND state='vetoed' AND superseded=1 ORDER BY rowid DESC""",
+        (pid, key)).fetchall()
+    if key != "workshop" and previous_vetoes:
+        reviewed_roles = set()
+        for previous in previous_vetoes:
+            role = previous["required_role"] or "audit"
+            if role in reviewed_roles:
+                continue
+            reviewed_roles.add(role)
+            reviewed = (gen.workshop_statement(pid, requirement + "\n原否决：" +
+                         (previous["note"] or previous["name"]), role, role)
+                        if llm_docs else None)
+            approved = bool(gen.valid_statement(reviewed)
+                            and reviewed["stance"] in {"同意", "有条件同意"})
+            gate(conn, pid, key, "原否决重新评审", kind="veto", role=role, passed=approved,
+                 note=(reviewed.get("risk") or "重新评审通过") if approved
+                 else "原否决未获重新批准；需要可用的独立评审模型")
+            if not approved:
+                raise PermissionError("VetoReevaluationRequired")
     out: dict = {"stage": key}
 
     if key == "intake":
@@ -424,6 +502,10 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
         gate(conn, pid, key, "全员留下风险意见", note="architect/qa/audit")
         gate(conn, pid, key, "架构师否决权", kind="veto", role="architect", passed=True,
              note="未行使否决")
+        gate(conn, pid, key, "审计/法务一票否决", kind="veto", role="audit",
+             passed=not out.get("vetoes"), note=out.get("veto_note") or "未行使否决")
+        if out.get("vetoes"):
+            raise PermissionError("WorkshopVetoed")
 
     elif key == "wbs":
         out.update(build_wbs(conn, pid, requirement, llm=llm_docs))
@@ -473,6 +555,14 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
             raise RuntimeError("accept failed: " + note)
 
     elif key == "release":
+        ok, note = accept_check(conn, pid)
+        gate(conn, pid, key, "发布前重新验收", passed=ok, note=note)
+        if not ok:
+            conn.execute("UPDATE projects SET state='blocked' WHERE id=?", (pid,))
+            conn.execute("UPDATE project_stages SET state='blocked'"
+                         " WHERE project_id=? AND key=?", (pid, key))
+            conn.commit()
+            raise RuntimeError("release acceptance failed: " + note)
         arts = [d["file_path"] for d in conn.execute(
             "SELECT file_path FROM stage_deliverables WHERE project_id=?"
             " AND stage_key IN ('build','test')", (pid,)).fetchall()]
@@ -513,6 +603,8 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
     from .engine import dsh_adapter, task_generator
 
     entity = _task_entity(conn, pid)
+    project = conn.execute("SELECT tenant_id FROM projects WHERE id=?", (pid,)).fetchone()
+    tenant_id = project["tenant_id"]
     items = [r for r in conn.execute(
         "SELECT * FROM wbs_items WHERE project_id=? ORDER BY rowid", (pid,)).fetchall()]
     created = failed = 0
@@ -520,16 +612,43 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
 
     stub = os.environ.get("M0_PIPELINE_EXEC", "1") != "1"
     for it in items:
-        if it["state"] == "done" or it["role_tag"] == "ops":
+        if it["role_tag"] == "ops":
+            continue
+        if it["state"] == "done":
+            if it["task_id"]:
+                ok, note = _check_task_redlines(conn, pid, it["task_id"])
+                if not ok:
+                    failed += 1
             continue
         if not can_start(conn, pid, it["code"]):
             continue
+        existing = (conn.execute("SELECT state FROM tasks WHERE id=?", (it["task_id"],)).fetchone()
+                    if it["task_id"] else None)
+        if existing and not it["validation_error"]:
+            if existing["state"] == "completed":
+                ok, note = _check_task_redlines(conn, pid, it["task_id"])
+                if ok:
+                    complete_wbs(conn, pid, it["code"])
+                else:
+                    failed += 1
+                continue
+            if existing["state"] == "pending_review":
+                reviewed = acceptance_run.run(conn, it["task_id"], [entity])
+                if reviewed["task_state"] == "completed":
+                    complete_wbs(conn, pid, it["code"])
+                else:
+                    failed += 1
+                continue
+            if existing["state"] in {"todo", "assigned", "in_progress"}:
+                failed += 1
+                continue
         brief = (it["title"] + "：单文件 Python 命令行实现，≤200 行，不引入第三方依赖；"
                  "项目 " + pid + "，需求 " + requirement[:40])
         gen = task_generator.generate(conn, brief, legal_entity_id=entity,
-                                      pack_id=it["pack_id"])
+                                      pack_id=it["pack_id"], tenant_id=tenant_id)
         tid = gen["task_id"]
         conn.execute("UPDATE tasks SET project_id=?, stage='build' WHERE id=?", (pid, tid))
+        conn.execute("UPDATE wbs_items SET task_id=?,validation_error=NULL WHERE id=?", (tid, it["id"]))
         conn.commit()
         created += 1
 
@@ -538,18 +657,21 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
             art.write_text("# stub for " + it["code"] + "\nprint('ok')\n", encoding="utf-8")
             stub_run = "RUN-STUB-" + _uuid.uuid4().hex[:8]
             conn.execute("INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id,"
-                         " state, runner, actor_identity)"
-                         " VALUES (?,?,1,?, 'succeeded', 'stub', 'ID-CEO-DISPATCHER')",
-                         (stub_run, tid, entity))
-            conn.execute("INSERT INTO artifacts (id, run_id, art_seq, file_path, checksum, bytes)"
-                         " VALUES (?,?,1,?,? ,?)",
-                         ("ART-" + _uuid.uuid4().hex[:10], stub_run, str(art),
+                         " tenant_id,state, runner, actor_identity)"
+                         " VALUES (?,?,1,?,?, 'succeeded', 'stub', 'ID-CEO-DISPATCHER')",
+                         (stub_run, tid, entity, tenant_id))
+            conn.execute("INSERT INTO artifacts (id, run_id,tenant_id,art_seq,file_path,checksum,bytes)"
+                         " VALUES (?,?,?,1,?,?,?)",
+                         ("ART-" + _uuid.uuid4().hex[:10], stub_run,tenant_id,str(art),
                           "stub", art.stat().st_size))
             from . import state_machine as _sm
             try:
                 _sm.transition(conn, tid, "run_spawned", actor="system")
                 _sm.transition(conn, tid, "run_started", actor="system")
                 _sm.transition(conn, tid, "run_succeeded", actor="system")
+                # This branch is explicitly offline simulation. Keep its terminal
+                # status distinct in the audit from a real ACP acceptance.
+                _sm.transition(conn, tid, "review_passed", actor="stub")
             except Exception:              # noqa: BLE001
                 pass
             conn.commit()
@@ -558,9 +680,9 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
 
         run_id = "RUN-" + _uuid.uuid4().hex[:16]
         conn.execute(
-            "INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state,"
-            " runner, actor_identity) VALUES (?,?,1,?, 'spawned', 'acp', 'ID-CEO-DISPATCHER')",
-            (run_id, tid, entity))
+            "INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id,tenant_id,state,"
+            " runner, actor_identity) VALUES (?,?,1,?,?, 'spawned', 'acp', 'ID-CEO-DISPATCHER')",
+            (run_id, tid, entity,tenant_id))
         # 状态机：todo -> assigned（runner 只会从 assigned 推到 in_progress）
         from . import state_machine as _sm0
         try:
@@ -574,10 +696,13 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
         state = out.get("task_state")
         if state in ("pending_review", "completed"):
             try:
-                acceptance_run.run(conn, tid, [entity])
-            except Exception:              # noqa: BLE001
-                pass
-            complete_wbs(conn, pid, it["code"])
+                reviewed = acceptance_run.run(conn, tid, [entity])
+                if reviewed["task_state"] == "completed":
+                    complete_wbs(conn, pid, it["code"])
+                else:
+                    failed += 1
+            except (ValueError, sqlite3.Error, PermissionError):
+                failed += 1
         else:
             failed += 1
     return {"tasks": created, "failed": failed, "run_dir": str(_wdir(pid))}
@@ -589,27 +714,41 @@ def execute_test(conn, pid: str) -> dict:
     import sys as _sys
 
     rows = conn.execute(
-        "SELECT a.file_path FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
+        "SELECT a.file_path,t.id AS task_id FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
         " JOIN tasks t ON t.id=r.task_id"
-        " WHERE t.project_id=? AND a.file_path LIKE '%.py' ORDER BY a.rowid DESC",
+        " WHERE t.project_id=? AND a.file_path LIKE '%.py'"
+        " AND (NOT EXISTS (SELECT 1 FROM wbs_items w WHERE w.project_id=t.project_id"
+        " AND w.task_id IS NOT NULL) OR t.id IN (SELECT task_id FROM wbs_items"
+        " WHERE project_id=t.project_id))"
+        " AND r.run_seq=(SELECT MAX(r2.run_seq) FROM task_runs r2 WHERE r2.task_id=t.id)"
+        " AND COALESCE(a.state,'active')='active' ORDER BY a.rowid DESC",
         (pid,)).fetchall()
     log = ["# 测试记录", ""]
     ok = True
+    failures = set()
     if not rows:
         ok = False
         log.append("未找到可测试的 .py 产物")
-    for r in rows[:3]:
+    for r in rows:
         path = pathlib.Path(r["file_path"])
         log.append("## " + path.name)
         if not path.exists():
             ok = False
+            failures.add(r["task_id"])
             log.append("- 文件不存在")
             continue
-        comp = subprocess.run([_sys.executable, "-m", "py_compile", str(path)],
-                              capture_output=True, text=True, timeout=60)
+        try:
+            comp = subprocess.run([_sys.executable, "-m", "py_compile", str(path)],
+                                  capture_output=True, text=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            ok = False
+            failures.add(r["task_id"])
+            log.append("- 编译检查超时")
+            continue
         log.append("- py_compile: " + ("通过" if comp.returncode == 0 else "失败"))
         if comp.returncode != 0:
             ok = False
+            failures.add(r["task_id"])
             log.append("```\n" + (comp.stderr or "")[:800] + "\n```")
             continue
         try:
@@ -617,14 +756,33 @@ def execute_test(conn, pid: str) -> dict:
                                  text=True, timeout=15, cwd=str(path.parent),
                                  input="\n" * 20)
             log.append("- 运行退出码: " + str(run.returncode))
+            if run.returncode != 0:
+                ok = False
+                failures.add(r["task_id"])
             out = (run.stdout or "")[:1200]
             if out:
                 log.append("```\n" + out + "\n```")
         except subprocess.TimeoutExpired:
-            log.append("- 运行超时（交互式程序，按通过处理）")
+            ok = False
+            failures.add(r["task_id"])
+            log.append("- 运行超时，未通过")
+    conn.execute("UPDATE wbs_items SET validation_error=NULL WHERE project_id=?", (pid,))
+    for task_id in failures:
+        conn.execute("UPDATE wbs_items SET validation_error='交付物执行检查失败'"
+                     " WHERE project_id=? AND task_id=?", (pid, task_id))
+    conn.commit()
     body = "\n".join(log)
     path = _write(conn, pid, "test", "test", "05_test.md", body)
     return {"ok": ok, "note": "见 05_test.md", "file": path}
+
+
+def _check_task_redlines(conn, pid: str, task_id: str) -> tuple[bool, str]:
+    from . import acceptance_run
+    verdict = acceptance_run.validate_mandatory(conn, task_id, commit=False)
+    if not verdict["ok"]:
+        conn.execute("UPDATE wbs_items SET validation_error=? WHERE project_id=? AND task_id=?",
+                     (verdict["detail"], pid, task_id))
+    return verdict["ok"], verdict["detail"]
 
 
 def accept_check(conn, pid: str) -> tuple[bool, str]:
@@ -633,12 +791,23 @@ def accept_check(conn, pid: str) -> tuple[bool, str]:
     n_done = conn.execute("SELECT COUNT(*) n FROM wbs_items WHERE project_id=? AND state='done'",
                           (pid,)).fetchone()["n"]
     bad = conn.execute(
-        "SELECT COUNT(*) n FROM tasks WHERE project_id=? AND state IN ('failed','rejected')",
+        "SELECT COUNT(*) n FROM tasks t WHERE project_id=? AND state<>'completed'"
+        " AND (NOT EXISTS (SELECT 1 FROM wbs_items w WHERE w.project_id=t.project_id"
+        " AND w.task_id IS NOT NULL) OR t.id IN (SELECT task_id FROM wbs_items"
+        " WHERE project_id=t.project_id))",
         (pid,)).fetchone()["n"]
     if bad:
-        return False, str(bad) + " 个任务失败"
+        return False, str(bad) + " 个当前交付任务尚未完成验收"
     if n_done < n_total:
         return False, "WBS 完成 " + str(n_done) + "/" + str(n_total)
+    tasks = conn.execute("""SELECT t.id FROM tasks t WHERE project_id=?
+        AND (NOT EXISTS (SELECT 1 FROM wbs_items w WHERE w.project_id=t.project_id
+            AND w.task_id IS NOT NULL) OR t.id IN (SELECT task_id FROM wbs_items
+            WHERE project_id=t.project_id))""", (pid,)).fetchall()
+    for task in tasks:
+        ok, detail = _check_task_redlines(conn, pid, task["id"])
+        if not ok:
+            return False, "当前交付物未通过最新红线复核：" + detail
     return True, "WBS " + str(n_done) + "/" + str(n_total) + "，任务无失败"
 
 
@@ -648,10 +817,12 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
     # 注入文本会随立项书/纪要落盘，审计留 experience_injected，可回溯是哪几条。
     try:
         from . import experience
-        proj = conn.execute("SELECT legal_entity_id FROM projects WHERE id=?", (pid,)).fetchone()
+        proj = conn.execute("SELECT legal_entity_id,tenant_id,veto_note FROM projects WHERE id=?",
+                            (pid,)).fetchone()
         entity = proj["legal_entity_id"] if proj else "LE-GROUP-HQ"
         if "【组织经验（自动注入）】" not in requirement:
-            ctx = experience.context_for(conn, requirement, entity=entity)
+            ctx = experience.context_for(conn, requirement, entity=entity,
+                                         tenant_id=proj["tenant_id"])
             if ctx["count"]:
                 requirement = (requirement + "\n\n【组织经验（自动注入）】\n" + ctx["text"])
                 write_audit(conn, legal_entity_id=entity, verb="memory_read", task_id=None,
@@ -660,6 +831,8 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
                                      "query": requirement[:200]},
                             response={"ok": True, "count": ctx["count"]})
                 conn.commit()
+        if proj and proj["veto_note"]:
+            requirement += "\n\n【一票否决重写要求】\n" + proj["veto_note"]
     except Exception:                        # noqa: BLE001 - 记忆不可用不阻塞产线
         pass
     done = []
@@ -675,3 +848,107 @@ def timeline(conn, pid: str) -> list[dict]:
            WHERE payload LIKE ? OR target = ?
            ORDER BY rowid ASC""", (f"%{pid}%", pid)).fetchall()
     return [dict(r) for r in rows]
+
+
+def prepare_retry(conn, pid: str, requirement: str, *, actor: dict) -> dict:
+    """Claim a recovery once, retaining prior gates and completed work."""
+    from . import identity, tenancy
+    ensure(conn)
+    who = identity.get_identity(conn, actor.get("id", ""))
+    if who is None or who["role"] not in {"ceo", "system"}:
+        raise PermissionError("ProjectReviewerRequired")
+    tenant_id = tenancy.of_identity(conn, who["id"])
+    requirement = requirement.strip()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        p = conn.execute("SELECT * FROM projects WHERE id=? AND tenant_id=?"
+            " AND legal_entity_id=?", (pid, tenant_id, who["legal_entity_id"])).fetchone()
+        if p is None:
+            raise KeyError(pid)
+        if p["state"] != "blocked" or p["retry_token"]:
+            raise RuntimeError("ProjectRetryUnavailable")
+        if not requirement or requirement == p["requirement"].strip():
+            raise ValueError("RevisedRequirementRequired")
+        stage = conn.execute("""SELECT s.* FROM project_stages s
+            WHERE s.project_id=? AND (s.state='blocked' OR EXISTS(
+                SELECT 1 FROM stage_gates g WHERE g.project_id=s.project_id
+                AND g.stage_key=s.key AND g.superseded=0 AND g.state IN ('failed','vetoed')))
+            ORDER BY s.seq LIMIT 1""", (pid,)).fetchone()
+        if stage is None:
+            stage = conn.execute("SELECT * FROM project_stages WHERE project_id=?"
+                " AND state<>'done' ORDER BY seq LIMIT 1", (pid,)).fetchone()
+        if stage is None:
+            raise RuntimeError("ProjectRetryUnavailable")
+        start_seq = stage["seq"]
+        broken_work = conn.execute("""SELECT w.id FROM wbs_items w
+            LEFT JOIN tasks t ON t.id=w.task_id WHERE w.project_id=?
+            AND (w.validation_error IS NOT NULL OR t.state IN ('failed','rejected'))""",
+            (pid,)).fetchall()
+        if start_seq >= 4 and broken_work:
+            start_seq = 4
+            for item in broken_work:
+                conn.execute("UPDATE wbs_items SET state='todo' WHERE id=?",
+                             (item["id"],))
+        keys = [r["key"] for r in conn.execute("SELECT key FROM project_stages"
+            " WHERE project_id=? AND seq>=? ORDER BY seq", (pid, start_seq))]
+        old_gates = [dict(r) for r in conn.execute("""SELECT g.* FROM stage_gates g
+            JOIN project_stages s ON s.project_id=g.project_id AND s.key=g.stage_key
+            WHERE g.project_id=? AND s.seq>=? AND g.superseded=0""", (pid, start_seq))]
+        conn.execute("""UPDATE stage_gates SET superseded=1 WHERE project_id=?
+            AND stage_key IN (SELECT key FROM project_stages WHERE project_id=? AND seq>=?)""",
+            (pid, pid, start_seq))
+        conn.execute("UPDATE project_stages SET state='pending',ended_at=NULL"
+                     " WHERE project_id=? AND seq>=?", (pid, start_seq))
+        token = uuid.uuid4().hex
+        conn.execute("UPDATE projects SET state='retrying',retry_token=?,requirement=?,"
+                     "last_error=NULL WHERE id=?", (token, requirement, pid))
+        write_audit(conn, legal_entity_id=p["legal_entity_id"], verb="project",
+            actor=who["id"], action="project_revision_requested", target=pid,
+            payload={"previous_requirement": p["requirement"], "requirement": requirement,
+                     "from_stage": keys[0], "previous_gates": old_gates},
+            response={"state": "retrying"})
+        conn.commit()
+        return {"project_id": pid, "requirement": requirement, "keys": keys, "token": token}
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def run_retry(conn, claim: dict) -> dict:
+    pid, token = claim["project_id"], claim["token"]
+    finished = []
+    try:
+        for key in claim["keys"]:
+            row = conn.execute("SELECT state,retry_token FROM projects WHERE id=?", (pid,)).fetchone()
+            if not row or row["state"] != "retrying" or row["retry_token"] != token:
+                raise RuntimeError("ProjectRetryClaimLost")
+            run_project(conn, pid, claim["requirement"], keys=[key])
+            finished.append(key)
+        conn.execute("UPDATE projects SET state='active',retry_token=NULL,last_error=NULL"
+                     " WHERE id=? AND retry_token=?", (pid, token))
+        conn.commit()
+        return {"project_id": pid, "stages": finished}
+    except BaseException as exc:
+        fail_retry(conn, claim, type(exc).__name__)
+        raise
+
+
+def fail_retry(conn, claim: dict, reason: str) -> None:
+    pid, token = claim["project_id"], claim["token"]
+    conn.rollback()
+    updated = conn.execute("UPDATE projects SET state='blocked',retry_token=NULL,last_error=?"
+                           " WHERE id=? AND retry_token=?", (reason[:300], pid, token))
+    if updated.rowcount:
+        conn.execute("UPDATE project_stages SET state='blocked'"
+                     " WHERE project_id=? AND state='active'", (pid,))
+    conn.commit()
+
+
+def recover_interrupted(conn) -> int:
+    """Called once at process startup, before any recovery workers are launched."""
+    ensure(conn)
+    rows = conn.execute("SELECT id,retry_token FROM projects WHERE state='retrying'").fetchall()
+    for row in rows:
+        fail_retry(conn, {"project_id": row["id"], "token": row["retry_token"]},
+                   "上次服务退出导致恢复中断，请补充需求后重试")
+    return len(rows)

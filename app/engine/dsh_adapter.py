@@ -357,8 +357,9 @@ def finish(conn: sqlite3.Connection, *, run_id: str, task_id: str, entity: str, 
         ok, exit_code, reason = False, -9, "user_stopped"
     conn.execute(
         """UPDATE task_runs SET exit_code = ?, ended_at = CURRENT_TIMESTAMP, session_id = ?,
-             usage_tokens = ?, usage_baseline = ? WHERE id = ?""",
-        (exit_code, session_id, usage_total if usage_total is not None else used, baseline, run_id))
+             usage_tokens = ?, usage_baseline = ?, error = ? WHERE id = ?""",
+        (exit_code, session_id, usage_total if usage_total is not None else used, baseline,
+         None if ok else reason[:500], run_id))
     event = "run_succeeded" if ok else "run_failed"
     try:
         if stopped_state:
@@ -531,6 +532,20 @@ def execute_run(conn: sqlite3.Connection, run_id: str, *, prompt: str | None = N
     task_id, entity = task["id"], run["legal_entity_id"]
     actor = (run["actor_identity"] if "actor_identity" in run.keys() else None) or "system"
     prompt = prompt or default_prompt(task, conn=conn)
+    # Every execution path, including approval resume, uses authoritative guidance.
+    from .. import role_alignment, experience
+    prompt = role_alignment.inject(conn, prompt, task["owner_employee_id"],
+                                   task_id=task_id, run_id=run_id)
+    red_lines = experience.red_lines(conn, tenant_id=task["tenant_id"],
+                                     entity=task["legal_entity_id"])
+    if red_lines:
+        prompt += "\n\n【公司红线（已审核，必须遵守）】\n" + "\n".join(
+            f"- {rule['title']}：{rule['content']}" for rule in red_lines)
+        write_audit(conn, legal_entity_id=entity, verb="memory_read",
+                    task_id=task_id, run_id=run_id, layer="system",
+                    action="red_lines_injected", target=run_id,
+                    payload={"ids": [rule["id"] for rule in red_lines]},
+                    response={"count": len(red_lines)})
     runner = (runner or os.environ.get("RUNNER") or "mock").lower()
     try:
         conn.execute("UPDATE task_runs SET prompt_text=? WHERE id=?",

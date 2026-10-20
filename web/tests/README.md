@@ -42,6 +42,13 @@ retry behavior and protection against stale results. They create
 synthetic content tasks and intentionally retain them in the test database to
 verify state persistence after reload.
 
+`integrations.spec.js` verifies experience review and re-review after edits,
+retrieval excludes pending entries, MCP connection/binding changes, secret-free
+configuration responses, SMTP configuration without sending mail, and responsive
+integration forms. `extensions-bindings.spec.js` delays and fails synthetic
+binding reads to verify that loading cannot clear a grant, saves lock the employee
+selection, and stale responses cannot replace the current employee's grants.
+
 Artifacts and failure traces go to the OS temporary directory. To save the three
 workspace screenshots elsewhere, set `AGENT_OS_TEST_SCREENSHOT_DIR`; filenames
 are `ui-390.png`, `ui-768.png`, and `ui-1440.png`. The real mock-task workflow

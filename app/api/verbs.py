@@ -132,10 +132,11 @@ def do_spawn_run(conn: sqlite3.Connection, req: SpawnRunIn,
     run_id = new_id("RUN")
     actor = (ident or {}).get("id")
     conn.execute(
-        """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state, runner,
+        """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, tenant_id, state, runner,
                                   actor_identity)
-           VALUES (?,?,?,?, 'spawned', ?, ?)""",
-        (run_id, req.task_id, req.run_seq, entity, os.environ.get("RUNNER", "mock"), actor),
+           VALUES (?,?,?,?,?, 'spawned', ?, ?)""",
+        (run_id, req.task_id, req.run_seq, entity, task["tenant_id"] or "TENANT-HQ",
+         os.environ.get("RUNNER", "mock"), actor),
     )
     conn.execute(
         "UPDATE tasks SET run_count = COALESCE(run_count, 0) + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -217,9 +218,10 @@ def do_attach_artifact(conn: sqlite3.Connection, req: AttachArtifactIn,
     checksum = sha256_bytes(data)
     art_id = new_id("ART")
     conn.execute(
-        """INSERT INTO artifacts (id, run_id, art_seq, file_path, content, checksum, bytes)
-           VALUES (?,?,?,?,?,?,?)""",
-        (art_id, req.run_id, req.art_seq, str(p), content, checksum, len(data)),
+        """INSERT INTO artifacts (id, run_id, tenant_id, art_seq, file_path, content, checksum, bytes)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (art_id, req.run_id, run["tenant_id"] or "TENANT-HQ", req.art_seq, str(p),
+         content, checksum, len(data)),
     )
     resp = {"artifact_id": art_id, "checksum": checksum, "bytes": len(data)}
     write_audit(

@@ -249,7 +249,8 @@ test("all management navigation opens working content without runtime or API err
     ["审批中心", "审批中心"],
     ["用量与费用", "财务总览 · FinOps"],
     ["评测中心", "离线评测与回归"],
-    ["组织经验", "组织经验 · 分层记忆"],
+    ["组织经验", "组织经验"],
+    ["工具与集成", "工具与集成"],
     ["工作产物", "文件库"],
   ]) {
     await test.step(name, async () => {

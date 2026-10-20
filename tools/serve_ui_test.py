@@ -28,6 +28,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, help="Dedicated test directory; defaults to a new temporary directory")
     parser.add_argument("--port", type=int, default=8078)
+    parser.add_argument("--dist-dir", type=Path, help="Optional separately built frontend directory")
     options = parser.parse_args()
     if not 1 <= options.port <= 65535:
         parser.error("The test port must be between 1 and 65535.")
@@ -35,19 +36,24 @@ def main():
         parser.error("Use a dedicated test port, not the normal service port 8077.")
     repo = Path(__file__).resolve().parents[1]
     target = _data_directory(parser, repo, options.data_dir)
-    if not (repo / "web/dist/index.html").is_file():
+    dist = (options.dist_dir or repo / "web/dist").resolve()
+    if not (dist / "index.html").is_file():
         parser.error("Build the frontend first: npm --prefix web run build")
     for name in ("app", "tools", "scripts", "web/dist"):
-        shutil.copytree(repo / name, target / name,
+        shutil.copytree(dist if name == "web/dist" else repo / name, target / name,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     os.environ.update({
         "DB_PATH": str(target / "data/ui-test.db"), "M0_WORKSPACE": str(target / "workspace"),
         "UI_SESSION_SECRET": secrets.token_hex(32), "UI_DEV_LOGIN": "1", "UI_CRON": "0",
         "WECOM_WATCHER": "0", "WECOM_APPROVAL_POLLER": "0", "OCTO_RUNNER": "0",
+        "WECOM_AUTORUN": "0", "WECOM_AUTORUN_RUNNER": "mock", "MCP_MAIL_DELIVERY": "outbox",
         "AUTO_APPROVE": "0", "EVAL_JUDGE": "0", "DEEPSEEK_API_KEY": "", "OPENAI_API_KEY": "",
         "UI_RUNNER": "mock_acp", "RUNNER": "mock_acp", "M0_PIPELINE_EXEC": "0",
         "M0_SANDBOX": "none", "M0_SANDBOX_ACP": "0", "M0_HEARTBEAT_SECONDS": "0",
     })
+    for key in list(os.environ):
+        if key.startswith(("SMTP_", "MCP_MAIL_", "EMPLOYEE_")) and key != "MCP_MAIL_DELIVERY":
+            os.environ.pop(key, None)
     os.chdir(target)
     sys.path.insert(0, str(target))
     from app.db import init_db, get_conn

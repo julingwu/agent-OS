@@ -29,13 +29,22 @@ def is_chitchat(text: str) -> bool:
     return len(t) <= 12 and any(w in t for w in CHITCHAT)
 
 
-def ensure_ceo_chat(conn) -> dict:
-    row = conn.execute("SELECT * FROM chats WHERE kind='ceo' LIMIT 1").fetchone()
+def ensure_ceo_chat(conn, tenant_id=None, entity_id=None) -> dict:
+    from ..tenancy import DEFAULT_TENANT, checked_entity_tenant
+    tenant_id = (checked_entity_tenant(conn, entity_id, tenant_id)
+                 if entity_id else tenant_id or DEFAULT_TENANT)
+    row = conn.execute("SELECT * FROM chats WHERE kind='ceo'"
+                       " AND COALESCE(tenant_id,'TENANT-HQ')=? LIMIT 1",
+                       (tenant_id,)).fetchone()
     if row:
         return dict(row)
-    cid = "C-CEO"
-    conn.execute("""INSERT OR REPLACE INTO chats (id, title, kind, pinned)
-                    VALUES (?,?, 'ceo', 1)""", (cid, CEO_TITLE))
+    import hashlib
+    cid = ("C-CEO" if tenant_id == DEFAULT_TENANT else
+           "C-CEO-" + hashlib.sha256(tenant_id.encode()).hexdigest()[:16])
+    conn.execute("""INSERT INTO chats (id, title, kind, pinned, tenant_id, entity_id)
+                    VALUES (?,?, 'ceo', 1,?,?)""",
+                 (cid, CEO_TITLE, tenant_id, entity_id or
+                  ("LE-GROUP-HQ" if tenant_id == DEFAULT_TENANT else None)))
     conn.commit()
     store.add_message(conn, cid, "agent",
                       "我是 CEO 调度台。把需求直接丢给我，我会挑合适的人建群、派活。",
@@ -52,12 +61,15 @@ def _group_title(text: str, tags: list[str]) -> str:
 
 
 def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
-          use_llm_docs: int = 0) -> dict:
+          use_llm_docs: int = 0, tenant_id: str | None = None) -> dict:
     """把一条需求变成**项目**（v1.5）：立项 → 研讨 → 拆解 → … → 复盘。
 
     标签只用于记录与后续选人；阶段推进由 pipeline 的模板产物与闸门驱动。
     """
     from .. import pipeline
+    from ..tenancy import checked_entity_tenant
+    tenant_id = checked_entity_tenant(conn, entity_id, tenant_id)
+    chat_id = ensure_ceo_chat(conn, tenant_id, entity_id)["id"]
 
     tags = roles.tags_of(text)
     how, reason = "keyword", ""
@@ -70,10 +82,10 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
     title = (text.strip().splitlines()[0][:24] if text.strip() else "新项目") or "新项目"
     proj = pipeline.create_project(conn, name=title, requirement=text,
                                    entity=entity_id, owner=CEO_ID,
-                                   use_llm_docs=use_llm_docs)
+                                   use_llm_docs=use_llm_docs, tenant_id=tenant_id)
     pid = proj["project_id"]
 
-    store.add_message(conn, "C-CEO", "agent",
+    store.add_message(conn, chat_id, "agent",
                       f"已立项 {pid}，按标签【{'/'.join(tags) or '未识别'}】进入 0-1（接需求与立项）。"
                       f"（{how}{'：' + reason if reason else ''}）",
                       author=CEO_TITLE, kind="project",
@@ -92,13 +104,14 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
                 rows = c2.execute("SELECT state FROM project_stages WHERE project_id=?",
                                   (pid,)).fetchall()
                 done = sum(1 for r in rows if r["state"] == "done")
-                store.add_message(c2, "C-CEO", "agent",
+                store.add_message(c2, chat_id, "agent",
                                   f"项目 {pid} 跑完 {done}/{len(rows)} 个阶段；"
                                   "立项书/纪要/WBS/发布清单/复盘都在项目目录。",
                                   author=CEO_TITLE)
             except Exception as exc:       # noqa: BLE001
-                store.add_message(c2, "C-CEO", "agent",
-                                  f"项目 {pid} 在第 {len(stages)} 阶段中断：{exc}",
+                from ..errors import human_error
+                store.add_message(c2, chat_id, "agent",
+                                  f"项目 {pid} 已暂停：{human_error(exc)}",
                                   author=CEO_TITLE)
             c2.commit()
 
@@ -110,5 +123,5 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
         threading.Thread(target=_run, daemon=True).start()
 
     return {"project_id": pid, "tags": tags, "route": how, "reason": reason,
-            "stages": stages, "chat_id": "C-CEO", "async": True,
+            "stages": stages, "chat_id": chat_id, "async": True,
             "members": [], "member_names": []}

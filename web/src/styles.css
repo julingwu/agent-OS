@@ -2521,3 +2521,30 @@ button .icon { flex-shrink: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation-duration: .01ms !important; }
 }
+/* Workspace integrations reuse the existing controls and responsive surfaces. */
+.integration-page { max-width: 1050px; width: 100%; }
+.integration-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.integration-heading h3, .integration-page h3 { margin: 0 0 12px; }
+.integration-page .field { display: flex; flex-direction: column; gap: 7px; margin: 14px 0; font-size: 13px; font-weight: 500; }
+.integration-page .field input, .integration-page .field textarea, .integration-page .field select { width: 100%; min-width: 0; font: inherit; }
+.integration-page .field textarea { resize: vertical; line-height: 1.65; }
+.integration-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 20px 0; }
+.integration-item { border: 1px solid var(--border); border-radius: 12px; padding: 18px; min-width: 0; }
+.integration-url { overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; opacity: .75; }
+.integration-form { border-top: 1px solid var(--border); margin-top: 24px; padding-top: 18px; }
+.integration-checkbox, .integration-checks label { display: flex; align-items: center; gap: 9px; font-size: 13px; margin: 15px 0; }
+.integration-checkbox input, .integration-checks input { width: 16px; height: 16px; accent-color: #4569df; }
+.integration-checks { display: flex; flex-wrap: wrap; gap: 6px 24px; }
+.integration-alert, .integration-notice { border-radius: 10px; padding: 14px 18px; line-height: 1.6; font-size: 13px; }
+.integration-alert { background: #fff0ed; color: #982f21; border: 1px solid #edc6bf; }
+.integration-notice { background: #edf8f2; color: #246345; border: 1px solid #c2e2d0; }
+.integration-review { margin-top: 16px; }
+.integration-page .actions { flex-wrap: wrap; }
+.project-recovery { padding: 16px; margin: 18px 0; border: 1px solid #e4cda5; border-radius: 10px; background: #fff9ef; color: #654c27; }
+.project-recovery .field { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.project-recovery textarea { width: 100%; resize: vertical; }
+@media (max-width: 700px) {
+  .integration-list { grid-template-columns: 1fr; }
+  .integration-page .grid2 { grid-template-columns: 1fr; gap: 0; }
+  .integration-page .fin-card { padding: 18px; }
+}

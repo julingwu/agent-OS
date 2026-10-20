@@ -9,6 +9,7 @@ import datetime
 import json
 
 from . import llm
+from .role_alignment import boundary_for
 
 FOOT = "\n\n---\n_由 {model} 生成 · {ts} · 项目 {pid}_"
 
@@ -48,6 +49,14 @@ def charter(pid: str, requirement: str) -> str | None:
     return (text + _foot(pid)) if text else None
 
 
+def valid_statement(data) -> bool:
+    """A veto can be cleared only by a complete, explicit reviewer decision."""
+    return (isinstance(data, dict)
+            and all(isinstance(data.get(key), str) and data[key].strip()
+                    for key in ("question", "risk", "stance"))
+            and data["stance"] in {"同意", "有条件同意", "反对"})
+
+
 def workshop_statement(pid: str, requirement: str, role: str, title: str) -> dict | None:
     """让某个角色给出质询与风险（JSON）。"""
     raw = llm.complete(
@@ -57,7 +66,8 @@ def workshop_statement(pid: str, requirement: str, role: str, title: str) -> dic
   "risk": "一条具体风险（含触发条件与后果）",
   "stance": "同意" 或 "有条件同意" 或 "反对"}}
 要求：质询要具体到能被回答，风险要能被验证。""",
-        system="你是严格的评审专家，不说客套话。", max_tokens=300, temperature=0.6)
+        system="你是严格的评审专家，不说客套话。\n" + boundary_for([role]),
+        max_tokens=300, temperature=0.6)
     if not raw:
         return None
     try:
@@ -66,7 +76,7 @@ def workshop_statement(pid: str, requirement: str, role: str, title: str) -> dic
         data = json.loads(m.group(0)) if m else {}
     except Exception:                          # noqa: BLE001
         return None
-    if not data.get("question"):
+    if not valid_statement(data):
         return None
     data["role"], data["title"] = role, title
     return data

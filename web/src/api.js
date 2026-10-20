@@ -36,6 +36,17 @@ async function req(path, opts = {}) {
       EvidenceRequired: "请先查看工作产物，并补充验收说明。", ScopeDenied: "当前账号没有执行此操作的权限。",
       CrossEntityForbidden: "当前账号无法操作这个工作空间的任务。", FileGone: "产物文件已不存在，请重新执行任务。",
       FileNotFound: "找不到这个文件，可能已被移除。", TaskNotFound: "找不到这个任务。",
+      Forbidden: "当前账号没有执行此操作的权限。", AdminRequired: "此功能需要工作空间管理员权限。",
+      TenantMismatch: "工作空间与当前账号不匹配，请重新登录。",
+      DeploymentAdminOnly: "此配置由部署管理员统一管理。",
+      ProjectNotFound: "项目不存在或无权访问。", ChatNotFound: "会话不存在或无权访问。",
+      McpServerNotFound: "工具连接不存在或无权访问。", EmployeeNotFound: "员工不存在或无权访问。",
+      MandatoryCheckFailed: "强制规则检查未通过，请修改交付内容后重试。",
+      ExperienceVersionChanged: "经验已被修改，请刷新并查看新内容后重新审核。",
+      ExperienceAlreadyReviewed: "经验已被审核，请刷新查看最新结果。",
+      ProjectRecoveryRequired: "请提交修改后的需求重新检查项目。",
+      RevisionRequired: "请先修改完整需求，再重新检查。",
+      ProjectNotRetryable: "项目状态已变化，请刷新后重试。",
     };
     if (res.status === 401) {
       auth.clear();
@@ -217,7 +228,24 @@ Object.assign(api, {
   evalRunOne: (setId, body) =>
     req(`/evals/${setId}/run`, { method: "POST", body: JSON.stringify(body || {}) }),
   evalBatch: (id) => req(`/evals/batches/${id}`),
-  experiences: (kind) => req(`/experiences${kind ? `?kind=${kind}` : ""}`),
+  experiences: (kind, state) => req(`/experiences?${new URLSearchParams({ ...(kind ? { kind } : {}), ...(state ? { state } : {}) })}`),
   previewExperience: (text, entity) =>
     req("/experiences/preview", { method: "POST", body: JSON.stringify({ text, entity }) }),
+});
+
+Object.assign(api, {
+  createExperience: body => req("/experiences", { method: "POST", body: JSON.stringify(body) }),
+  editExperience: (id, body) => req(`/experiences/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  reviewExperience: (id, action, note, expected_version) => req(`/experiences/${id}/review`, { method: "POST", body: JSON.stringify({ action, note, expected_version }) }),
+  retryProject: (id, requirement) => req(`/projects/${id}/retry`, { method: "POST", body: JSON.stringify({ requirement }) }),
+  mcpServers: () => req("/mcp"),
+  addMcp: body => req("/mcp", { method: "POST", body: JSON.stringify(body) }),
+  patchMcp: (id, body) => req(`/mcp/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMcp: id => req(`/mcp/${id}`, { method: "DELETE" }),
+  testMcp: id => req(`/mcp/${id}/test`, { method: "POST" }),
+  mcpBindings: id => req(`/mcp/bindings/${id}`),
+  bindMcp: (id, server_ids) => req(`/mcp/bindings/${id}`, { method: "PUT", body: JSON.stringify({ server_ids }) }),
+  smtp: () => req("/smtp"),
+  saveSmtp: body => req("/smtp", { method: "PUT", body: JSON.stringify(body) }),
+  testSmtp: to => req("/smtp/test", { method: "POST", body: JSON.stringify({ to }) }),
 });

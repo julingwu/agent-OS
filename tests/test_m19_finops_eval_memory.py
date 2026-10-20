@@ -98,12 +98,20 @@ def test_eval_baseline_and_mock_regression(conn, monkeypatch):
 
 
 def test_experience_capture_and_injection(conn, monkeypatch):
+    from app import identity
+    reviewer = identity.issue(conn, name="经验审核人", role="ceo", legal_entity_id="LE-FIN")
+    conn.commit()
     e = experience.add(conn, kind="rejection", title="驳回：记账小程序",
                        content="任务《记账小程序》被驳回：金额精度判据未过。下次先做金额四舍五入与负数校验。",
                        tags=["dev", "记账"], source_type="task", source_id="T-old",
-                       task_id=None)
+                       task_id=None, entity="LE-FIN")
     assert e["id"].startswith("EXP")
-    ctx = experience.context_for(conn, "开发一个记账小程序，要求金额精确", record=False)
+    assert e["state"] == "pending"
+    assert experience.context_for(conn, "开发一个记账小程序，要求金额精确",
+                                  entity="LE-FIN", record=False)["count"] == 0
+    experience.review(conn, e["id"], "approve", reviewer=reviewer["id"], entity="LE-FIN")
+    ctx = experience.context_for(conn, "开发一个记账小程序，要求金额精确",
+                                 entity="LE-FIN", record=False)
     assert ctx["count"] >= 1
     assert "金额精度" in ctx["text"]
 
@@ -122,5 +130,5 @@ def test_experience_capture_and_injection(conn, monkeypatch):
     row = conn.execute("SELECT * FROM ai_audit_logs WHERE action='experience_injected'"
                        " ORDER BY rowid DESC LIMIT 1").fetchone()
     assert row is not None and proj["project_id"] in (row["target"] or "")
-    stats = experience.stats(conn)
+    stats = experience.stats(conn, entity="LE-FIN")
     assert stats["total"] >= 1 and stats["layers"]["org_experiences"] >= 1

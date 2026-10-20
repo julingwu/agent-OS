@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS tool_approvals (
 
 # v2.3 增量列：老库直接 ALTER，不重建表
 COLUMNS = {
+    "tenant_id": "TEXT DEFAULT 'TENANT-HQ'",
     "run_id": "TEXT",
     "task_id": "TEXT",
     "chat_id": "TEXT",
@@ -87,12 +88,44 @@ READ_TOOLS = {"read", "read_file", "view", "cat", "glob", "grep", "list", "ls"}
 
 
 def ensure(conn) -> None:
-    conn.executescript(DDL)
+    for statement in DDL.split(";"):
+        if statement.strip():
+            conn.execute(statement)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(tool_approvals)")}
     for name, decl in COLUMNS.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE tool_approvals ADD COLUMN {name} {decl}")
-    conn.commit()
+    where = "1=1" if "tenant_id" not in cols else "COALESCE(tenant_id,'')=''"
+    for row in conn.execute(f"SELECT * FROM tool_approvals WHERE {where}").fetchall():
+        tid = _context_tenant(conn, task_id=row["task_id"], run_id=row["run_id"],
+                              agent_id=row["agent_id"], chat_id=row["chat_id"])
+        conn.execute("UPDATE tool_approvals SET tenant_id=? WHERE id=?", (tid, row["id"]))
+
+
+def _context_tenant(conn, *, task_id=None, run_id=None, agent_id=None, chat_id=None,
+                    entity=None) -> str:
+    """Resolve the owning graph, including old standalone approval records."""
+    from .tenancy import DEFAULT_TENANT
+    for table, key in (("tasks", task_id), ("task_runs", run_id), ("chats", chat_id)):
+        if key and _has_table(conn, table):
+            columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if "tenant_id" in columns:
+                row = conn.execute(f"SELECT tenant_id FROM {table} WHERE id=?", (key,)).fetchone()
+                if row and row["tenant_id"]:
+                    return row["tenant_id"]
+    if _has_table(conn, "legal_entities"):
+        for table in ("ai_employees", "identities"):
+            if agent_id and _has_table(conn, table):
+                row = conn.execute(f"""SELECT le.tenant_id FROM {table} a
+                    JOIN legal_entities le ON le.id=a.legal_entity_id WHERE a.id=?""",
+                                   (agent_id,)).fetchone()
+                if row and row["tenant_id"]:
+                    return row["tenant_id"]
+        if entity:
+            row = conn.execute("SELECT tenant_id FROM legal_entities WHERE id=?", (entity,)).fetchone()
+            if row and row["tenant_id"]:
+                return row["tenant_id"]
+    return DEFAULT_TENANT
 
 
 # ------------------------------------------------------------------ 资源/授权
@@ -212,12 +245,14 @@ def guard_tool(conn, *, agent_id: str, tool: str, args: dict | None = None,
     if not force and tool not in HIGH_RISK:
         return {"needs_approval": False}
     aid = "AP-" + secrets.token_hex(6)
+    ap_tenant = _context_tenant(conn, task_id=task_id, run_id=run_id, agent_id=agent_id,
+                                chat_id=chat_id, entity=entity)
     conn.execute(
         """INSERT INTO tool_approvals
-             (id, agent_id, tool, args, state, reason, run_id, task_id, chat_id,
+             (id, agent_id, tool, args, state, tenant_id, reason, run_id, task_id, chat_id,
               session_id, resource_id, resume_prompt, risk, target)
-           VALUES (?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?)""",
-        (aid, agent_id, tool, json.dumps(args or {}, ensure_ascii=False), reason,
+           VALUES (?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?)""",
+        (aid, agent_id, tool, json.dumps(args or {}, ensure_ascii=False), ap_tenant, reason,
          run_id, task_id, chat_id, session_id, resource_id, resume_prompt, risk, target))
     conn.commit()
     write_audit(conn, legal_entity_id=entity, verb="rbac", task_id=task_id, run_id=run_id,

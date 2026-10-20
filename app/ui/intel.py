@@ -84,7 +84,8 @@ def pref_block(prefs: dict[str, str]) -> str:
 
 def org_digest(conn: sqlite3.Connection, entity: str | None) -> str:
     ents = conn.execute(
-        "SELECT id, name, type, parent_entity_id FROM legal_entities WHERE COALESCE(state,'active')='active'").fetchall()
+        "SELECT id, name, type, parent_entity_id FROM legal_entities"
+        " WHERE COALESCE(state,'active')='active' AND id=?", (entity,)).fetchall()
     lines = ["【组织架构】"]
     for e in ents:
         lines.append(f"- {e['name']}（{e['type']}，{e['id']}）")

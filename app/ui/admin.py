@@ -77,6 +77,12 @@ def invite_members(chat_id: str, payload: MembersIn, token: str | None = Auth):
     who = _require(token)
     with get_conn() as conn:
         _row_for(conn, chat_id)
+        from .access import actor_for, owned
+        actor = actor_for(conn, token, manage=True)
+        owned(conn, "chats", chat_id, actor, write=True, code="ChatNotFound")
+        # Validate the complete batch before adding any membership.
+        for emp_id in payload.employee_ids:
+            owned(conn, "employees", emp_id, actor, write=True, code="EmployeeNotFound")
         added = []
         for emp_id in payload.employee_ids:
             emp = conn.execute("SELECT * FROM ai_employees WHERE id=?", (emp_id,)).fetchone()
@@ -321,6 +327,8 @@ def files(token: str | None = Auth, limit: int = 100, include_legacy: int = 0):
         scoped, scoped_args = tenant.clause(conn, actor, "t.legal_entity_id")
         where += " AND " + scoped
         args.extend(scoped_args)
+        where += " AND t.tenant_id=?"
+        args.append(actor["tenant_id"])
         rows = conn.execute(
             f"""SELECT a.id, a.file_path, a.bytes, a.created_at, r.task_id, t.title,
                        t.legal_entity_id
@@ -347,8 +355,8 @@ def _scoped_artifact(conn, artifact_id: str, token: str | None = None, *, actor=
     row = conn.execute(
         "SELECT a.* FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
         " JOIN tasks t ON t.id=r.task_id"
-        " WHERE a.id=? AND COALESCE(a.state,'active')='active' AND " + scoped,
-        [artifact_id, *args]).fetchone()
+        " WHERE a.id=? AND COALESCE(a.state,'active')='active' AND t.tenant_id=? AND " + scoped,
+        [artifact_id, actor["tenant_id"], *args]).fetchone()
     if row is None:
         raise HTTPException(404, detail={"code": "FileNotFound"})
     return row
