@@ -247,8 +247,12 @@ class SettingsIn(BaseModel):
     default_model: str | None = None
     default_api_base: str | None = None
     theme: str | None = None
-    # v4.2.1：单阶段 token 预算，界面可调（5k–50 万），保存后下一个阶段立即生效
+    # v4.2.1：单阶段 token 预算（老项目兜底，界面已改为弹性系数）
     flow_stage_budget: int | None = None
+    # v4.3：动态财务引擎的兜底安全锁
+    budget_elastic: float | None = None
+    project_budget_cap: int | None = None
+    budget_pause_ratio: float | None = None
 
 
 @router.get("/settings")
@@ -257,15 +261,19 @@ def get_settings(token: str | None = Auth):
     with get_conn() as conn:
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
     vals = {r["key"]: r["value"] for r in rows}
-    from .. import flows
+    from .. import flows, finance
     with get_conn() as conn:
         budget = flows.stage_budget(conn)
+        fin = finance.config(conn)
     return {"default_model": vals.get("default_model") or os.environ.get("LLM_MODEL", "deepseek-chat"),
             "default_api_base": vals.get("default_api_base") or os.environ.get("LLM_API_BASE", "https://api.deepseek.com/v1"),
             "theme": vals.get("theme") or "dark",
             "flow_stage_budget": budget,
             "flow_stage_budget_source": ("settings" if vals.get("flow_stage_budget")
                                           else "env"),
+            "budget_elastic": fin["elastic"],
+            "project_budget_cap": fin["cap"],
+            "budget_pause_ratio": fin["pause_ratio"],
             "api_key_set": bool(os.environ.get("DEEPSEEK_API_KEY"))}
 
 
@@ -274,6 +282,9 @@ def put_settings(payload: SettingsIn, token: str | None = Auth):
     who = _require(token)
     data = payload.model_dump()
     budget = data.pop("flow_stage_budget", None)
+    elastic = data.pop("budget_elastic", None)
+    cap = data.pop("project_budget_cap", None)
+    pause_ratio = data.pop("budget_pause_ratio", None)
     with get_conn() as conn:
         if budget is not None:
             from .. import flows
@@ -281,6 +292,12 @@ def put_settings(payload: SettingsIn, token: str | None = Auth):
                 flows.set_stage_budget(conn, int(budget))
             except (TypeError, ValueError):
                 raise HTTPException(400, detail={"code": "InvalidFlowBudget"}) from None
+        if any(v is not None for v in (elastic, cap, pause_ratio)):
+            from .. import finance
+            try:
+                finance.set_config(conn, elastic=elastic, cap=cap, pause_ratio=pause_ratio)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, detail={"code": str(exc)}) from None
         for k, v in data.items():
             if v is None:
                 continue

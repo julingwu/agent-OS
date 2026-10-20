@@ -523,7 +523,8 @@ def _stopped_before_prompt(conn: sqlite3.Connection, run_id: str, *, runner: str
 
 def execute_run(conn: sqlite3.Connection, run_id: str, *, prompt: str | None = None,
                 runner: str | None = None, resume_session: str | None = None,
-                budget_tokens: int | None = None) -> dict:
+                budget_tokens: int | None = None,
+                pause_at_tokens: int | None = None) -> dict:
     run = conn.execute("SELECT * FROM task_runs WHERE id = ?", (run_id,)).fetchone()
     if run is None:
         raise HTTPException(404, detail={"code": "RunNotFound", "run_id": run_id})
@@ -572,7 +573,8 @@ def execute_run(conn: sqlite3.Connection, run_id: str, *, prompt: str | None = N
         return _execute_locked(conn, run_id=run_id, task_id=task_id, entity=entity,
                                actor=actor, prompt=prompt, runner=runner,
                                resume_session=resume_session, est_tokens=est_tokens,
-                               timeout=timeout, hb_interval=hb_interval)
+                               timeout=timeout, hb_interval=hb_interval,
+                               pause_at_tokens=pause_at_tokens)
     finally:
         locks.release(conn, task_resource, run_id)
         if session_resource:
@@ -581,7 +583,8 @@ def execute_run(conn: sqlite3.Connection, run_id: str, *, prompt: str | None = N
 
 def _execute_locked(conn: sqlite3.Connection, *, run_id: str, task_id: str, entity: str,
                     actor: str, prompt: str, runner: str, resume_session: str | None,
-                    est_tokens: int, timeout: int, hb_interval: int) -> dict:
+                    est_tokens: int, timeout: int, hb_interval: int,
+                    pause_at_tokens: int | None = None) -> dict:
     _assert_startable(conn, run_id, resume_session)
     try:
         ensure_not_stopped(conn, run_id)
@@ -631,7 +634,8 @@ def _execute_locked(conn: sqlite3.Connection, *, run_id: str, task_id: str, enti
             from .runner_acp import execute_acp
             return execute_acp(conn, run_id, task_id=task_id, entity=entity, actor=actor,
                                prompt=prompt, runner=runner, resume_session=resume_session,
-                               est_tokens=est_tokens, timeout=timeout, hb_interval=hb_interval)
+                               est_tokens=est_tokens, timeout=timeout, hb_interval=hb_interval,
+                               pause_at_tokens=pause_at_tokens)
         return _execute_headless(conn, run_id, task_id=task_id, entity=entity, actor=actor,
                                  prompt=prompt, runner=runner, resume_session=resume_session,
                                  est_tokens=est_tokens, timeout=timeout, hb_interval=hb_interval)

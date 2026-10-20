@@ -143,7 +143,9 @@ def _redact_mcp(value, secrets):
 
 def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: str,
                 actor: str, prompt: str, runner: str, resume_session: str | None,
-                est_tokens: int, timeout: int, hb_interval: int) -> dict:
+                est_tokens: int, timeout: int, hb_interval: int,
+                pause_at_tokens: int | None = None) -> dict:
+    """pause_at_tokens：本 run 内允许消耗的 token 数，达到即暂停（v4.3 预算池）。"""
     ws = base.task_workspace(task_id, actor)
     from . import sandbox_env
     env = sandbox_env.build_env(ws)
@@ -197,7 +199,9 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
           "sid": resume_session, "updates": 0, "tool_calls": 0, "policy_violation": None,
           "approval": None, "last_used": 0,
           # v4.2 战役二：工具预算（搜索/抓取次数硬上限，超限即中断）
-          "search_calls": 0, "fetch_calls": 0, "tool_cap": None}
+          "search_calls": 0, "fetch_calls": 0, "tool_cap": None,
+          # v4.3：预算池 80% 暂停线（pause_at 是绝对 token 数，含 baseline）
+          "budget_pause": None}
     prompt_started = False
     credential_values = []
     started = time.time()
@@ -315,6 +319,23 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
                     rec.add_tokens(delta)
                     st["last_used"] = used
                 st["checks"] += 1
+                pause_abs = (baseline + int(pause_at_tokens)) if pause_at_tokens else None
+                if (pause_abs and used >= pause_abs and not st["cancelled"]
+                        and not st["budget_pause"]):
+                    # v4.3 战役二：花到分配额度的 80% 不再「跑到死」，先停下来要钱
+                    st["budget_pause"] = {"used": used - baseline, "quota": est_tokens,
+                                          "threshold": int(pause_at_tokens or 0)}
+                    st["cancelled"] = True
+                    client.cancel(sid)
+                    write_audit(
+                        conn, legal_entity_id=entity, verb="budget_check", task_id=task_id,
+                        run_id=run_id, layer="system", action="budget_pause", target=run_id,
+                        payload={"used": used - baseline, "quota": est_tokens,
+                                 "pause_at": int(pause_at_tokens or 0),
+                                 "checks": st["checks"]},
+                        response={"paused": True, "reason": "budget_pause"})
+                    conn.commit()
+                    return
                 if used > cap and not st["cancelled"]:
                     st["cancelled"] = True
                     client.cancel(sid)
@@ -460,6 +481,15 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
                    "parked_ms": trace.now_run(conn, run_id)})
 
     ok = (not cancelled) and (not error) and st["stop_reason"] == "end_turn"
+    if st.get("budget_pause"):
+        # v4.3：花到 80% 主动停 —— run 记 budget_pause，阶段转 awaiting_budget 并出审批卡
+        return base.finish(
+            conn, run_id=run_id, task_id=task_id, entity=entity, runner=runner, ok=False,
+            reason="budget_pause", exit_code=5, session_id=st["sid"],
+            used=delta, event_count=st["updates"], artifacts=artifacts,
+            final=st["final"], usage_total=st["used"], baseline=baseline,
+            extra={"budget_pause": st["budget_pause"], "tool_calls": st["tool_calls"],
+                   "usage_total": st["used"], "usage_baseline": baseline})
     if st.get("tool_cap"):
         # 次数超限被底座中断：错误文案直接进 run.error，界面诊断能读懂
         reason, exit_code = "tool_cap_exceeded", 3

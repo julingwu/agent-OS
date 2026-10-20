@@ -2605,3 +2605,50 @@ button .icon { flex-shrink: 0; }
 .stage-detail .fin-table th, .stage-detail .fin-table td { white-space: nowrap; }
 .stage-detail .fin-table td:nth-child(2) { white-space: normal; }
 .stage-detail.modal.wide, .modal.wide.stage-detail { max-width: 1080px; width: 92vw; }
+
+/* ---------------------------------------------- V4.3 动态财务预算 */
+.budget-bar {
+  margin: 8px 0 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--card); border: 1px solid var(--border);
+}
+.budget-top { display: flex; gap: 16px; align-items: baseline; flex-wrap: wrap; font-size: 12px; }
+.budget-top b { font-variant-numeric: tabular-nums; }
+.budget-left.warn b { color: #e5484d; }
+.budget-track {
+  height: 6px; margin: 8px 0 10px; border-radius: 4px;
+  background: var(--border); overflow: hidden;
+}
+.budget-fill { height: 100%; background: var(--accent); transition: width .25s ease; }
+.budget-fill.warn { background: #e5484d; }
+.budget-stages { display: flex; flex-wrap: wrap; gap: 6px; }
+.budget-stage {
+  display: flex; gap: 6px; align-items: baseline; font-size: 11px;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border);
+  background: transparent; color: var(--muted);
+}
+.budget-stage .bs-num { font-variant-numeric: tabular-nums; }
+.budget-stage .bs-pct { color: var(--accent); }
+.budget-stage.warn { border-color: #e5484d66; color: #e5484d; }
+.budget-stage.warn .bs-pct { color: #e5484d; }
+.budget-stage.ask { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+.budget-ask {
+  margin: 0 0 12px; padding: 10px 12px; border-radius: 10px;
+  border: 1px dashed #e5484d99; background: color-mix(in srgb, #e5484d 8%, transparent);
+}
+.budget-ask-row { display: flex; gap: 12px; justify-content: space-between; align-items: center; }
+.budget-ask-row p { margin: 2px 0 0; }
+.budget-ask-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.flow-node.awaiting_budget { border-color: #e5484d; color: #e5484d; }
+.flow-node.halted { opacity: .6; }
+.fin-budget-row { display: flex; gap: 12px; align-items: center; font-size: 12px; }
+
+/* v4.3 修复：带阶段全景的气泡不要被 flex 挤成 1 字宽 */
+.bubble:has(.flow) { flex: 1 1 auto; min-width: min(100%, 380px); }
+.budget-top { row-gap: 4px; }
+.budget-ask-row { flex-wrap: wrap; }
+.budget-ask-row > div:first-child { flex: 1 1 220px; min-width: 0; }
+
+/* v4.3：阶段全景 + 预算条横跨整卡（原来被 grid 挤进一格） */
+.stages > .flow { grid-column: 1 / -1; }

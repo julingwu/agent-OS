@@ -92,6 +92,21 @@ def _dispatch(tenant_id: str, notify_id: str, event: str, body: str) -> None:
     threading.Thread(target=deliver, daemon=True, name="oa-notify").start()
 
 
+def push_event(conn, *, pid: str, event: str, body: str,
+               tenant_id: str | None = None, ref: str | None = None) -> str | None:
+    """通用事件推送（预算暂停/追加/停摆）。没配 webhook 时只落 notifications。"""
+    p = conn.execute("SELECT tenant_id,legal_entity_id,name FROM projects WHERE id=?",
+                     (pid,)).fetchone()
+    tenant = tenant_id or (p["tenant_id"] if p else "TENANT-HQ")
+    entity = p["legal_entity_id"] if p else "LE-GROUP-HQ"
+    subject = (p["name"] if p else pid) or pid
+    notify_id = _record(conn, tenant_id=tenant, entity=entity, event=event,
+                        ref=ref or pid, subject=f"{event} · {subject}", body=body)
+    if notify_id:
+        _dispatch(tenant, notify_id, event, body)
+    return notify_id
+
+
 def project_closed(conn, pid: str) -> dict | None:
     """Push once when every stage of a project is done (9/9 商业闭环)."""
     p = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()

@@ -1502,12 +1502,108 @@ def project_detail(project_id: str, oa_ui: str | None = Depends(_token)):
             "SELECT * FROM workshop_turns WHERE workshop_id=? ORDER BY round, rowid",
             (ws["id"],))] if ws else []
         tl = pipeline.timeline(conn, project_id)
+        budget = _budget_of(conn, project_id)
     can_manage = actor["role"] in {"ceo", "system"} and (
         actor["role"] == "system" or p["legal_entity_id"] == tenant.entity_of(actor))
     return {"project": dict(p), "allowed_actions": (["configure", "retry"] if can_manage else []),
             "stages": stages, "gates": gates, "deliverables": dels,
             "wbs": wbs, "workshop": dict(ws) if ws else None, "turns": turns,
-            "timeline": tl}
+            "timeline": tl, "budget": budget}
+
+
+def _budget_of(conn, pid: str) -> dict:
+    try:
+        from .. import finance
+        return finance.overview(conn, pid)
+    except Exception as exc:             # noqa: BLE001 - 预算表没建好也不该打不开项目
+        import logging
+        logging.getLogger("ui.api").warning("budget overview failed for %s: %s", pid, exc)
+        return {"project_id": pid, "pool": 0, "spent": 0, "remaining": 0, "stages": [],
+                "state": "unknown"}
+
+
+# ------------------------------------------- 预算池（v4.3）
+class BudgetDecisionIn(BaseModel):
+    approve: bool = True
+    tokens: int | None = None
+
+
+@router.get("/projects/{project_id}/budget")
+def project_budget(project_id: str, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        return _budget_of(conn, project_id)
+
+
+@router.get("/budgets/projects")
+def budget_projects(limit: int = 30, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        from .. import finance
+        return {"projects": finance.recent_projects(conn, limit=limit)}
+
+
+@router.get("/budgets/approvals")
+def budget_approvals(limit: int = 50, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        from .. import finance
+        return {"approvals": finance.pending(conn, limit=limit)}
+
+
+@router.post("/budgets/approvals/{approval_id}")
+def budget_decide(approval_id: str, payload: BudgetDecisionIn,
+                  oa_ui: str | None = Depends(_token)):
+    who = _require(oa_ui)
+    with get_conn() as conn:
+        from .. import finance
+        try:
+            return finance.decide(conn, approval_id, approve=payload.approve,
+                                  actor=who, tokens=payload.tokens)
+        except KeyError:
+            raise HTTPException(404, detail={"code": "ApprovalNotFound"}) from None
+        except ValueError:
+            raise HTTPException(409, detail={"code": "ApprovalAlreadyDecided"}) from None
+
+
+@router.post("/projects/{project_id}/resume")
+def project_resume(project_id: str, oa_ui: str | None = Depends(_token)):
+    """预算批下来后继续跑：把未完成阶段复位，从断点接着推进。"""
+    _require(oa_ui)
+    with get_conn() as conn:
+        from .. import finance, pipeline
+        pipeline.ensure(conn)
+        row = conn.execute("SELECT requirement,state FROM projects WHERE id=?",
+                           (project_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, detail={"code": "ProjectNotFound"})
+        ov = finance.overview(conn, project_id)
+        if ov.get("state") == "halted":
+            raise HTTPException(409, detail={"code": "BudgetHalted",
+                                             "message": "项目预算池已见底，不能再开工"})
+        keys = [r["key"] for r in conn.execute(
+            "SELECT key,state FROM project_stages WHERE project_id=? ORDER BY seq",
+            (project_id,)).fetchall() if r["state"] != "done"]
+        if not keys:
+            return {"ok": True, "already_done": True}
+        conn.execute("UPDATE project_stages SET state='pending' WHERE project_id=?"
+                     " AND state<>'done'", (project_id,))
+        conn.execute("UPDATE projects SET state='active' WHERE id=?", (project_id,))
+        finance.set_state(conn, project_id, "active")
+        conn.commit()
+        requirement = row["requirement"] or ""
+
+    def _worker() -> None:
+        from ..db import get_conn as _gc
+        with _gc() as c2:
+            try:
+                pipeline.run_project(c2, project_id, requirement, keys=keys)
+            except Exception:            # noqa: BLE001 - 后台线程不能炸
+                pass
+            c2.commit()
+
+    threading.Thread(target=_worker, daemon=True, name="oa-resume").start()
+    return {"ok": True, "project_id": project_id, "resuming": keys}
 
 
 # ------------------------------------------- 阶段详情 / 流程模板（v4.1）

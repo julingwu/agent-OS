@@ -651,6 +651,9 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     if project is None:
         raise KeyError(pid)
     tenant_id = project["tenant_id"]
+    from . import finance
+    if finance.overview(conn, pid)["state"] == "halted":
+        raise finance.BudgetHalt(f"项目 {pid} 的预算池已见底，已强制停摆")
     people = ui_roles.pick(conn, [node["role"]], entity_id=entity)
     if not people:
         raise PermissionError("FlowEmployeeRequired")
@@ -674,12 +677,42 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     except Exception:                    # noqa: BLE001
         pass
     conn.commit()
-    out = dsh_adapter.execute_run(conn, run_id,
-                                  runner=os.environ.get("UI_RUNNER", "acp"),
-                                  budget_tokens=flows.stage_budget(conn))
+    q = finance.quota(conn, pid, node["key"])
+    if q is None:                                  # 老项目没预算表：退回固定额度
+        quota_total, stage_spent = flows.stage_budget(conn), 0
+    else:
+        quota_total, stage_spent = q["quota"], q["spent"]
+    left = quota_total - stage_spent
+    if left <= 0:
+        approval = finance.request_topup(
+            conn, pid, node["key"], actor=actor_id, tenant_id=tenant_id,
+            reason=f"阶段 {node['key']} 的额度已耗尽，无法开工")
+        raise finance.BudgetPause(
+            f"阶段 {node['key']} 额度已耗尽（{stage_spent:,}/{quota_total:,}），等待追加预算",
+            approval["id"], node["key"], approval["requested_tokens"])
+    out = dsh_adapter.execute_run(
+        conn, run_id, runner=os.environ.get("UI_RUNNER", "acp"),
+        budget_tokens=max(1000, left),
+        pause_at_tokens=finance.pause_threshold(conn, pid, node["key"]))
+    used = int(out.get("usage_tokens") or 0)
+    if q is not None:
+        finance.spend(conn, pid, node["key"], used)
+    reason = str(out.get("reason") or "")
+    if out.get("budget_pause") or reason in ("budget_pause", "budget_exhausted_midturn",
+                                             "budget_exhausted"):
+        approval = finance.request_topup(
+            conn, pid, node["key"], actor=actor_id, tenant_id=tenant_id,
+            reason=f"阶段 {node['key']} 已花 {used:,}/{quota_total:,} tokens，"
+                   f"触发 80% 暂停线")
+        finance.mark_stage(conn, pid, node["key"], "awaiting_budget")
+        raise finance.BudgetPause(
+            f"阶段 {node['key']} 触发预算暂停（{used:,}/{quota_total:,}），等待老板追加",
+            approval["id"], node["key"], approval["requested_tokens"])
     state = out.get("task_state")
     if state not in ("pending_review", "completed"):
         raise RuntimeError(f"阶段 {node['key']} 未完成：{state}")
+    if q is not None:
+        finance.mark_stage(conn, pid, node["key"], "done")
     return {"task_id": tid, "run_id": run_id, "employee": employee["id"],
             "state": _flow_verdict(conn, tid, run_id, node)}
 
@@ -1044,7 +1077,19 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
     for key in keys:
         try:
             run_stage(conn, pid, key, requirement)
-        except BaseException:
+        except BaseException as exc:
+            from . import finance as _fin
+            if isinstance(exc, (_fin.BudgetPause, _fin.BudgetHalt)):
+                # 预算是「暂停/停摆」，不是失败：阶段留在原地等老板批钱
+                state = "awaiting_budget" if isinstance(exc, _fin.BudgetPause) else "halted"
+                conn.execute("UPDATE project_stages SET state=? WHERE project_id=? AND key=?"
+                             " AND state<>'done'", (state, pid, key))
+                conn.execute("UPDATE projects SET state=? WHERE id=? AND state<>'done'",
+                             ("paused" if state == "awaiting_budget" else "halted", pid))
+                conn.commit()
+                return {"project_id": pid, "stages": done, "paused": state,
+                        "approval_id": getattr(exc, "approval_id", None),
+                        "detail": str(exc)}
             # v4.1：流程/产线任一阶段失败，阶段与项目都必须落到 blocked，
             # 否则界面上的阶段会永远停在「进行中」（战役四要靠这个定位失败）。
             conn.execute("UPDATE project_stages SET state='blocked'"

@@ -1431,10 +1431,28 @@ function FinOpsView() {
   const [days, setDays] = useState(30);
   const [data, setData] = useState(null);
   const [note, setNote] = useState("");
+  // v4.3：项目预算池 + 待批追加
+  const [budgets, setBudgets] = useState([]);
+  const [pending, setPending] = useState([]);
+  const [busyBudget, setBusyBudget] = useState("");
   const load = useCallback(async () => {
     try { setData(await api.finops(days)); } catch (e) { setNote(e.message || "加载失败"); }
   }, [days]);
+  const loadBudgets = useCallback(async () => {
+    try {
+      const [p, a] = await Promise.all([api.budgetProjects(), api.budgetApprovals()]);
+      setBudgets(p.projects || []); setPending(a.approvals || []);
+    } catch { /* 预算接口挂了不影响财务总览 */ }
+  }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadBudgets(); }, [loadBudgets]);
+
+  async function decideBudget(ap, approve) {
+    setBusyBudget(ap.id);
+    try { await api.decideBudget(ap.id, approve); }
+    catch (e) { setNote(e.message || "审批失败"); }
+    finally { setBusyBudget(""); loadBudgets(); load(); }
+  }
 
   if (!data) return <div className="main"><div className="empty"><span className="spin" /> 正在算账…</div></div>;
   const t = data.totals || {};
@@ -1470,6 +1488,46 @@ function FinOpsView() {
             <div className="fin-kpi"><span>参与员工</span><b>{t.agents || 0}</b></div>
             <div className="fin-kpi"><span>预算池使用</span><b>{cny(data.budget.used_cny)} / {cny(data.budget.limit_cny)}</b>
               <span className="hint">{(data.budget.left_tokens || 0).toLocaleString()} tokens 可用</span></div>
+          </div>
+
+          <div className="fin-cols">
+            <div className="fin-card">
+              <h5>项目预算池（动态财务引擎）</h5>
+              <table className="fin-table">
+                <thead><tr><th>项目</th><th>预算池</th><th>已花</th><th>剩余</th><th /></tr></thead>
+                <tbody>
+                  {(budgets || []).map((b) => (
+                    <tr key={b.project_id}>
+                      <td>{b.name}<span className="hint"> · {b.project_id}</span></td>
+                      <td className="mono">{b.pool.toLocaleString()}</td>
+                      <td className="mono">{b.spent.toLocaleString()}</td>
+                      <td className="mono money">{b.remaining.toLocaleString()}</td>
+                      <td className="hint">{b.state === "paused" ? "暂停待批"
+                        : b.state === "halted" ? "已停摆" : `${b.pct}%`}</td>
+                    </tr>
+                  ))}
+                  {(budgets || []).length === 0 && <tr><td colSpan="5" className="hint">还没有项目预算池</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            <div className="fin-card">
+              <h5>待批追加预算（{pending.length}）</h5>
+              {pending.length === 0
+                ? <p className="hint">没有待批的追加申请。</p>
+                : pending.map((ap) => (
+                  <div key={ap.id} className="fin-budget-row">
+                    <div style={{ flex: 1 }}>
+                      <b>{ap.project_id}</b> · 阶段 {ap.stage_key}
+                      <div className="hint">申请 {ap.requested_tokens.toLocaleString()} tokens
+                        {" · "}池内可用 {ap.remaining.toLocaleString()}</div>
+                    </div>
+                    <button className="btn" disabled={busyBudget === ap.id}
+                            onClick={() => decideBudget(ap, true)}>批准</button>
+                    <button className="btn ghost" disabled={busyBudget === ap.id}
+                            onClick={() => decideBudget(ap, false)}>驳回</button>
+                  </div>
+                ))}
+            </div>
           </div>
 
           <div className="fin-cols">
@@ -1742,7 +1800,8 @@ function FilesTab() {
 /* ------------------------------------------------------------- 设置/账号 */
 function SettingsModal({ onClose, theme, setTheme, onChanged }) {
   const [form, setForm] = useState({ default_model: "", default_api_base: "", theme,
-                                     flow_stage_budget: 20000 });
+                                     flow_stage_budget: 20000, budget_elastic: 1.5,
+                                     project_budget_cap: 1000000, budget_pause_ratio: 0.8 });
   const [jobs, setJobs] = useState([]);
   const [chats, setChats] = useState([]);
   const [job, setJob] = useState({ chat_id: "", title: "每日任务报告", at_time: "09:00" });
@@ -1753,7 +1812,10 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
     (async () => {
       const [s, j, c, k] = await Promise.all([api.settings(), api.jobs(), api.chats(), api.kb()]);
       setForm({ default_model: s.default_model, default_api_base: s.default_api_base,
-                theme: s.theme, flow_stage_budget: s.flow_stage_budget ?? 20000 });
+                theme: s.theme, flow_stage_budget: s.flow_stage_budget ?? 20000,
+                budget_elastic: s.budget_elastic ?? 1.5,
+                project_budget_cap: s.project_budget_cap ?? 1000000,
+                budget_pause_ratio: s.budget_pause_ratio ?? 0.8 });
       setJobs(j.jobs); setChats(c.chats); setKb(k.documents);
       setJob((x) => ({ ...x, chat_id: c.chats.find((y) => y.kind === "group")?.id || c.chats[0]?.id || "" }));
     })();
@@ -1792,20 +1854,23 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
             <input value={form.default_api_base} onChange={(e) => setForm({ ...form, default_api_base: e.target.value })} /></div>
         </div>
 
-        <div className="section-title">成本控制</div>
+        <div className="section-title">成本控制（动态预算）</div>
         <div className="grid2">
-          <div className="field"><label>单阶段 Token 预算（默认 2 万）</label>
-            <input type="number" min="5000" max="500000" step="1000"
-                   value={form.flow_stage_budget ?? 20000}
-                   onChange={(e) => setForm({ ...form, flow_stage_budget: Number(e.target.value) })} />
+          <div className="field"><label>默认弹性系数（试错缓冲）</label>
+            <input type="number" min="1" max="5" step="0.1"
+                   value={form.budget_elastic ?? 1.5}
+                   onChange={(e) => setForm({ ...form, budget_elastic: Number(e.target.value) })} />
           </div>
-          <div className="field"><label>&nbsp;</label>
-            <div className="hint" style={{ paddingTop: 8 }}>
-              {form.flow_stage_budget ? `${Math.round(Number(form.flow_stage_budget) / 1000)}k tokens / 阶段` : "—"}
-              {" · "}5k–50 万，保存后下一阶段生效
-            </div>
+          <div className="field"><label>项目全局最高预算（tokens）</label>
+            <input type="number" min="50000" max="50000000" step="50000"
+                   value={form.project_budget_cap ?? 1000000}
+                   onChange={(e) => setForm({ ...form, project_budget_cap: Number(e.target.value) })} />
           </div>
         </div>
+        <p className="hint" style={{ marginTop: -4 }}>
+          财务 Agent 按阶段估基础额度 × 弹性系数 = 初始额度；项目池超上限时等比压缩。
+          {" "}阶段花到 {Math.round((form.budget_pause_ratio ?? 0.8) * 100)}% 自动暂停并要老板批钱。
+        </p>
 
         <div className="section-title">外观</div>
         <div className="row">
@@ -1923,7 +1988,7 @@ function AboutModal({ onClose }) {
     <div className="mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>关于 Agent OS</h3>
-        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "4.2.0"}</span></div>
+        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "4.3.0"}</span></div>
         <div className="row"><span>引擎</span><div className="spacer" /><span className="mono">{info?.engine || "DSH (ACP) + FastAPI"}</span></div>
         <div className="row"><span>外壳</span><div className="spacer" /><span className="mono">{info?.shell || "Tauri 2 / React 18"}</span></div>
         <div className="row"><span>冻结基线</span><div className="spacer" /><span className="mono">{info?.frozen_baseline || "v1.0.0"}</span></div>

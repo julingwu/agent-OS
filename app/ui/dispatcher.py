@@ -86,7 +86,8 @@ def open_group(conn, text: str, plan: dict, *, entity_id: str = "LE-GROUP-HQ",
     return {"chat_id": chat["id"], "members": members}
 
 
-def plan_message(pid: str, plan: dict, group: dict | None) -> str:
+def plan_message(pid: str, plan: dict, group: dict | None,
+                 budget: dict | None = None) -> str:
     lines = [f"## 作战计划 · {pid}",
              f"流程：**{plan['name']}**（{len(plan['nodes'])} 步）｜规划依据："
              f"{plan['how']}{'：' + plan['reason'] if plan['reason'] else ''}", "",
@@ -98,6 +99,9 @@ def plan_message(pid: str, plan: dict, group: dict | None) -> str:
     if group and group.get("members"):
         lines += ["", "群成员：" + "、".join(
             f"{m['name']}（{m['tag']}）" for m in group["members"])]
+    if budget:
+        from .. import finance
+        lines += [finance.plan_table(budget)]
     lines += ["", "执行按上表依赖推进；每段产出先写黑板，PM 收尾时汇总。"]
     return "\n".join(lines)
 
@@ -167,22 +171,29 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
                                    use_llm_docs=use_llm_docs, tenant_id=tenant_id,
                                    flow=plan)
     pid = proj["project_id"]
+    from .. import finance
+    budget = finance.open_project(conn, pid, plan["nodes"], requirement=text,
+                                  flow_id=plan.get("flow_id") or "", tenant_id=tenant_id)
 
     group = open_group(conn, text, plan, entity_id=entity_id, tenant_id=tenant_id)
     if group:
-        store.add_message(conn, group["chat_id"], "agent", plan_message(pid, plan, group),
+        store.add_message(conn, group["chat_id"], "agent",
+                          plan_message(pid, plan, group, budget=budget),
                           author=CEO_TITLE, kind="plan",
                           meta=json.dumps({"project_id": pid, "flow_id": plan["flow_id"],
-                                           "nodes": [n["key"] for n in plan["nodes"]]},
+                                           "nodes": [n["key"] for n in plan["nodes"]],
+                                           "budget_pool": budget["pool"]},
                                           ensure_ascii=False))
 
     store.add_message(conn, ceo_chat_id, "agent",
                       f"已立项 {pid}，流程【{plan['name']}】{len(plan['nodes'])} 步"
                       f"（{'/'.join(n['title'] for n in plan['nodes'])}）。"
+                      f"预算池 {budget['pool']:,} tokens（弹性 {budget['elastic']:g}）。"
                       f"标签【{'/'.join(tags) or '未识别'}】·{plan['how']}",
                       author=CEO_TITLE, kind="project",
                       meta=json.dumps({"project_id": pid, "flow_id": plan["flow_id"],
                                        "use_llm_docs": bool(use_llm_docs),
+                                       "budget_pool": budget["pool"],
                                        "group_id": group["chat_id"] if group else None},
                                       ensure_ascii=False))
 

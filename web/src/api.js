@@ -236,6 +236,16 @@ Object.assign(api, {
   stageFileUrl: (pid, key, id) => api.withToken(`/projects/${pid}/stages/${key}/files/${id}`),
 });
 
+// V4.3 动态财务预算引擎
+Object.assign(api, {
+  budget: (pid) => req(`/projects/${pid}/budget`),
+  budgetProjects: () => req("/budgets/projects"),
+  budgetApprovals: () => req("/budgets/approvals"),
+  decideBudget: (id, approve, tokens) =>
+    req(`/budgets/approvals/${id}`, { method: "POST", body: JSON.stringify({ approve, tokens }) }),
+  resumeProject: (pid) => req(`/projects/${pid}/resume`, { method: "POST", body: "{}" }),
+});
+
 // 项目级开关（v1.6.1）
 Object.assign(api, {
   patchProject: (id, body) => req(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),

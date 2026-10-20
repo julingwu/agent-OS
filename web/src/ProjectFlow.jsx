@@ -3,7 +3,10 @@ import { api } from "./api.js";
 
 // V4.1：阶段全景 + 实时执行流 + 失败诊断。都挂在项目卡上，不新开页面。
 
-const STAGE_STATE = { done: "已完成", active: "进行中", pending: "待开始", blocked: "已失败" };
+const STAGE_STATE = { done: "已完成", active: "进行中", pending: "待开始", blocked: "已失败",
+                      awaiting_budget: "待批预算", halted: "已停摆" };
+
+const fmtTokens = (n) => Number(n || 0).toLocaleString();
 
 const fmtMs = (ms) => (ms >= 1000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms || 0) + "ms");
 
@@ -212,6 +215,87 @@ export function StageDetail({ projectId, stageKey, onClose, onChanged }) {
   );
 }
 
+/* ------------------------------------------------ 预算池（v4.3） */
+export function BudgetBar({ budget }) {
+  if (!budget || !budget.pool) return null;
+  const pct = Math.min(100, Math.round((budget.spent / budget.pool) * 100));
+  const over = pct >= 80;
+  return (
+    <div className="budget-bar" role="region" aria-label="项目预算池">
+      <div className="budget-top">
+        <span>预算池 <b>{fmtTokens(budget.pool)}</b></span>
+        <span>已花 <b>{fmtTokens(budget.spent)}</b></span>
+        <span className={cls2("budget-left", over && "warn")}>
+          剩余 <b>{fmtTokens(budget.remaining)}</b>
+        </span>
+        <span className="hint">
+          弹性 {budget.elastic}{budget.capped ? ` · 已压到全局上限 ${fmtTokens(budget.cap)}` : ""}
+          {" · "}80% 暂停线
+        </span>
+      </div>
+      <div className="budget-track"><div className={cls2("budget-fill", over && "warn")}
+                                       style={{ width: `${pct}%` }} /></div>
+      <div className="budget-stages">
+        {(budget.stages || []).map((s) => (
+          <div key={s.key} className={cls2("budget-stage", s.pct >= 80 && "warn",
+                                           s.state === "awaiting_budget" && "ask")}
+               title={`${s.title}：${fmtTokens(s.spent)} / ${fmtTokens(s.quota)} tokens`}>
+            <span className="bs-name">{s.title}</span>
+            <span className="bs-num">{fmtTokens(s.spent)}/{fmtTokens(s.quota)}</span>
+            <span className="bs-pct">{s.pct}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function BudgetAsk({ projectId, onChanged }) {
+  const [items, setItems] = useState([]);
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  const load = useCallback(() => {
+    api.budgetApprovals()
+      .then((d) => setItems((d.approvals || []).filter((a) => a.project_id === projectId)))
+      .catch(() => {});
+  }, [projectId]);
+  useEffect(() => { load(); }, [load]);
+  if (!items.length) return null;
+
+  async function decide(ap, approve) {
+    setBusy(ap.id); setNote("");
+    try {
+      const out = await api.decideBudget(ap.id, approve);
+      if (out && out.state === "exhausted") setNote("预算池已见底，项目已停摆");
+      else if (approve) await api.resumeProject(projectId);
+    } catch (e) { setNote(e.message || "审批失败"); }
+    finally { setBusy(""); load(); onChanged?.(); }
+  }
+
+  return (
+    <div className="budget-ask" role="region" aria-label="追加预算审批">
+      {items.map((ap) => (
+        <div key={ap.id} className="budget-ask-row">
+          <div>
+            <b>阶段 {ap.stage_key} 额度已用 80%</b>
+            <p className="hint">
+              申请追加 {fmtTokens(ap.requested_tokens)} tokens · 池内可用 {fmtTokens(ap.remaining)}
+              {" · "}{ap.reason || "触发 80% 暂停线"}
+            </p>
+          </div>
+          <div className="budget-ask-actions">
+            <button className="btn" disabled={busy === ap.id}
+                    onClick={() => decide(ap, true)}>批准并继续</button>
+            <button className="btn ghost" disabled={busy === ap.id}
+                    onClick={() => decide(ap, false)}>驳回</button>
+          </div>
+        </div>
+      ))}
+      {note && <div className="hint" role="alert">{note}</div>}
+    </div>
+  );
+}
+
 /* ------------------------------------------------ 阶段全景 */
 export default function ProjectFlow({ projectId, data, onChanged }) {
   const [open, setOpen] = useState(null);
@@ -226,6 +310,8 @@ export default function ProjectFlow({ projectId, data, onChanged }) {
           {data?.project?.flow_id ? ` · ${data.project.flow_id}` : ""} · 点阶段看交付物/审计/Trace
         </span>
       </div>
+      <BudgetBar budget={data?.budget} />
+      <BudgetAsk projectId={projectId} onChanged={onChanged} />
       <ol className="flow-timeline">
         {stages.map((s) => {
           const failed = s.state === "blocked";
