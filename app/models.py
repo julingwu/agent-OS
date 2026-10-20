@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -36,10 +37,13 @@ class ArbitrationIn(BaseModel):
     legal_entity_id: str | None = None
 
 
+ADAPTER_EVENTS = frozenset({"run_started", "run_succeeded", "run_failed", "run_cancelled"})
+
+
 class EmitEventIn(BaseModel):
     run_id: str
     evt_seq: int = Field(ge=1)
-    event_type: str
+    event_type: Literal["run_started", "run_succeeded", "run_failed", "run_cancelled"]
     payload: dict | None = None
     legal_entity_id: str | None = None
 

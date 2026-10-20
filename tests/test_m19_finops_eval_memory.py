@@ -117,7 +117,7 @@ def test_experience_capture_and_injection(conn, monkeypatch):
 
     from app import pipeline
     proj = pipeline.create_project(conn, name="记账 2.0", requirement="开发一个记账小程序",
-                                   entity="LE-FIN")
+                                   entity="LE-FIN", owner=reviewer["id"])
     seen = {}
 
     def fake_stage(conn, pid, key, requirement):

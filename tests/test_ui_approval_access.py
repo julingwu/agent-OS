@@ -68,7 +68,9 @@ def test_lists_are_filtered_before_returning_private_fields(approvals, path, mod
     assert "private-A" in response.text
     assert "private-B" not in response.text
     assert {a["id"] for a in approvals("other", path).json()["pending"]} == {"AP-B", "AP-no-task"}
-    assert approvals("group", path).json()["pending"] == []  # Read-down is not approval authority.
+    # The tenant root owns its standalone legacy approval, but cannot approve
+    # subsidiary requests just because it can read their task summaries.
+    assert {a["id"] for a in approvals("group", path).json()["pending"]} == {"AP-orphan"}
     assert len(approvals("system", path).json()["pending"]) == 4
 
 

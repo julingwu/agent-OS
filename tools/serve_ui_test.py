@@ -58,6 +58,7 @@ def main():
     sys.path.insert(0, str(target))
     from app.db import init_db, get_conn
     from app import identity
+    from app.engine import task_generator
     from app.ui import dispatcher, roles, store
     init_db()
     with get_conn() as conn:
@@ -69,7 +70,24 @@ def main():
         for role in ("ROLE-DEV", "ROLE-CONTENT", "ROLE-QA", "ROLE-DESIGN"):
             if not conn.execute("SELECT id FROM ai_employees WHERE role_id=?", (role,)).fetchone():
                 roles.instantiate(conn, role)
+        conn.execute("INSERT INTO tenants (id,name) VALUES ('TENANT-UI-BETA','隔离租户')")
+        conn.execute("""INSERT INTO legal_entities (id,name,type,parent_entity_id,tenant_id)
+            VALUES ('LE-UI-BETA','隔离租户组织','subsidiary','LE-GROUP-HQ','TENANT-UI-BETA')""")
+        conn.execute("""INSERT INTO legal_entities (id,name,type,parent_entity_id,tenant_id)
+            VALUES ('LE-UI-SUB','总部子公司','subsidiary','LE-GROUP-HQ','TENANT-HQ')""")
+        tenant_identity_id = identity.issue(
+            conn, name="隔离租户 CEO", role="ceo", legal_entity_id="LE-UI-BETA")["id"]
+        subsidiary_identity_id = identity.issue(
+            conn, name="总部子公司 CEO", role="ceo", legal_entity_id="LE-UI-SUB")["id"]
+        beta_employee = roles.instantiate(conn, "ROLE-CONTENT", "LE-UI-BETA")
+        conn.execute("UPDATE ai_employees SET name='隔离租户员工' WHERE id=?", (beta_employee,))
+        conn.execute("UPDATE chats SET title='隔离租户员工' WHERE employee_id=?", (beta_employee,))
+        task_generator.generate(conn, "隔离租户专属任务", legal_entity_id="LE-UI-BETA")
+        task_generator.generate(conn, "总部专属任务", legal_entity_id="LE-GROUP-HQ")
+        conn.commit()
     print(json.dumps({"test_url": f"http://localhost:{options.port}", "test_identity_id": identity_id,
+                      "test_tenant_identity_id": tenant_identity_id,
+                      "test_subsidiary_identity_id": subsidiary_identity_id,
                       "data_dir": str(target), "runner": "mock_acp"}), flush=True)
     import uvicorn
     uvicorn.run("app.main:app", host="127.0.0.1", port=options.port)

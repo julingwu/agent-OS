@@ -210,7 +210,7 @@ def test_m0_8_state_machine_is_enforced_in_the_database(client):
 
     run = spawn(client, t["task_id"])
     bad = client.post("/verbs/emit_event", json={
-        "run_id": run["run_id"], "evt_seq": 1, "event_type": "review_passed"})
+        "run_id": run["run_id"], "evt_seq": 1, "event_type": "run_succeeded"})
     assert bad.status_code == 400
     assert bad.json()["detail"]["code"] == "IllegalStateTransition"
 

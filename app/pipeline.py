@@ -222,6 +222,8 @@ def create_project(conn, *, name: str, requirement: str, entity: str = "LE-GROUP
     if tenant_id is not None and tenant_id != actual_tenant:
         raise PermissionError("TenantMismatch")
     tenant_id = actual_tenant
+    if owner:
+        _execution_actor(conn, owner, entity, tenant_id)
     pid = _id("P")
     conn.execute("""INSERT INTO projects (id, name, requirement, legal_entity_id,
                                            tenant_id,owner_identity, use_llm_docs)
@@ -232,8 +234,9 @@ def create_project(conn, *, name: str, requirement: str, entity: str = "LE-GROUP
                         VALUES (?,?,?,?,?)""", (_id("S"), pid, seq, key, title))
     conn.commit()
     write_audit(conn, legal_entity_id=entity, verb="project", task_id=None,
-                layer="system", action="project_created", target=pid,
-                payload={"name": name, "requirement": requirement[:200]}, response={})
+                actor=owner, layer="system", action="project_created", target=pid,
+                payload={"name": name, "requirement": requirement[:200],
+                         "owner_identity": owner}, response={})
     conn.commit()
     return {"project_id": pid, "stages": len(STAGES)}
 
@@ -594,6 +597,68 @@ def _task_entity(conn, pid: str) -> str:
     return row["legal_entity_id"] if row else "LE-GROUP-HQ"
 
 
+def _execution_actor(conn, owner: str | None, entity: str, tenant_id: str) -> dict:
+    """Resolve an actual initiating identity; never invent a global dispatcher."""
+    from . import identity, tenant, tenancy
+    if not owner:
+        raise PermissionError("ProjectOwnerRequired")
+    ident = identity.get_identity(conn, owner)
+    if ident is None:
+        raise PermissionError("ProjectOwnerInactive")
+    if tenancy.of_identity(conn, owner) != tenant_id or tenancy.of_entity(conn, entity) != tenant_id:
+        raise PermissionError("ProjectOwnerScopeMismatch")
+    legal = conn.execute("SELECT state FROM legal_entities WHERE id=?", (entity,)).fetchone()
+    if legal is None or legal["state"] != "active":
+        raise PermissionError("ProjectEntityInactive")
+    if not identity.has_scope(ident, "task:create"):
+        raise PermissionError("ProjectOwnerForbidden")
+    allowed = (entity in tenant.visible_entities(conn, dict(ident)) if ident["role"] == "system"
+               else ident["legal_entity_id"] == entity)
+    if not allowed:
+        raise PermissionError("ProjectOwnerScopeMismatch")
+    return dict(ident)
+
+
+def _build_employee(conn, item, *, entity: str, tenant_id: str) -> dict:
+    """Choose the WBS role inside its entity, retaining a valid previous assignee."""
+    from .ui import roles
+    from . import tenancy
+    if tenancy.of_entity(conn, entity) != tenant_id:
+        raise PermissionError("ProjectEmployeeScopeMismatch")
+    tag = item["role_tag"] or "dev"
+    tags = [tag] + (["frontend", "backend"] if tag == "dev" else [])
+    marks = ",".join("?" for _ in tags)
+    rows = conn.execute(
+        f"""SELECT e.*,r.tag FROM ai_employees e JOIN role_templates r ON r.id=e.role_id
+            LEFT JOIN positions p ON p.id=e.position_id
+            WHERE e.legal_entity_id=? AND COALESCE(e.status,'online')='online'
+              AND r.state='active' AND r.tag IN ({marks})
+              AND (p.id IS NULL OR (p.legal_entity_id=e.legal_entity_id AND p.state='active'))
+            ORDER BY CASE WHEN r.tag=? THEN 0 ELSE 1 END,e.id""",
+        (entity, *tags, tag)).fetchall()
+    if not rows:
+        # Match the existing dispatcher policy: instantiate a role template only
+        # in the already-authorized project entity, then verify it before use.
+        roles.pick(conn, [tag], entity_id=entity)
+        rows = conn.execute(
+            f"""SELECT e.*,r.tag FROM ai_employees e JOIN role_templates r ON r.id=e.role_id
+                LEFT JOIN positions p ON p.id=e.position_id
+                WHERE e.legal_entity_id=? AND COALESCE(e.status,'online')='online'
+                  AND r.state='active' AND r.tag IN ({marks})
+                  AND (p.id IS NULL OR (p.legal_entity_id=e.legal_entity_id AND p.state='active'))
+                ORDER BY CASE WHEN r.tag=? THEN 0 ELSE 1 END,e.id""",
+            (entity, *tags, tag)).fetchall()
+    if not rows:
+        raise PermissionError("ProjectEmployeeRequired")
+    previous = (conn.execute("SELECT owner_employee_id FROM tasks WHERE id=?", (item["task_id"],))
+                .fetchone() if item["task_id"] else None)
+    if previous:
+        chosen = next((row for row in rows if row["id"] == previous["owner_employee_id"]), None)
+        if chosen:
+            return dict(chosen)
+    return dict(rows[0])
+
+
 def execute_build(conn, pid: str, requirement: str) -> dict:
     """按 WBS 建 task（挂 project_id/stage），再真的调用 ACP 写代码。"""
     import os
@@ -603,7 +668,9 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
     from .engine import dsh_adapter, task_generator
 
     entity = _task_entity(conn, pid)
-    project = conn.execute("SELECT tenant_id FROM projects WHERE id=?", (pid,)).fetchone()
+    project = conn.execute("SELECT tenant_id,owner_identity FROM projects WHERE id=?", (pid,)).fetchone()
+    if project is None:
+        raise KeyError(pid)
     tenant_id = project["tenant_id"]
     items = [r for r in conn.execute(
         "SELECT * FROM wbs_items WHERE project_id=? ORDER BY rowid", (pid,)).fetchall()]
@@ -611,6 +678,9 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
     budget = int(os.environ.get("M0_PROJECT_TASK_BUDGET", "120000"))
 
     stub = os.environ.get("M0_PIPELINE_EXEC", "1") != "1"
+    actor_id = project["owner_identity"]
+    if not stub:
+        actor_id = _execution_actor(conn, actor_id, entity, tenant_id)["id"]
     for it in items:
         if it["role_tag"] == "ops":
             continue
@@ -644,10 +714,18 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
                 continue
         brief = (it["title"] + "：单文件 Python 命令行实现，≤200 行，不引入第三方依赖；"
                  "项目 " + pid + "，需求 " + requirement[:40])
+        employee = None if stub else _build_employee(conn, it, entity=entity, tenant_id=tenant_id)
+        if not stub:
+            # Role selection may perform writes. Recheck the initiating identity
+            # immediately before creating the execution and its durable owner.
+            _execution_actor(conn, actor_id, entity, tenant_id)
         gen = task_generator.generate(conn, brief, legal_entity_id=entity,
                                       pack_id=it["pack_id"], tenant_id=tenant_id)
         tid = gen["task_id"]
-        conn.execute("UPDATE tasks SET project_id=?, stage='build' WHERE id=?", (pid, tid))
+        conn.execute("UPDATE tasks SET project_id=?,stage='build',owner_employee_id=?,"
+                     "owner_position_id=? WHERE id=?",
+                     (pid, employee["id"] if employee else None,
+                      employee["position_id"] if employee else None, tid))
         conn.execute("UPDATE wbs_items SET task_id=?,validation_error=NULL WHERE id=?", (tid, it["id"]))
         conn.commit()
         created += 1
@@ -658,8 +736,8 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
             stub_run = "RUN-STUB-" + _uuid.uuid4().hex[:8]
             conn.execute("INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id,"
                          " tenant_id,state, runner, actor_identity)"
-                         " VALUES (?,?,1,?,?, 'succeeded', 'stub', 'ID-CEO-DISPATCHER')",
-                         (stub_run, tid, entity, tenant_id))
+                         " VALUES (?,?,1,?,?, 'succeeded', 'stub', ?)",
+                         (stub_run, tid, entity, tenant_id, actor_id))
             conn.execute("INSERT INTO artifacts (id, run_id,tenant_id,art_seq,file_path,checksum,bytes)"
                          " VALUES (?,?,?,1,?,?,?)",
                          ("ART-" + _uuid.uuid4().hex[:10], stub_run,tenant_id,str(art),
@@ -681,8 +759,8 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
         run_id = "RUN-" + _uuid.uuid4().hex[:16]
         conn.execute(
             "INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id,tenant_id,state,"
-            " runner, actor_identity) VALUES (?,?,1,?,?, 'spawned', 'acp', 'ID-CEO-DISPATCHER')",
-            (run_id, tid, entity,tenant_id))
+            " runner, actor_identity) VALUES (?,?,1,?,?, 'spawned', 'acp', ?)",
+            (run_id, tid, entity,tenant_id,actor_id))
         # 状态机：todo -> assigned（runner 只会从 assigned 推到 in_progress）
         from . import state_machine as _sm0
         try:
@@ -812,6 +890,13 @@ def accept_check(conn, pid: str) -> tuple[bool, str]:
 
 
 def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None) -> dict:
+    import os
+    if os.environ.get("M0_PIPELINE_EXEC", "1") == "1":
+        project = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        if project is None:
+            raise KeyError(pid)
+        _execution_actor(conn, project["owner_identity"], project["legal_entity_id"],
+                         project["tenant_id"])
     keys = keys or [k for k, _ in STAGES]
     # v2.4 分层记忆：立项时把同类「驳回经验 / 共识结论」注入需求上下文。
     # 注入文本会随立项书/纪要落盘，审计留 experience_injected，可回溯是哪几条。
@@ -852,6 +937,7 @@ def timeline(conn, pid: str) -> list[dict]:
 
 def prepare_retry(conn, pid: str, requirement: str, *, actor: dict) -> dict:
     """Claim a recovery once, retaining prior gates and completed work."""
+    import os
     from . import identity, tenancy
     ensure(conn)
     who = identity.get_identity(conn, actor.get("id", ""))
@@ -865,6 +951,8 @@ def prepare_retry(conn, pid: str, requirement: str, *, actor: dict) -> dict:
             " AND legal_entity_id=?", (pid, tenant_id, who["legal_entity_id"])).fetchone()
         if p is None:
             raise KeyError(pid)
+        if os.environ.get("M0_PIPELINE_EXEC", "1") == "1":
+            _execution_actor(conn, p["owner_identity"], p["legal_entity_id"], p["tenant_id"])
         if p["state"] != "blocked" or p["retry_token"]:
             raise RuntimeError("ProjectRetryUnavailable")
         if not requirement or requirement == p["requirement"].strip():

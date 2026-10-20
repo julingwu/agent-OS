@@ -21,7 +21,9 @@ AGENT_OS_TEST_URL=http://localhost:8078 AGENT_OS_TEST_ID=<test_identity_id> npm 
 ```
 
 PowerShell users can set these environment variables with `$env:NAME="value"`
-before invoking `npm --prefix web run test:browser`. `AGENT_OS_TEST_ID` is required;
+before invoking `npm --prefix web run test:browser`. Set `AGENT_OS_TEST_ID` from
+`test_identity_id`, `AGENT_OS_TEST_TENANT_ID` from `test_tenant_identity_id`, and
+`AGENT_OS_TEST_SUBSIDIARY_ID` from `test_subsidiary_identity_id`. All three are required;
 no local account is hardcoded. The URL is guarded: only HTTP localhost
 with an explicit port is accepted, and port 8077 is prohibited. The suite also
 checks the signed-in identity and refuses a backend with a configured model key.
@@ -48,6 +50,9 @@ configuration responses, SMTP configuration without sending mail, and responsive
 integration forms. `extensions-bindings.spec.js` delays and fails synthetic
 binding reads to verify that loading cannot clear a grant, saves lock the employee
 selection, and stale responses cannot replace the current employee's grants.
+`tenant-access.spec.js` exercises a second tenant's normal login form, reload,
+organization/task isolation, optional department failure, and subsidiary CEO
+denial for deployment-wide configuration changes.
 
 Artifacts and failure traces go to the OS temporary directory. To save the three
 workspace screenshots elsewhere, set `AGENT_OS_TEST_SCREENSHOT_DIR`; filenames

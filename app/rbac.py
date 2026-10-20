@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS tool_approvals (
 # v2.3 增量列：老库直接 ALTER，不重建表
 COLUMNS = {
     "tenant_id": "TEXT DEFAULT 'TENANT-HQ'",
+    "legal_entity_id": "TEXT",
     "run_id": "TEXT",
     "task_id": "TEXT",
     "chat_id": "TEXT",
@@ -95,37 +96,130 @@ def ensure(conn) -> None:
     for name, decl in COLUMNS.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE tool_approvals ADD COLUMN {name} {decl}")
-    where = "1=1" if "tenant_id" not in cols else "COALESCE(tenant_id,'')=''"
+    where = ("1=1" if "tenant_id" not in cols else
+             "COALESCE(tenant_id,'')='' OR COALESCE(legal_entity_id,'')=''")
     for row in conn.execute(f"SELECT * FROM tool_approvals WHERE {where}").fetchall():
-        tid = _context_tenant(conn, task_id=row["task_id"], run_id=row["run_id"],
-                              agent_id=row["agent_id"], chat_id=row["chat_id"])
-        conn.execute("UPDATE tool_approvals SET tenant_id=? WHERE id=?", (tid, row["id"]))
+        context = dict(row)
+        if "tenant_id" not in cols:
+            context["tenant_id"] = None
+        try:
+            tid, entity = approval_owner(conn, context)
+        except PermissionError:
+            # An inconsistent legacy row is quarantined, never reassigned to HQ.
+            continue
+        conn.execute("UPDATE tool_approvals SET tenant_id=?,legal_entity_id=? WHERE id=?",
+                     (tid, entity, row["id"]))
 
 
-def _context_tenant(conn, *, task_id=None, run_id=None, agent_id=None, chat_id=None,
-                    entity=None) -> str:
-    """Resolve the owning graph, including old standalone approval records."""
+def _tenant_root(conn, tenant_id: str) -> str:
+    roots = conn.execute(
+        """SELECT e.id FROM legal_entities e
+           WHERE COALESCE(e.tenant_id,'TENANT-HQ')=?
+             AND NOT EXISTS (SELECT 1 FROM legal_entities p
+                             WHERE p.id=e.parent_entity_id
+                               AND COALESCE(p.tenant_id,'TENANT-HQ')=?)""",
+        (tenant_id, tenant_id)).fetchall()
+    if len(roots) != 1:
+        raise PermissionError("ApprovalScopeMismatch")
+    return roots[0]["id"]
+
+
+def approval_owner(conn, approval) -> tuple[str, str]:
+    """Validate every owning link; no supplied chat can override task ownership.
+
+    Legacy standalone approvals may use their persisted tenant's unique root.
+    Missing task/run links and contradictory tenant/entity links fail closed.
+    This helper does not commit or modify the caller's transaction.
+    """
     from .tenancy import DEFAULT_TENANT
-    for table, key in (("tasks", task_id), ("task_runs", run_id), ("chats", chat_id)):
-        if key and _has_table(conn, table):
-            columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
-            if "tenant_id" in columns:
-                row = conn.execute(f"SELECT tenant_id FROM {table} WHERE id=?", (key,)).fetchone()
-                if row and row["tenant_id"]:
-                    return row["tenant_id"]
-    if _has_table(conn, "legal_entities"):
+    context = dict(approval)
+    entities, tenants = set(), set()
+
+    def add(row):
+        row = dict(row)
+        if row.get("legal_entity_id"):
+            entities.add(row["legal_entity_id"])
+        if row.get("tenant_id"):
+            tenants.add(row["tenant_id"])
+
+    def linked(table, key):
+        if not _has_table(conn, table):
+            raise PermissionError("ApprovalScopeMismatch")
+        row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (key,)).fetchone()
+        if row is None:
+            raise PermissionError("ApprovalScopeMismatch")
+        add(row)
+        return dict(row)
+
+    add(context)
+    run = linked("task_runs", context["run_id"]) if context.get("run_id") else None
+    task_id = context.get("task_id") or (run or {}).get("task_id")
+    if run and run.get("task_id") != task_id:
+        raise PermissionError("ApprovalScopeMismatch")
+    task = linked("tasks", task_id) if task_id else None
+    agent_id = context.get("agent_id")
+    task_agent = (task or {}).get("owner_employee_id")
+    if agent_id not in (None, "", "system") and task_agent and agent_id != task_agent:
+        raise PermissionError("ApprovalScopeMismatch")
+    for employee_id in {agent_id, task_agent} - {None, "", "system"}:
+        found = None
         for table in ("ai_employees", "identities"):
-            if agent_id and _has_table(conn, table):
-                row = conn.execute(f"""SELECT le.tenant_id FROM {table} a
-                    JOIN legal_entities le ON le.id=a.legal_entity_id WHERE a.id=?""",
-                                   (agent_id,)).fetchone()
-                if row and row["tenant_id"]:
-                    return row["tenant_id"]
-        if entity:
-            row = conn.execute("SELECT tenant_id FROM legal_entities WHERE id=?", (entity,)).fetchone()
-            if row and row["tenant_id"]:
-                return row["tenant_id"]
-    return DEFAULT_TENANT
+            if not _has_table(conn, table):
+                continue
+            found = conn.execute(f"SELECT * FROM {table} WHERE id=?", (employee_id,)).fetchone()
+            if found is not None:
+                add(found)
+                break
+        if found is None and employee_id == task_agent:
+            raise PermissionError("ApprovalScopeMismatch")
+    for entity in entities:
+        row = conn.execute("SELECT tenant_id FROM legal_entities WHERE id=?", (entity,)).fetchone()
+        if row is None:
+            raise PermissionError("ApprovalScopeMismatch")
+        tenants.add(row["tenant_id"] or DEFAULT_TENANT)
+    if len(tenants) > 1 or len(entities) > 1:
+        raise PermissionError("ApprovalScopeMismatch")
+    tenant_id = next(iter(tenants), DEFAULT_TENANT)
+    if _has_table(conn, "tenants"):
+        row = conn.execute("SELECT state FROM tenants WHERE id=?", (tenant_id,)).fetchone()
+        if row is None or row["state"] != "active":
+            raise PermissionError("ApprovalScopeMismatch")
+    owner = tenant_id, next(iter(entities)) if entities else _tenant_root(conn, tenant_id)
+    if context.get("chat_id") and not approval_chat_allowed(conn, context["chat_id"], owner):
+        raise PermissionError("ApprovalScopeMismatch")
+    return owner
+
+
+def approval_chat_allowed(conn, chat_id: str, owner: tuple[str, str]) -> bool:
+    """Only a chat whose complete ownership agrees with the approval is usable."""
+    if not _has_table(conn, "chats"):
+        return False
+    row = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
+    if row is None:
+        return False
+    chat = dict(row)
+    tenant_id, entity = owner
+    if chat.get("deleted_at") or (chat.get("tenant_id") or "TENANT-HQ") != tenant_id:
+        return False
+    entities = {chat["entity_id"]} if chat.get("entity_id") else set()
+    employee_ids = {chat["employee_id"]} if chat.get("employee_id") else set()
+    if _has_table(conn, "chat_members"):
+        employee_ids.update(row["employee_id"] for row in conn.execute(
+            "SELECT employee_id FROM chat_members WHERE chat_id=? AND state='active'", (chat_id,)))
+    for employee_id in employee_ids:
+        if not _has_table(conn, "ai_employees"):
+            return False
+        employee = conn.execute("SELECT legal_entity_id FROM ai_employees WHERE id=?",
+                                (employee_id,)).fetchone()
+        if employee is None or not employee["legal_entity_id"]:
+            return False
+        entities.add(employee["legal_entity_id"])
+    if not entities and chat.get("kind") == "ceo":
+        try:
+            entities.add(_tenant_root(conn, tenant_id))
+        except PermissionError:
+            return False
+    return entities == {entity}
 
 
 # ------------------------------------------------------------------ 资源/授权
@@ -231,7 +325,7 @@ def action_for_tool(tool: str) -> str | None:
 
 # ------------------------------------------------------------------ 高危工具审批
 def guard_tool(conn, *, agent_id: str, tool: str, args: dict | None = None,
-               entity: str = "LE-GROUP-HQ", run_id: str | None = None,
+               entity: str | None = None, run_id: str | None = None,
                task_id: str | None = None, session_id: str | None = None,
                chat_id: str | None = None, resource_id: str | None = None,
                target: str | None = None, reason: str = "high-risk tool",
@@ -245,16 +339,18 @@ def guard_tool(conn, *, agent_id: str, tool: str, args: dict | None = None,
     if not force and tool not in HIGH_RISK:
         return {"needs_approval": False}
     aid = "AP-" + secrets.token_hex(6)
-    ap_tenant = _context_tenant(conn, task_id=task_id, run_id=run_id, agent_id=agent_id,
-                                chat_id=chat_id, entity=entity)
+    ap_tenant, entity = approval_owner(conn, {
+        "task_id": task_id, "run_id": run_id, "agent_id": agent_id,
+        "chat_id": chat_id, "legal_entity_id": entity})
+    if run_id and not task_id:
+        task_id = conn.execute("SELECT task_id FROM task_runs WHERE id=?", (run_id,)).fetchone()["task_id"]
     conn.execute(
         """INSERT INTO tool_approvals
-             (id, agent_id, tool, args, state, tenant_id, reason, run_id, task_id, chat_id,
+             (id, agent_id, tool, args, state, tenant_id, legal_entity_id, reason, run_id, task_id, chat_id,
               session_id, resource_id, resume_prompt, risk, target)
-           VALUES (?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?)""",
-        (aid, agent_id, tool, json.dumps(args or {}, ensure_ascii=False), ap_tenant, reason,
+           VALUES (?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?,?)""",
+        (aid, agent_id, tool, json.dumps(args or {}, ensure_ascii=False), ap_tenant, entity, reason,
          run_id, task_id, chat_id, session_id, resource_id, resume_prompt, risk, target))
-    conn.commit()
     write_audit(conn, legal_entity_id=entity, verb="rbac", task_id=task_id, run_id=run_id,
                 layer="system", action="approval_requested", target=aid,
                 payload={"agent": agent_id, "tool": tool, "args": args or {},
@@ -304,10 +400,14 @@ def decide(conn, approval_id: str, approve: bool, by: str = "boss") -> dict:
     row = conn.execute("SELECT * FROM tool_approvals WHERE id=?", (approval_id,)).fetchone()
     if row is None:
         raise ValueError("approval not found")
+    _, entity = approval_owner(conn, row)
+    if row["state"] != "pending":
+        return {"ok": True, "state": row["state"], "approval_id": approval_id,
+                "run_id": row["run_id"], "resumable": False, "already": True}
     state = "approved" if approve else "rejected"
     conn.execute("UPDATE tool_approvals SET state=?, decided_by=?, decided_at=CURRENT_TIMESTAMP"
                  " WHERE id=?", (state, by, approval_id))
-    write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="rbac", task_id=row["task_id"],
+    write_audit(conn, legal_entity_id=entity, verb="rbac", task_id=row["task_id"],
                 run_id=row["run_id"], layer="system",
                 action="approval_" + state, target=approval_id,
                 payload={"tool": row["tool"], "agent": row["agent_id"],
@@ -323,6 +423,10 @@ def decide(conn, approval_id: str, approve: bool, by: str = "boss") -> dict:
 
 def consume(conn, approval_id: str) -> None:
     """一次性放行：审批只换一次工具调用，不能当成长期权限。"""
+    row = get(conn, approval_id)
+    if row is None:
+        raise ValueError("approval not found")
+    approval_owner(conn, row)
     conn.execute("UPDATE tool_approvals SET consumed_at=CURRENT_TIMESTAMP WHERE id=?",
                  (approval_id,))
     conn.commit()
@@ -330,11 +434,14 @@ def consume(conn, approval_id: str) -> None:
 
 def approved_for(conn, run_id: str, resource_id: str, tool: str):
     ensure(conn)
-    return conn.execute(
+    row = conn.execute(
         """SELECT * FROM tool_approvals
            WHERE run_id=? AND resource_id=? AND state='approved'
              AND consumed_at IS NULL
            ORDER BY rowid DESC LIMIT 1""", (run_id, resource_id)).fetchone()
+    if row is not None:
+        approval_owner(conn, row)
+    return row
 
 
 def approved_target(conn, run_id: str, resource_id: str, tool: str,
@@ -355,6 +462,7 @@ def approved_target(conn, run_id: str, resource_id: str, tool: str,
             (run_id, resource_id)):
         applied = row["applied_path"] or ""
         if applied and os.path.normcase(os.path.realpath(applied)) == real:
+            approval_owner(conn, row)
             return row
     return None
 
@@ -373,6 +481,7 @@ def apply_approval(conn, approval_id: str) -> dict:
     row = get(conn, approval_id)
     if row is None or row["state"] != "approved":
         return {"applied": False, "reason": "not approved"}
+    _, entity = approval_owner(conn, row)
     if row["applied_at"]:
         return {"applied": True, "path": row["applied_path"], "sha256": row["applied_sha256"],
                 "bytes": row["applied_bytes"], "already": True}
@@ -413,7 +522,7 @@ def apply_approval(conn, approval_id: str) -> dict:
         """UPDATE tool_approvals SET consumed_at=CURRENT_TIMESTAMP, applied_at=CURRENT_TIMESTAMP,
              applied_path=?, applied_sha256=?, applied_bytes=? WHERE id=?""",
         (str(real), sha, len(data), approval_id))
-    write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="rbac", task_id=row["task_id"],
+    write_audit(conn, legal_entity_id=entity, verb="rbac", task_id=row["task_id"],
                 run_id=row["run_id"], layer="system", action="approval_applied",
                 target=approval_id,
                 payload={"path": str(real), "bytes": len(data), "sha256": sha,
@@ -520,46 +629,27 @@ def high_risk_enabled() -> set[str]:
 
 # ------------------------------------------------------------------ 推送
 def push_approval(approval_id: str) -> dict:
-    """独立线程：发企微文本，失败只记录，不影响拦截本身。"""
+    """Record an inbox notification; deployment-wide recipients are not scoped."""
     from .db import connect
 
     with connect() as conn:
         row = get(conn, approval_id)
         if row is None:
             return {"ok": False, "error": "not found"}
+        _, entity = approval_owner(conn, row)
         if row["pushed_at"]:
             return {"ok": True, "skipped": True}
-        channel = "wecom" if os.environ.get("WECOM_SECRET") else "inbox"
-        text = (
-            "【Agent OS 审批】越权/高危操作待批\n"
-            f"单号：{row['id']}\n"
-            f"员工：{row['agent_name'] or row['agent_id']}\n"
-            f"动作：{row['tool']} → {row['resource_name'] or row['target'] or '-'}\n"
-            f"目标：{row['target'] or '-'}\n"
-            f"Run：{row['run_id'] or '-'}（已挂起，批准后断点续跑）\n"
-            f"任务：{row['task_title'] or row['task_id'] or '-'}\n"
-            "处理：打开 Agent OS →「审批」页，允许或拒绝。"
-        )
-        to = os.environ.get("WECOM_APPROVAL_APPROVER", "").strip()
+        # A global WeCom recipient cannot prove the tenant/entity relationship.
+        # External delivery requires a separate scoped recipient configuration.
+        channel = "inbox"
         result = "inbox-only"
-        ok = True
-        err = ""
-        if channel == "wecom" and to:
-            try:
-                from .wecom.client import WeComClient
-                client = WeComClient(conn_factory=connect)
-                result = client.send_text(to, text)
-            except Exception as exc:                 # noqa: BLE001
-                ok, err = False, str(exc)[:300]
-                result = "push failed: " + err
         conn.execute(
             "UPDATE tool_approvals SET pushed_at=CURRENT_TIMESTAMP, push_channel=?,"
-            " push_result=? WHERE id=?", (channel if to else "inbox", result, approval_id))
-        conn.commit()
-        write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="rbac", task_id=row["task_id"],
+            " push_result=? WHERE id=?", (channel, result, approval_id))
+        write_audit(conn, legal_entity_id=entity, verb="rbac", task_id=row["task_id"],
                     run_id=row["run_id"], layer="system",
-                    action="approval_pushed" if ok else "approval_push_failed",
-                    target=approval_id, payload={"channel": channel, "to": to},
-                    response={"ok": ok, "result": result})
+                    action="approval_pushed",
+                    target=approval_id, payload={"channel": channel},
+                    response={"ok": True, "result": result})
         conn.commit()
-        return {"ok": ok, "channel": channel, "result": result, "error": err}
+        return {"ok": True, "channel": channel, "result": result, "error": ""}

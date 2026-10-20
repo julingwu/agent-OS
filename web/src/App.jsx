@@ -769,8 +769,8 @@ function OrgView({ org, onPick, departments = [], onRenameDept, onDeleteDept }) 
       <div className="stream">
         <div className="stream-inner">
           <details className="department-management">
-            <summary>管理部门 <span className="count-label">{departments.length}</span></summary>
-            {departments.map((department) => <div className="department-management-row" key={department.id}><b>{department.name}</b><span>{department.headcount} 人</span><button className="btn ghost" onClick={() => onRenameDept(department)}>重命名</button>{department.type !== "group_hq" && <button className="btn ghost danger" onClick={() => onDeleteDept(department)}>删除部门</button>}</div>)}
+            <summary>{onRenameDept ? "管理部门" : "部门列表"} <span className="count-label">{departments.length}</span></summary>
+            {departments.map((department) => <div className="department-management-row" key={department.id}><b>{department.name}</b><span>{department.headcount} 人</span>{onRenameDept && <button className="btn ghost" onClick={() => onRenameDept(department)}>重命名</button>}{onDeleteDept && department.type !== "group_hq" && <button className="btn ghost danger" onClick={() => onDeleteDept(department)}>删除部门</button>}</div>)}
           </details>
           <div className="org-card">
             <OrgTree org={org} onPick={onPick} />
@@ -2239,6 +2239,7 @@ function App() {
   const [me, setMe] = useState(null);
   const [booted, setBooted] = useState(false);
   const [bootMsg, setBootMsg] = useState("载入中…");
+  const [bootError, setBootError] = useState("");
   const [tab, setTab] = useState(() => {
     const selected = new URLSearchParams(location.search).get("tab");
     return ["overview", "tasks", "chats", "files", "approvals", "org", "roles", "finops", "evals", "experience", "extensions"].includes(selected) ? selected : "overview";
@@ -2332,14 +2333,23 @@ function App() {
       await new Promise((r) => setTimeout(r, 1000));
     }
     try {
+      setBootError("");
       const m = await api.me();
       setMe(m);
-      const [c, o, dp] = await Promise.all([api.chats(), api.org(), api.departments()]);
-      setChats(c.chats); setOrg(o); setDepts(dp.departments);
-      setActive((previous) => c.chats.find((chat) => chat.id === previous?.id) || c.chats[0] || null);
+      const [c, o, dp] = await Promise.allSettled([api.chats(), api.org(), api.departments()]);
+      const failed = [c, o, dp].filter((result) => result.status === "rejected");
+      const expired = failed.find((result) => result.reason.code === 401);
+      if (expired) throw expired.reason;
+      if (c.status === "fulfilled") {
+        setChats(c.value.chats);
+        setActive((previous) => c.value.chats.find((chat) => chat.id === previous?.id) || c.value.chats[0] || null);
+      }
+      if (o.status === "fulfilled") setOrg(o.value);
+      if (dp.status === "fulfilled") setDepts(dp.value.departments);
+      if (failed.length) setBootError("部分工作空间数据暂时不可用，可以刷新重试。");
     } catch (e) {
-      if (e.code !== 401) console.error(e);
-      setMe(null);
+      if (e.code === 401) setMe(null);
+      else setBootError(e.message || "工作空间暂时无法加载，请刷新重试。");
     } finally { setBooted(true); }
   }, []);
 
@@ -2390,7 +2400,7 @@ function App() {
         <div className="grow" />
         <div className="nav-footer">
           <button className="rail-btn" title="添加 AI 员工" onClick={() => setAdding(true)}><Icon name="plus" /><span className="nav-label">添加 AI 员工</span></button>
-          <button className="rail-btn" title="工作空间设置" onClick={() => setShowSettings(true)}><Icon name="gear" /><span className="nav-label">工作空间设置</span></button>
+          {me.can_manage_deployment && <button className="rail-btn" title="工作空间设置" onClick={() => setShowSettings(true)}><Icon name="gear" /><span className="nav-label">工作空间设置</span></button>}
           <div className="rail-account"><button title="账号信息" onClick={() => setShowAccount(true)}><span className="avatar">{initials(me.name)}</span><span className="account-copy"><b>{me.name}</b><small>工作空间管理员</small></span></button><button className="icon-btn" title={theme === "dark" ? "切换浅色主题" : "切换深色主题"} aria-label={theme === "dark" ? "切换浅色主题" : "切换深色主题"} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}><Icon name={theme === "dark" ? "sun" : "moon"} /></button></div>
         </div>
       </nav>
@@ -2418,14 +2428,15 @@ function App() {
           {chatLayout && <select className="mobile-chat-picker" aria-label="选择协作会话" value={active?.id || ""} onChange={(e) => setActive(chats.find((chat) => chat.id === e.target.value))}>{chats.map((chat) => <option value={chat.id} key={chat.id}>{chat.employee_name || chat.title}</option>)}</select>}
           <span className="connection-label"><span className="live-dot" /> 本地工作空间</span><button className="icon-btn" title="使用帮助" aria-label="使用帮助" onClick={() => setShowHelp(true)}><Icon name="help" /></button>
         </header>
-        <AlertBanner />
+        {bootError && <div className="hint" role="status">{bootError} <button className="btn ghost" onClick={boot}>重新加载</button></div>}
+        {me.can_manage_deployment && <AlertBanner />}
         {tab === "overview" || tab === "tasks" ? <Workspace key={tab} chats={chats} pendingCount={pendingCount} Icon={Icon} onChat={openChat} onSelectTask={setFocusedTask} onNavigate={setTab} onNewTask={() => setTaskCreating(true)} tasksOnly={tab === "tasks"} />
           : tab === "finops" ? <FinOpsView />
           : tab === "evals" ? <EvalsView />
           : tab === "experience" ? <GovernanceView me={me} />
           : tab === "extensions" ? (["ceo", "system"].includes(me.role) ? <ExtensionsView /> : <div className="empty" role="status">请由管理员配置工具连接。</div>)
           : tab === "roles" ? <RolesView onChanged={boot} />
-          : tab === "org" ? <><div className="org-actions"><span>组织与团队</span><button className="btn" onClick={() => setDepting(true)}><Icon name="plus" /> 新建部门</button><button className="btn primary" onClick={() => setAdding(true)}><Icon name="plus" /> 添加员工</button></div><OrgView org={org} onPick={(emp) => setEmpPanel(emp)} departments={depts} onRenameDept={renameDept} onDeleteDept={removeDept} /></>
+          : tab === "org" ? <><div className="org-actions"><span>组织与团队</span>{me.can_manage_deployment && <button className="btn" onClick={() => setDepting(true)}><Icon name="plus" /> 新建部门</button>}<button className="btn primary" onClick={() => setAdding(true)}><Icon name="plus" /> 添加员工</button></div><OrgView org={org} onPick={(emp) => setEmpPanel(emp)} departments={depts} onRenameDept={me.can_manage_deployment ? renameDept : undefined} onDeleteDept={me.can_manage_deployment ? removeDept : undefined} /></>
           : tab === "approvals" ? <ApprovalsView onChanged={refreshApprovals} />
           : tab === "files" ? <FilesTab />
           : active ? <ChatView key={active.id} chat={active} onSent={boot} onApproval={openApprovals} onMore={(chat) => setGroupMenu(chat)} onHelp={() => setShowHelp(true)} onAbout={() => setShowAbout(true)} onToggleDetail={() => setShowDetail((v) => !v)} showDetail={showDetail} />

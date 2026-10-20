@@ -26,6 +26,14 @@ def visible_entities(conn, actor):
         (actor["tenant_id"],)) if row["id"] in permitted]
 
 
+def is_deployment_admin(actor):
+    """The legacy global stores belong to the installation, not every CEO."""
+    return (actor["tenant_id"] == tenancy.DEFAULT_TENANT
+            and (actor["role"] == "system"
+                 or (actor["role"] == "ceo"
+                     and tenant.entity_of(actor) == tenant.DEFAULT_ENTITY)))
+
+
 def owned(conn, table, identifier, actor, *, write=False, code="NotFound"):
     """Only fixed internal table names are accepted; never interpolate user input."""
     queries = {
@@ -84,17 +92,18 @@ def request_access(request: Request):
         ):
             if key in request.path_params:
                 owned(conn, table, request.path_params[key], actor, write=write, code=code)
-        # These legacy configuration stores are deployment-wide, not tenant data.
-        # Until migrated, only the deployment administrator can mutate/read them.
-        global_prefixes = ("/ui/settings", "/ui/jobs", "/ui/kb", "/ui/departments",
+        # Department reads are entity scoped below; their management and the
+        # other legacy configuration stores remain deployment-wide.
+        global_prefixes = ("/ui/settings", "/ui/jobs", "/ui/kb",
                            "/ui/resources", "/ui/rbac/resources", "/ui/evals", "/ui/alerts",
                            "/ui/rbac/grant", "/ui/rbac/revoke", "/ui/rbac/check")
         global_role_write = write and path.startswith("/ui/roles")
-        if path.startswith(global_prefixes) or global_role_write:
+        global_department_write = write and path.startswith("/ui/departments")
+        if path.startswith(global_prefixes) or global_role_write or global_department_write:
             if actor["tenant_id"] != tenancy.DEFAULT_TENANT:
                 raise HTTPException(403, detail={"code": "DeploymentAdminOnly"})
-            if write and actor["role"] not in {"ceo", "system"}:
-                raise HTTPException(403, detail={"code": "Forbidden"})
+            if write and not is_deployment_admin(actor):
+                raise HTTPException(403, detail={"code": "DeploymentAdminOnly"})
         if write and path in {"/ui/members", "/ui/rbac/grant", "/ui/rbac/revoke"}:
             if actor["role"] not in {"ceo", "system"}:
                 raise HTTPException(403, detail={"code": "Forbidden"})

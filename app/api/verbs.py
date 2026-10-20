@@ -16,6 +16,7 @@ from ..audit import new_id, write_audit
 from ..db import get_conn
 from ..identity import require
 from ..models import (
+    ADAPTER_EVENTS,
     ArbitrationIn,
     AttachArtifactIn,
     EmitEventIn,
@@ -291,12 +292,16 @@ def do_request_arbitration(conn: sqlite3.Connection, req: ArbitrationIn,
 
 def do_emit_event(conn: sqlite3.Connection, req: EmitEventIn,
                   ident: dict | None = None) -> dict:
+    # Adapter lifecycle reports cannot certify a delivery or bypass acceptance.
+    # Keep the service check even for in-process callers bypassing model validation.
+    if req.event_type not in ADAPTER_EVENTS:
+        raise HTTPException(400, detail={"code": "LifecycleEventNotAllowed"})
+    run = scoped_run(conn, req.run_id, ident)
     key = f"{req.run_id}:evt:{req.evt_seq}"
     hit = idempotency.lookup(conn, key)
     if hit:
         return idempotency.replay(conn, key, hit, verb="emit_event")
 
-    run = scoped_run(conn, req.run_id, ident)
     try:
         state = transition(conn, run["task_id"], req.event_type,
                            actor="adapter", payload={"event_payload": req.payload or {}})

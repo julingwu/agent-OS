@@ -621,17 +621,30 @@ def _ensure_unassigned(conn) -> None:
 
 @router.get("/departments")
 def departments(token: str | None = Auth):
-    _require(token)
+    from .access import actor_for, is_deployment_admin, visible_entities
     with get_conn() as conn:
-        _ensure_unassigned(conn)
-        conn.commit()
+        actor = actor_for(conn, token)
+        if is_deployment_admin(actor):
+            _ensure_unassigned(conn)
+            conn.commit()
+        allowed = set(visible_entities(conn, actor))
         rows = conn.execute(
             """SELECT e.id, e.name, e.type, e.parent_entity_id,
                       (SELECT COUNT(*) FROM ai_employees a WHERE a.legal_entity_id = e.id
                         AND COALESCE(a.status,'online') <> 'fired') AS headcount
                FROM legal_entities e WHERE COALESCE(e.state,'active')='active'
                ORDER BY CASE e.type WHEN 'group_hq' THEN 0 ELSE 1 END, e.name""").fetchall()
-    return {"departments": [dict(r) for r in rows]}
+    return {"departments": [dict(r) for r in rows if r["id"] in allowed]}
+
+
+def _department_scope(conn, identifier, token):
+    from .access import actor_for
+    actor = actor_for(conn, token)
+    row = conn.execute("SELECT * FROM legal_entities WHERE id=? AND tenant_id=?",
+                       (identifier, actor["tenant_id"])).fetchone()
+    if row is None:
+        raise HTTPException(404, detail={"code": "DeptNotFound"})
+    return row
 
 
 @router.post("/departments")
@@ -640,10 +653,11 @@ def create_department(payload: DeptIn, token: str | None = Auth):
     import hashlib
     did = "LE-" + hashlib.sha1(payload.name.encode()).hexdigest()[:6].upper()
     with get_conn() as conn:
+        parent = _department_scope(conn, payload.entity_id, token)
         conn.execute("""INSERT OR IGNORE INTO legal_entities
-                        (id, name, type, parent_entity_id, governance_mode, pack_policy)
-                        VALUES (?,?, 'department', ?, 'subsidiary', 'follow_group')""",
-                     (did, payload.name, payload.entity_id))
+                        (id, name, type, parent_entity_id, governance_mode, pack_policy, tenant_id)
+                        VALUES (?,?, 'department', ?, 'subsidiary', 'follow_group', ?)""",
+                     (did, payload.name, payload.entity_id, parent["tenant_id"]))
         write_audit(conn, legal_entity_id=payload.entity_id, verb="dept", task_id=None,
                     layer="system", action="dept_created", target=did,
                     payload={"name": payload.name}, response={"by": ident})
@@ -655,8 +669,7 @@ def create_department(payload: DeptIn, token: str | None = Auth):
 def rename_department(dept_id: str, payload: DeptPatch, token: str | None = Auth):
     ident = _require(token)
     with get_conn() as conn:
-        if conn.execute("SELECT 1 FROM legal_entities WHERE id=?", (dept_id,)).fetchone() is None:
-            raise HTTPException(404, detail={"code": "DeptNotFound"})
+        _department_scope(conn, dept_id, token)
         conn.execute("UPDATE legal_entities SET name=? WHERE id=?", (payload.name, dept_id))
         write_audit(conn, legal_entity_id=dept_id, verb="dept", task_id=None, layer="system",
                     action="dept_renamed", target=dept_id, payload={"name": payload.name},
@@ -670,9 +683,7 @@ def delete_department(dept_id: str, token: str | None = Auth):
     """删部门：员工先转「未分配」，再软删部门，全程留痕。"""
     ident = _require(token)
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM legal_entities WHERE id=?", (dept_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, detail={"code": "DeptNotFound"})
+        row = _department_scope(conn, dept_id, token)
         if row["type"] == "group_hq":
             raise HTTPException(400, detail={"code": "CannotDeleteGroup"})
         _ensure_unassigned(conn)

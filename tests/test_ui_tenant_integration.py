@@ -37,11 +37,14 @@ def tenants(tmp_path, monkeypatch):
             conn.execute("INSERT INTO tenants (id,name) VALUES ('TENANT-BETA','Beta')")
             conn.execute("""INSERT INTO legal_entities (id,name,type,parent_entity_id,tenant_id)
                 VALUES ('LE-BETA','Beta','subsidiary','LE-GROUP-HQ','TENANT-BETA')""")
+            conn.execute("""INSERT INTO legal_entities (id,name,type,parent_entity_id,tenant_id)
+                VALUES ('LE-HQ-SUB','HQ subsidiary','subsidiary','LE-GROUP-HQ','TENANT-HQ')""")
             conn.execute("UPDATE legal_entities SET governance_mode='group_direct' WHERE id='LE-GROUP-HQ'")
             hq = identity.issue(conn, name="HQ CEO", role="ceo")
             beta = identity.issue(conn, name="Beta CEO", role="ceo", legal_entity_id="LE-BETA")
             system = identity.issue(conn, name="HQ operator", role="system")
-            ids = {"hq": hq, "beta": beta, "system": system}
+            sub = identity.issue(conn, name="Subsidiary CEO", role="ceo", legal_entity_id="LE-HQ-SUB")
+            ids = {"hq": hq, "beta": beta, "system": system, "sub": sub}
             for label, entity, tenant_id in (("hq", "LE-GROUP-HQ", "TENANT-HQ"),
                                               ("beta", "LE-BETA", "TENANT-BETA")):
                 eid = "AI-" + label.upper()
@@ -94,6 +97,88 @@ def test_ui_lists_never_cross_actor_tenant_even_for_system(tenants, actor):
     assert ids["beta_chat"] not in {x["id"] for x in raw.get("/ui/chats").json()["chats"]}
     assert ids["beta_artifact"] not in {x["id"] for x in raw.get("/ui/files").json()["files"]}
     assert ids["beta_approval"] not in {x["id"] for x in raw.get("/ui/approvals").json()["pending"]}
+
+
+def test_other_tenant_can_login_reload_and_read_scoped_workspace(tenants):
+    raw, ids = tenants
+    raw.cookies.clear()
+    response = raw.post("/ui/login", json={"identity_id": ids["beta"]["id"],
+                                          "secret": ids["beta"]["secret"]})
+    assert response.status_code == 200
+    for _ in range(2):
+        me = raw.get("/ui/me").json()
+        assert me["identity_id"] == ids["beta"]["id"] and me["tenant_id"] == "TENANT-BETA"
+        assert me["can_manage_deployment"] is False
+        assert {x["id"] for x in raw.get("/ui/departments").json()["departments"]} == {"LE-BETA"}
+        assert {x["id"] for x in raw.get("/ui/org").json()["roots"]} == {"LE-BETA"}
+        assert {x["id"] for x in raw.get("/ui/tasks").json()["tasks"]} == {ids["beta_task"]}
+        chats = raw.get("/ui/chats")
+        assert chats.status_code == 200
+        assert ids["beta_chat"] in {x["id"] for x in chats.json()["chats"]}
+        assert ids["hq_chat"] not in {x["id"] for x in chats.json()["chats"]}
+        assert raw.get("/ui/settings").status_code == 403
+    assert raw.get("/ui/me").status_code == 200
+
+
+@pytest.mark.parametrize("actor", ["sub", "beta", "beta_agent"])
+def test_deployment_mutations_require_explicit_deployment_admin(tenants, actor):
+    raw, ids = tenants
+    _as(raw, ids[actor])
+    assert raw.get("/ui/me").json()["can_manage_deployment"] is False
+    requests = [
+        ("put", "/ui/settings", {"theme": "unauthorized"}),
+        ("post", "/ui/rbac/resources", {"id": "RES-DENIED", "kind": "api", "name": "denied"}),
+        ("post", "/ui/resources/seed", {}),
+        ("post", "/ui/roles", {"name": "denied", "tag": "dev", "spawn": False}),
+        ("post", "/ui/departments", {"name": "denied"}),
+        ("patch", "/ui/departments/LE-GROUP-HQ", {"name": "denied"}),
+        ("delete", "/ui/departments/LE-HQ-SUB", None),
+    ]
+    for method, path, body in requests:
+        response = raw.request(method, path, json=body)
+        assert response.status_code == 403, (path, response.text)
+        assert response.json()["detail"]["code"] == "DeploymentAdminOnly"
+    with get_conn() as conn:
+        assert conn.execute("SELECT 1 FROM settings WHERE value='unauthorized'").fetchone() is None
+        assert conn.execute("SELECT 1 FROM resources WHERE id='RES-DENIED'").fetchone() is None
+        assert conn.execute("SELECT 1 FROM legal_entities WHERE name='denied'").fetchone() is None
+
+
+@pytest.mark.parametrize("actor", ["hq", "system"])
+def test_deployment_admin_remains_available_but_cannot_change_foreign_departments(tenants, actor):
+    raw, ids = tenants
+    _as(raw, ids[actor])
+    assert raw.get("/ui/me").json()["can_manage_deployment"] is True
+    assert raw.put("/ui/settings", json={"theme": "light"}).status_code == 200
+    assert raw.post("/ui/rbac/resources", json={
+        "id": "RES-ADMIN", "kind": "api", "name": "allowed"}).status_code == 200
+    assert "LE-BETA" not in {x["id"] for x in raw.get("/ui/departments").json()["departments"]}
+    assert raw.post("/ui/departments", json={"name": "foreign", "entity_id": "LE-BETA"}).status_code == 404
+    assert raw.patch("/ui/departments/LE-BETA", json={"name": "foreign"}).status_code == 404
+    assert raw.delete("/ui/departments/LE-BETA").status_code == 404
+
+
+def test_ceo_dispatch_persists_verified_initiator(tenants, monkeypatch):
+    from app.ui import dispatcher
+    raw, ids = tenants
+    _as(raw, ids["beta"])
+    monkeypatch.setenv("M0_DISPATCH_SYNC", "1")
+    run_owners = []
+
+    def run_project(conn, project_id, text):
+        run_owners.append(conn.execute("SELECT owner_identity FROM projects WHERE id=?",
+                                      (project_id,)).fetchone()[0])
+
+    monkeypatch.setattr(pipeline, "run_project", run_project)
+    with get_conn() as conn:
+        chat = dispatcher.ensure_ceo_chat(conn, "TENANT-BETA", "LE-BETA")
+    result = raw.post(f"/ui/chats/{chat['id']}/messages", json={"text": "开发一个计算器"})
+    assert result.status_code == 200, result.text
+    with get_conn() as conn:
+        project = conn.execute("SELECT owner_identity,legal_entity_id,tenant_id FROM projects WHERE id=?",
+                               (result.json()["project_id"],)).fetchone()
+        assert tuple(project) == (ids["beta"]["id"], "LE-BETA", "TENANT-BETA")
+    assert run_owners == [ids["beta"]["id"]]
 
 
 @pytest.mark.parametrize("route,key", [
@@ -208,10 +293,11 @@ def test_dm_project_selects_only_same_entity_and_inherits_group_scope(tenants, m
         emp = conn.execute("SELECT * FROM ai_employees WHERE id=?", (ids["beta_employee"],)).fetchone()
     dispatched = []
     monkeypatch.setattr(api, "_start_project", lambda cid, text, ident, members, title:
-                        dispatched.append((cid, members)))
+                        dispatched.append((cid, ident, members)))
     api._start_project_from_dm(dm["id"], "UI重构项目", ids["beta"]["id"], emp)
     assert len(dispatched) == 1
-    cid, members = dispatched[0]
+    cid, initiator, members = dispatched[0]
+    assert initiator == ids["beta"]["id"]
     assert members and all(x["legal_entity_id"] == "LE-BETA" for x in members)
     with get_conn() as conn:
         group = conn.execute("SELECT tenant_id,entity_id FROM chats WHERE id=?", (cid,)).fetchone()

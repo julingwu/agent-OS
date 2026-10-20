@@ -16,7 +16,6 @@ import secrets
 from . import roles, store
 
 CEO_TITLE = "CEO 调度台"
-CEO_ID = "ID-CEO-DISPATCHER"
 
 # 明确「不是派活」的信号：这些发给 CEO 只做对话，不建群
 CHITCHAT = ("你好", "在吗", "谢谢", "你是谁", "帮助", "怎么用", "hello", "hi")
@@ -61,7 +60,8 @@ def _group_title(text: str, tags: list[str]) -> str:
 
 
 def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
-          use_llm_docs: int = 0, tenant_id: str | None = None) -> dict:
+          use_llm_docs: int = 0, tenant_id: str | None = None,
+          actor_id: str | None = None) -> dict:
     """把一条需求变成**项目**（v1.5）：立项 → 研讨 → 拆解 → … → 复盘。
 
     标签只用于记录与后续选人；阶段推进由 pipeline 的模板产物与闸门驱动。
@@ -81,7 +81,7 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
 
     title = (text.strip().splitlines()[0][:24] if text.strip() else "新项目") or "新项目"
     proj = pipeline.create_project(conn, name=title, requirement=text,
-                                   entity=entity_id, owner=CEO_ID,
+                                   entity=entity_id, owner=actor_id,
                                    use_llm_docs=use_llm_docs, tenant_id=tenant_id)
     pid = proj["project_id"]
 

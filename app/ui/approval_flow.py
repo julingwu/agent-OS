@@ -19,20 +19,33 @@ from ..engine import dsh_adapter
 from . import store
 
 
+def _chat_for(conn, approval) -> str | None:
+    row = dict(approval)
+    owner = rbac.approval_owner(conn, row)
+    chat_id = row.get("chat_id")
+    if chat_id:
+        return chat_id  # approval_owner already validates an explicit chat.
+    if not rbac._has_table(conn, "chats"):
+        return None
+    if row.get("task_id") and rbac._has_table(conn, "chat_messages"):
+        for found in conn.execute("SELECT chat_id FROM chat_messages WHERE task_id=?"
+                                   " ORDER BY id DESC", (row["task_id"],)):
+            if rbac.approval_chat_allowed(conn, found["chat_id"], owner):
+                return found["chat_id"]
+    for found in conn.execute("SELECT id FROM chats WHERE kind='ceo' AND"
+                               " COALESCE(tenant_id,'TENANT-HQ')=? ORDER BY id", (owner[0],)):
+        if rbac.approval_chat_allowed(conn, found["id"], owner):
+            return found["id"]
+    return None
+
+
 def post_card(conn, approval) -> None:
     row = dict(approval)
-    chat_id = row.get("chat_id")
-    if not chat_id:
-        found = conn.execute("SELECT chat_id FROM chat_messages WHERE task_id=?"
-                             " ORDER BY id DESC LIMIT 1", (row.get("task_id"),)).fetchone()
-        chat_id = found["chat_id"] if found else None
-    if not chat_id:
-        row_chat = conn.execute("SELECT id FROM chats WHERE kind='ceo' LIMIT 1").fetchone()
-        chat_id = row_chat["id"] if row_chat else None
+    chat_id = _chat_for(conn, row)
     if not chat_id:
         return
-    if conn.execute("SELECT 1 FROM chat_messages WHERE kind='approval' AND meta LIKE ?",
-                    (f'%"{row["id"]}"%',)).fetchone():
+    if conn.execute("SELECT 1 FROM chat_messages WHERE chat_id=? AND kind='approval' AND meta LIKE ?",
+                    (chat_id, f'%"{row["id"]}"%')).fetchone():
         return                                   # 幂等：刷新页面不重复发卡
     content = (f"⛔ 越权拦截：{row.get('agent_name') or row.get('agent_id')} 试图 "
                f"{row.get('tool')} `{row.get('target')}`\n"
@@ -71,6 +84,8 @@ def decide(approval_id: str, approve: bool, by: str) -> dict:
         row = rbac.get(conn, approval_id)
         if row is None:
             raise ValueError("approval not found")
+        _, entity = rbac.approval_owner(conn, row)
+        chat_id = _chat_for(conn, row)
         if row["state"] != "pending":
             return {"ok": True, "state": row["state"], "already": True,
                     "run_id": row["run_id"], "resumable": False}
@@ -88,7 +103,6 @@ def decide(approval_id: str, approve: bool, by: str) -> dict:
                 conn.execute("UPDATE task_runs SET state='failed', exit_code=9,"
                              " ended_at=CURRENT_TIMESTAMP WHERE id=?", (row["run_id"],))
                 trace.finish_run(conn, row["run_id"], tokens=int(run["usage_tokens"] or 0), state="failed")
-        chat_id = row["chat_id"]
         if chat_id:
             store.add_message(
                 conn, chat_id, "agent",
@@ -97,7 +111,7 @@ def decide(approval_id: str, approve: bool, by: str) -> dict:
                     if approve and out.get("resumable") else "。")
                  if approve else f"⛔ 审批被拒绝（{approval_id}，by {by}），本次操作不再执行。"),
                 author="系统守卫", kind="text", task_id=row["task_id"])
-        write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="rbac", task_id=row["task_id"],
+        write_audit(conn, legal_entity_id=entity, verb="rbac", task_id=row["task_id"],
                     run_id=row["run_id"], layer="system", action="approval_decided",
                     target=approval_id, payload={"approve": approve, "by": by},
                     response={"resume": bool(approve and out.get("resumable"))})
@@ -120,14 +134,18 @@ def resume(approval_id: str) -> dict:
         task = conn.execute("SELECT * FROM tasks WHERE id=?", (ap["task_id"],)).fetchone()
         if task is None or task["state"] != "in_progress" or run["state"] != "awaiting_approval":
             return {"ok": False, "reason": "task or run is no longer awaiting approval"}
+        owner = rbac.approval_owner(conn, ap)
+        entity = owner[1]
+        chat_id = _chat_for(conn, ap)
         if not conn.execute("SELECT 1 FROM trace_spans WHERE trace_id IN"
                             " (SELECT trace_id FROM agent_traces WHERE run_id=?)"
                             " AND kind='approval' LIMIT 1", (ap["run_id"],)).fetchone():
             _wait_span(conn, approval_id)
-        entity = (task["legal_entity_id"] if task else None) or run["legal_entity_id"]
         applied: dict = {}
         try:
             applied = rbac.apply_approval(conn, approval_id)
+        except PermissionError:
+            raise
         except Exception as exc:                     # noqa: BLE001
             applied = {"applied": False, "error": str(exc)}
             write_audit(conn, legal_entity_id=entity, verb="rbac", task_id=ap["task_id"],
@@ -146,7 +164,6 @@ def resume(approval_id: str) -> dict:
                 "不要再次写入这个文件；请读取确认内容后继续原任务，完成后只回复 DONE。")
         sid = ap["session_id"]
         runner = run["runner"] or "acp"
-        chat_id = ap["chat_id"]
         start_ms = trace.now_run(conn, run["id"])
         if chat_id:
             if applied.get("applied"):
@@ -179,12 +196,22 @@ def resume(approval_id: str) -> dict:
         os.environ["MOCK_ACP_TEXT"] = args.get("content") or ""
     try:
         with connect() as conn:
+            current = rbac.get(conn, approval_id)
+            if current is None or rbac.approval_owner(conn, current) != owner:
+                raise PermissionError("ApprovalScopeMismatch")
+            chat_id = _chat_for(conn, current)
             out = dsh_adapter.execute_run(conn, ap["run_id"], prompt=prompt, runner=runner,
                                           resume_session=sid)
+    except PermissionError:
+        raise
     except Exception as exc:                         # noqa: BLE001
         with connect() as conn:
-            store.add_message(conn, chat_id, "agent", f"断点续跑失败：{exc}",
-                              author="系统守卫", kind="text", task_id=ap["task_id"])
+            current = rbac.get(conn, approval_id)
+            if current is not None and rbac.approval_owner(conn, current) == owner:
+                chat_id = _chat_for(conn, current)
+                if chat_id:
+                    store.add_message(conn, chat_id, "agent", f"断点续跑失败：{exc}",
+                                      author="系统守卫", kind="text", task_id=ap["task_id"])
         return {"ok": False, "error": str(exc)}
     finally:
         if mock_env is not None:
@@ -195,6 +222,10 @@ def resume(approval_id: str) -> dict:
                     os.environ[key] = val
 
     with connect() as conn:
+        current = rbac.get(conn, approval_id)
+        if current is None or rbac.approval_owner(conn, current) != owner:
+            raise PermissionError("ApprovalScopeMismatch")
+        chat_id = _chat_for(conn, current)
         end_ms = trace.now_run(conn, ap["run_id"])
         trace.record(conn, ap["run_id"], kind="resume",
                      name="断点续跑（session/resume）",

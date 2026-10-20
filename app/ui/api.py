@@ -135,6 +135,7 @@ def logout(response: Response):
 
 @router.get("/me")
 def me(oa_ui: str | None = Depends(_token)):
+    from .access import is_deployment_admin
     ident = _require(oa_ui)
     with get_conn() as conn:
         actor = _task_actor(conn, oa_ui, "task:read")
@@ -145,7 +146,8 @@ def me(oa_ui: str | None = Depends(_token)):
         tenant_name = tenancy.name_of(conn, actor["tenant_id"])
     return {"identity_id": row["id"], "name": row["name"], "role": row["role"],
             "entity_id": row["legal_entity_id"], "entity_name": row["entity_name"],
-            "tenant_id": actor["tenant_id"], "tenant_name": tenant_name}
+            "tenant_id": actor["tenant_id"], "tenant_name": tenant_name,
+            "can_manage_deployment": is_deployment_admin(actor)}
 
 
 # ------------------------------------------------------------------ org tree
@@ -339,7 +341,7 @@ def post_message(chat_id: str, payload: MessageIn, oa_ui: str | None = Depends(_
                 return {"ok": True, "routed": False}
             actor = _task_actor(conn, oa_ui, "task:*")
             result = dispatcher.route(conn, text, entity_id=tenant.entity_of(actor),
-                                      tenant_id=actor["tenant_id"])
+                                      tenant_id=actor["tenant_id"], actor_id=actor["id"])
             # v1.5：CEO 建的是项目，不再直接拉群跑任务；项目内的 WBS 才起 run
             return {"ok": True, "routed": True, **result}
     if kind == "group":
@@ -587,8 +589,7 @@ def _run_turn(chat_id: str, employee_id: str | None, text: str, ident: str,
             from ..models import SpawnRunIn
 
             req = SpawnRunIn(task_id=task_id, run_seq=1, legal_entity_id=entity)
-            spawned = _verbs.do_spawn_run(
-                conn, req, ident={"id": ident, "role": "ceo", "legal_entity_id": entity})
+            spawned = _verbs.do_spawn_run(conn, req, ident=actor)
             run_id = spawned["run_id"]
             conn.commit()
             if emp is not None and (emp["preset"] if "preset" in emp.keys() else "standard") == "cordis":
@@ -797,6 +798,9 @@ def _start_project_from_dm(dm_chat_id: str, text: str, ident: str, emp) -> None:
         if actor_row is None:
             return
         actor = dict(actor_row)
+        tenancy.resolve(conn, ident)
+        if not identity.has_scope(actor_row, "task:*"):
+            return
         chat_scope = owned(conn, "chats", dm_chat_id, actor, write=True, code="ChatNotFound")
         rows = conn.execute(
             """SELECT e.id AS employee_id, e.name, e.model, e.legal_entity_id, p.title
