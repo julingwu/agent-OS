@@ -299,4 +299,8 @@ Object.assign(api, {
   smtp: () => req("/smtp"),
   saveSmtp: body => req("/smtp", { method: "PUT", body: JSON.stringify(body) }),
   testSmtp: to => req("/smtp/test", { method: "POST", body: JSON.stringify({ to }) }),
+  wecomRobot: () => req("/wecom/robot"),
+  saveWecomRobot: body => req("/wecom/robot", { method: "PUT", body: JSON.stringify(body) }),
+  testWecomRobot: () => req("/wecom/robot/test", { method: "POST" }),
+  notifications: () => req("/notifications"),
 });

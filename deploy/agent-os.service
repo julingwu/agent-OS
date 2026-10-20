@@ -1,0 +1,42 @@
+[Unit]
+Description=Agent OS Headless Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=agentos
+Group=agentos
+WorkingDirectory=/opt/agent-os
+EnvironmentFile=/opt/agent-os/.env
+
+# 编码与时区保障：防止中文日志 Unicode 异常，保证 UI Cron 按北京时间准点触发
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+Environment=TZ=Asia/Shanghai
+
+# 启动命令（单 Worker 模式，配合 gunicorn.conf.py 配置）
+ExecStart=/opt/agent-os/.venv/bin/gunicorn -c deploy/gunicorn.conf.py app.main:app
+# 若直接使用 uvicorn 启动，可替换为下方指令：
+# ExecStart=/opt/agent-os/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8077 --workers 1
+
+# 进程重载与重启策略
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=35s
+Restart=always
+RestartSec=5s
+
+# 资源限制与权限掩码
+LimitNOFILE=65535
+UMask=0027
+
+# Linux 系统级安全沙箱与隔离加固
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/agent-os/data /opt/agent-os/workspace /opt/agent-os/docs/runs
+
+[Install]
+WantedBy=multi-user.target

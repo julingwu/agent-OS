@@ -1905,7 +1905,7 @@ function AboutModal({ onClose }) {
     <div className="mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>关于 Agent OS</h3>
-        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "1.1.0"}</span></div>
+        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "4.0.0"}</span></div>
         <div className="row"><span>引擎</span><div className="spacer" /><span className="mono">{info?.engine || "DSH (ACP) + FastAPI"}</span></div>
         <div className="row"><span>外壳</span><div className="spacer" /><span className="mono">{info?.shell || "Tauri 2 / React 18"}</span></div>
         <div className="row"><span>冻结基线</span><div className="spacer" /><span className="mono">{info?.frozen_baseline || "v1.0.0"}</span></div>

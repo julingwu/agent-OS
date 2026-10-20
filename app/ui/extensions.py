@@ -6,8 +6,9 @@ from contextlib import contextmanager
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from .. import mailer, mcp, tenancy
+from .. import mailer, mcp, notify, tenancy
 from ..db import get_conn
+from ..wecom import robot
 from .api import _require, _token
 
 router = APIRouter(prefix="/ui", tags=["extensions"])
@@ -68,6 +69,14 @@ class SmtpIn(Input):
 
 class SmtpTestIn(Input):
     to: str
+
+
+class RobotIn(Input):
+    """群机器人配置：webhook 传空串即清除；只改传入的字段。"""
+    webhook: str | None = None
+    enabled: bool | None = None
+    on_project_done: bool | None = None
+    on_redline: bool | None = None
 
 
 @router.get("/mcp")
@@ -141,3 +150,42 @@ def smtp_test(payload: SmtpTestIn, token: str | None = Depends(_token),
               x_tenant_id: str | None = Header(default=None)):
     with _context(token, x_tenant_id) as (conn, tid, actor):
         return mailer.test_smtp(conn, tenant_id=tid, actor=actor, to=payload.to)
+
+
+# --------------------------------------------------- 企微群机器人（v4.0）
+@router.get("/wecom/robot")
+def robot_settings(token: str | None = Depends(_token),
+                   x_tenant_id: str | None = Header(default=None)):
+    with _context(token, x_tenant_id) as (conn, tid, actor):
+        return robot.settings(conn, tenant_id=tid, actor=actor)
+
+
+@router.put("/wecom/robot")
+def robot_save(payload: RobotIn, token: str | None = Depends(_token),
+               x_tenant_id: str | None = Header(default=None)):
+    with _context(token, x_tenant_id) as (conn, tid, actor):
+        return robot.save(conn, tenant_id=tid, actor=actor,
+                          **payload.model_dump(exclude_none=True))
+
+
+@router.post("/wecom/robot/test")
+def robot_test(token: str | None = Depends(_token),
+               x_tenant_id: str | None = Header(default=None)):
+    with _context(token, x_tenant_id) as (conn, tid, actor):
+        return robot.send_test(conn, tenant_id=tid, actor=actor)
+
+
+@router.get("/notifications")
+def notifications(token: str | None = Depends(_token),
+                  x_tenant_id: str | None = Header(default=None), limit: int = 20):
+    """通知台账：推过什么、推成没推成。任何有效身份只看自己租户。"""
+    actor = _require(token)
+    try:
+        with get_conn() as conn:
+            tid = tenancy.resolve(conn, actor, x_tenant_id)
+            return {"notifications": notify.recent(conn, tenant_id=tid, limit=limit),
+                    "tenant_id": tid}
+    except PermissionError as exc:
+        code = str(exc)
+        raise HTTPException(401 if code in {"InactiveIdentity", "UnknownIdentity"} else 403,
+                            detail={"code": code}) from None

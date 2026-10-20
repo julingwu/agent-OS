@@ -241,6 +241,20 @@ def run(conn: sqlite3.Connection, task_id: str, ents: list[str] | str) -> dict:
         except Exception:                    # noqa: BLE001 - 记忆失败不影响验收
             pass
     conn.commit()
+    # v4.0：红线 L0 拦截实时推企微群。红线没有人工审批入口（只能改稿重试），
+    # 所以「谁被拦、命中了哪个词」必须第一时间到群里；推送失败不影响已提交的驳回。
+    if mandatory.get("criterion_id") and mandatory.get("state") == "failed":
+        try:
+            from . import notify
+            last_run = conn.execute(
+                "SELECT id FROM task_runs WHERE task_id=? ORDER BY run_seq DESC LIMIT 1",
+                (task_id,)).fetchone()
+            notify.redline_blocked(
+                conn, task_id=task_id, run_id=last_run["id"] if last_run else None,
+                detail=mandatory.get("detail") or "",
+                hits=mandatory.get("hits") or [])
+        except Exception:                    # noqa: BLE001 - 通知不是闸门
+            pass
     return {"task_id": task_id, "task_state": new_state, "verdict": verdict,
             "results": results}
 

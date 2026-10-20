@@ -924,6 +924,13 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
     for key in keys:
         run_stage(conn, pid, key, requirement)
         done.append(key)
+    # v4.0：9/9 阶段全部 done ⇒ 企微群推「商业闭环」。投递走后台线程，
+    # 通知失败只落 notifications.state='failed'，绝不回滚产线。
+    try:
+        from . import notify
+        notify.project_closed(conn, pid)
+    except Exception:                        # noqa: BLE001 - 通知不是闸门
+        pass
     return {"project_id": pid, "stages": done}
 
 

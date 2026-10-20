@@ -3,6 +3,8 @@ import { api } from "./api.js";
 
 const emptyServer = { name: "", url: "", api_key: "" };
 const emptySmtp = { host: "", port: 587, user: "", password: "", from_addr: "", secure: false };
+const emptyRobot = { webhook: "", enabled: true, on_project_done: true, on_redline: true,
+  webhook_set: false, webhook_hint: "", source: "none", mock: false };
 
 export default function ExtensionsView() {
   const [servers, setServers] = useState([]);
@@ -17,15 +19,20 @@ export default function ExtensionsView() {
   const [editing, setEditing] = useState(null);
   const [smtp, setSmtp] = useState(emptySmtp);
   const [recipient, setRecipient] = useState("");
+  const [robotCfg, setRobotCfg] = useState(emptyRobot);
+  const [notices, setNotices] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const load = useCallback(async () => {
-    const [tools, staff, mail] = await Promise.all([api.mcpServers(), api.employees(), api.smtp()]);
+    const [tools, staff, mail, robot, ledger] = await Promise.all([
+      api.mcpServers(), api.employees(), api.smtp(), api.wecomRobot(), api.notifications()]);
     setServers(tools.servers || []);
     setEmployees(staff.employees || []);
     setEmployee(current => current || staff.employees?.[0]?.id || "");
     setSmtp({ ...emptySmtp, ...mail, password: "" });
+    setRobotCfg({ ...emptyRobot, ...robot, webhook: "" });
+    setNotices(ledger.notifications || []);
   }, []);
   useEffect(() => { load().catch(e => setError(e.message)); }, [load]);
   useEffect(() => {
@@ -71,6 +78,15 @@ export default function ExtensionsView() {
     const serverIds = [...bindings];
     await perform(() => api.bindMcp(targetEmployee, serverIds), "员工工具授权已保存。", false);
   }
+  async function saveRobot(event) {
+    event.preventDefault();
+    if (busy) return;
+    const body = { enabled: robotCfg.enabled, on_project_done: robotCfg.on_project_done,
+      on_redline: robotCfg.on_redline };
+    if (robotCfg.webhook.trim()) body.webhook = robotCfg.webhook.trim();
+    const ok = await perform(() => api.saveWecomRobot(body), "通知设置已保存。");
+    if (ok) setRobotCfg(current => ({ ...current, webhook: "" }));
+  }
   return <div className="main"><div className="topbar"><div>
     <div className="who">工具与集成</div><div className="sub">为 AI 员工配置可信工具，统一管理邮件服务</div>
   </div><span className="spacer" /><button className="btn ghost" disabled={busy} onClick={() => perform(load, "已刷新。", false)}>刷新</button></div>
@@ -115,6 +131,36 @@ export default function ExtensionsView() {
           <input type="checkbox" checked={bindings.includes(s.id)} disabled={busy || !bindingsReady} onChange={e => setBindings(e.target.checked ? [...bindings, s.id] : bindings.filter(id => id !== s.id))} />
           {s.name}{!s.enabled && "（已停用）"}</label>)}</div>
         <button className="btn primary" disabled={busy || !bindingsReady} onClick={saveBindings}>保存员工授权</button>
+      </section>
+      <section className="fin-card"><h3>企微群机器人</h3>
+        <div className="integration-heading"><div>
+          <p className="hint">9/9 商业闭环达成、或红线 L0 拦截时，自动把结论推送到企微群。群机器人只用一条 webhook，不依赖 corp 应用的审批通道；推送失败只记在下面的台账里，不影响任务与验收。</p>
+        </div><span className={`pill ${robotCfg.webhook_set ? "ok" : ""}`}>{robotCfg.webhook_set ? `已配置 ${robotCfg.webhook_hint}` : "未配置"}</span></div>
+        <form onSubmit={saveRobot}>
+          <label className="field">Webhook 地址
+            <input type="password" autoComplete="new-password" value={robotCfg.webhook}
+              onChange={e => setRobotCfg({ ...robotCfg, webhook: e.target.value })}
+              placeholder={robotCfg.webhook_set ? "已设置，留空保留" : "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…"} />
+          </label>
+          <div className="integration-checks">
+            <label><input type="checkbox" checked={robotCfg.enabled} onChange={e => setRobotCfg({ ...robotCfg, enabled: e.target.checked })} />启用群推送</label>
+            <label><input type="checkbox" checked={robotCfg.on_project_done} onChange={e => setRobotCfg({ ...robotCfg, on_project_done: e.target.checked })} />9/9 商业闭环</label>
+            <label><input type="checkbox" checked={robotCfg.on_redline} onChange={e => setRobotCfg({ ...robotCfg, on_redline: e.target.checked })} />红线 L0 拦截</label>
+          </div>
+          <div className="actions">
+            <button className="btn primary" disabled={busy}>保存通知设置</button>
+            <button type="button" className="btn ghost" disabled={busy || !robotCfg.webhook_set}
+              onClick={() => perform(() => api.testWecomRobot(),
+                r => r.transport === "outbox" ? "离线模式：测试消息已写入本地 outbox。" : `测试消息已发送（${r.transport}）。`, false)}>发送测试</button>
+          </div>
+        </form>
+        <h4 style={{ marginTop: 18 }}>最近通知</h4>
+        {notices.length ? <table className="fin-table"><thead><tr><th>时间</th><th>事件</th><th>标题</th><th>结果</th></tr></thead>
+          <tbody>{notices.map(n => <tr key={n.id}><td>{n.created_at}</td>
+            <td>{n.event === "project_closed" ? "商业闭环" : n.event === "redline_blocked" ? "红线拦截" : n.event}</td>
+            <td>{n.subject}</td>
+            <td><span className={`pill ${n.state === "sent" ? "ok" : ""}`}>{n.state === "sent" ? "已推送" : n.state === "failed" ? "失败" : "待推送"}</span></td></tr>)}</tbody></table>
+          : <p className="hint">还没有推送记录。9/9 闭环或红线拦截发生后会出现在这里。</p>}
       </section>
       <section className="fin-card"><h3>邮件服务</h3>
         <p className="hint">保存邮件服务器配置后，可主动发送一封测试邮件。AI 邮件工具目前只生成待发送草稿，任务重试不会自动发信。</p>
