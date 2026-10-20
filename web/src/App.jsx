@@ -4,6 +4,7 @@ import { marked } from "marked";
 import { api, auth, ping, scopeOf } from "./api.js";
 import Workspace from "./Workspace.jsx";
 import NewTaskModal from "./NewTaskModal.jsx";
+import ProjectFlow, { FailureDiagnosis } from "./ProjectFlow.jsx";
 import DialogAccessibility from "./DialogAccessibility.jsx";
 import ExtensionsView from "./ExtensionsView.jsx";
 import GovernanceView, { ProjectRecovery } from "./GovernanceView.jsx";
@@ -1905,7 +1906,7 @@ function AboutModal({ onClose }) {
     <div className="mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>关于 Agent OS</h3>
-        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "4.0.0"}</span></div>
+        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "4.1.0"}</span></div>
         <div className="row"><span>引擎</span><div className="spacer" /><span className="mono">{info?.engine || "DSH (ACP) + FastAPI"}</span></div>
         <div className="row"><span>外壳</span><div className="spacer" /><span className="mono">{info?.shell || "Tauri 2 / React 18"}</span></div>
         <div className="row"><span>冻结基线</span><div className="spacer" /><span className="mono">{info?.frozen_baseline || "v1.0.0"}</span></div>
@@ -2165,6 +2166,10 @@ function RunDetail({ chat, show, onToggle, onApproval }) {
         <div className="kv"><span>Token</span><b>{(run?.usage_tokens || 0).toLocaleString()}</b></div>
         <div className="kv"><span>运行次数</span><b>{view?.runs?.length || 0}</b></div>
       </div>
+
+      {(state === "failed" || state === "rejected") && run?.id && (
+        <FailureDiagnosis runId={run.id} taskId={taskId} onRetry={() => onApproval?.()} />
+      )}
 
       <h5>编排拓扑</h5>
       <div className="topo">
@@ -2813,13 +2818,8 @@ function ProjectCard({ projectId }) {
       </div>
       <ProjectRecovery data={v} onChanged={setV} />
       <div className="stages">
-        {v.stages.map((s) => (
-          <div key={s.id} className={cls("stage", s.state)}>
-            <span className="dot-s" />
-            <span className="nm">{s.seq}. {STAGE_LABEL[s.key] || s.key}</span>
-            <span className="st">{s.state}</span>
-          </div>
-        ))}
+        <ProjectFlow projectId={v.project.id} data={v}
+                     onChanged={() => api.project(projectId).then(setV).catch(() => {})} />
       </div>
       <div className="files">
         {v.deliverables.map((d) => (

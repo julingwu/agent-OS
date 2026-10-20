@@ -66,6 +66,9 @@ SEED = [
     ("ROLE-LEGAL", "法务", "legal",
      "你是法务。审查文案与条款风险，必要时行使否决权。",
      "deepseek-chat", "合规,条款,风险", "file_write", "legal_review.md", 1),
+    ("ROLE-RESEARCH", "研究员", "research",
+     "你是研究员。先给来源与口径，再给结论；查不到就写清楚缺口，不要编。",
+     "deepseek-chat", "检索,取证,来源核验", "web_fetch,file_write", "research_notes.md", 0),
 ]
 
 
@@ -77,6 +80,7 @@ TAG_WORDS: dict[str, tuple[str, ...]] = {
     "data": ("数据", "分析", "报表", "指标", "财务", "对账", "取数"),
     "qa": ("测试", "验收", "复现", "缺陷", "qa"),
     "translate": ("翻译", "英文", "中译英", "英译中", "translate"),
+    "research": ("研究", "调研", "检索", "取证", "查资料", "行情"),
 }
 
 

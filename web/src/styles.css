@@ -2548,3 +2548,60 @@ button .icon { flex-shrink: 0; }
   .integration-page .grid2 { grid-template-columns: 1fr; gap: 0; }
   .integration-page .fin-card { padding: 18px; }
 }
+
+/* ---------------- V4.1 阶段全景 / 实时执行流 / 失败诊断 ---------------- */
+.flow { display: flex; flex-direction: column; gap: 10px; }
+.flow-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.flow-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.flow-node { position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 156px;
+  padding: 10px 12px 10px 26px; border: 1px solid var(--border, #e6e3f4); border-radius: 12px;
+  background: var(--card, #fff); color: inherit; text-align: left; cursor: pointer; }
+.flow-node:hover { border-color: #8b7bff; }
+.flow-node.done .flow-dot { background: #22a06b; }
+.flow-node.active .flow-dot { background: #7562db; }
+.flow-node.pending .flow-dot { background: #c9c4e0; }
+.flow-node.blocked { border-color: #e05252; background: rgba(224, 82, 82, .08); }
+.flow-node.failed { animation: flowPulse 1.6s ease-in-out infinite; }
+@keyframes flowPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224, 82, 82, .45); }
+  50% { box-shadow: 0 0 0 6px rgba(224, 82, 82, 0); }
+}
+.flow-dot { position: absolute; left: 10px; top: 15px; width: 8px; height: 8px; border-radius: 50%; }
+.flow-title { font-weight: 600; font-size: 13px; }
+.flow-role { font-size: 11px; opacity: .7; }
+.flow-state { font-size: 11px; opacity: .6; }
+.flow-x { position: absolute; right: 9px; top: 7px; color: #e05252; font-weight: 700; }
+.flow-spin { position: absolute; right: 9px; top: 9px; width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid #7562db; border-top-color: transparent; animation: flowSpin .8s linear infinite; }
+@keyframes flowSpin { to { transform: rotate(360deg); } }
+
+.live-wrap { border: 1px solid var(--border, #e6e3f4); border-radius: 12px; padding: 10px; margin: 10px 0; }
+.live-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.live-stream { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 4px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.live-line { display: grid; grid-template-columns: 64px 52px 120px 1fr; gap: 6px; padding: 3px 0;
+  border-bottom: 1px dashed rgba(120, 110, 180, .15); }
+.live-badge { font-weight: 700; }
+.live-line.thinking .live-badge { color: #7562db; }
+.live-line.tool .live-badge { color: #b06a00; }
+.live-line.result .live-badge { color: #0a7a5a; }
+.live-ms { opacity: .55; text-align: right; }
+.live-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-detail { opacity: .82; white-space: pre-wrap; word-break: break-word; }
+
+.diag-box { border: 1px solid rgba(224, 82, 82, .45); background: rgba(224, 82, 82, .07);
+  border-radius: 12px; padding: 12px; margin: 10px 0; }
+.diag-head { font-weight: 700; color: #b02a2a; margin-bottom: 6px; }
+.diag-cause { margin: 0 0 6px; font-weight: 600; }
+.diag-fixes { margin: 0 0 8px 18px; padding: 0; }
+.diag-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+
+.stage-detail h4 { margin: 16px 0 6px; }
+.stage-detail-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+.bb-item pre { white-space: pre-wrap; max-height: 220px; overflow: auto;
+  background: rgba(117, 98, 219, .06); padding: 8px; border-radius: 8px; }
+.gate-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+
+.stage-detail .fin-table th, .stage-detail .fin-table td { white-space: nowrap; }
+.stage-detail .fin-table td:nth-child(2) { white-space: normal; }
+.stage-detail.modal.wide, .modal.wide.stage-detail { max-width: 1080px; width: 92vw; }

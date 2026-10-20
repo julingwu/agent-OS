@@ -215,7 +215,7 @@ def ensure(conn: sqlite3.Connection) -> None:
 
 def create_project(conn, *, name: str, requirement: str, entity: str = "LE-GROUP-HQ",
                    owner: str | None = None, use_llm_docs: int = 0,
-                   tenant_id: str | None = None) -> dict:
+                   tenant_id: str | None = None, flow: dict | str | None = None) -> dict:
     ensure(conn)
     from . import tenancy
     actual_tenant = tenancy.of_entity(conn, entity)
@@ -229,16 +229,27 @@ def create_project(conn, *, name: str, requirement: str, entity: str = "LE-GROUP
                                            tenant_id,owner_identity, use_llm_docs)
                     VALUES (?,?,?,?,?,?,?)""", (pid, name, requirement, entity,tenant_id,owner,
                                              1 if use_llm_docs else 0))
-    for seq, (key, title) in enumerate(STAGES):
-        conn.execute("""INSERT INTO project_stages (id, project_id, seq, key, title)
-                        VALUES (?,?,?,?,?)""", (_id("S"), pid, seq, key, title))
+    if flow is not None:
+        # v4.1：阶段由流程模板/DAG 生成（分析、调研、紧急、软件四条流）
+        from . import flows as _flows
+        _flows.ensure(conn)
+        stage_nodes = _flows.instantiate(conn, pid, flow)
+    else:
+        stage_nodes = None
+        for seq, (key, title) in enumerate(STAGES):
+            conn.execute("""INSERT INTO project_stages (id, project_id, seq, key, title)
+                            VALUES (?,?,?,?,?)""", (_id("S"), pid, seq, key, title))
     conn.commit()
     write_audit(conn, legal_entity_id=entity, verb="project", task_id=None,
                 actor=owner, layer="system", action="project_created", target=pid,
                 payload={"name": name, "requirement": requirement[:200],
-                         "owner_identity": owner}, response={})
+                         "owner_identity": owner,
+                         "flow": flow if isinstance(flow, str) else
+                         (flow or {}).get("flow_id") if flow else None},
+                response={})
     conn.commit()
-    return {"project_id": pid, "stages": len(STAGES)}
+    return {"project_id": pid, "stages": len(stage_nodes or STAGES),
+            "flow_id": flow if isinstance(flow, str) else (flow or {}).get("flow_id") if flow else None}
 
 
 def _stage(conn, pid: str, key: str):
@@ -588,8 +599,91 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
                                (gen.retro(pid, requirement, facts) if llm_docs else None), fb)
         gate(conn, pid, key, "复盘含改进项", note="actions")
 
+    else:
+        # v4.1：模板/DAG 生成的阶段（检索/分析/撰写/审核/交付…），不再写死
+        out.update(_flow_stage(conn, pid, key, requirement, llm_docs))
+
     finish_stage(conn, pid, key)
     return out
+
+
+def _flow_stage(conn, pid: str, key: str, requirement: str, llm_docs: bool) -> dict:
+    """执行一个流程节点：能干的角色真跑一次 ACP，再落文档 → 过闸门 → 写黑板。"""
+    import os
+
+    from . import flows
+    node = flows.node_of(conn, pid, key)
+    out: dict = {"role": node.get("role")}
+    stub = (os.environ.get("M0_PIPELINE_EXEC", "1") != "1"
+            or os.environ.get("M0_FLOW_EXEC", "1") != "1")
+    if not stub and node.get("role") not in (None, "", flows.PLATFORM):
+        out.update(_flow_execute(conn, pid, node, requirement))
+    text = flows.stage_document(pid, requirement, node) if llm_docs else None
+    if not text:
+        text = flows.template_document(pid, requirement, node)
+    path = _write(conn, pid, key, node.get("kind") or "doc",
+                  f"{int(node.get('seq') or 0):02d}_{key}.md", text)
+    gate(conn, pid, key, node.get("gate") or f"{node['title']}完成", note=key)
+    flows.blackboard_write(conn, pid=pid, stage_key=key,
+                           role_tag=node.get("role") or "", title=node["title"],
+                           content=text, file_path=path)
+    out.update({"file": path, "blackboard": True})
+    return out
+
+
+def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
+    """给流程节点派一个真实任务：同角色员工 → task/run → ACP → 验收。
+
+    失败就抛出（项目随之 blocked）——流程节点不是「写完文档就算过」，
+    真要有人干活；这样失败也能在界面上定位到具体 Run（v4.1 战役四）。
+    """
+    import os
+    import uuid as _uuid
+
+    from . import acceptance_run
+    from .engine import dsh_adapter, task_generator
+    from .ui import roles as ui_roles
+
+    entity = _task_entity(conn, pid)
+    project = conn.execute("SELECT tenant_id,owner_identity FROM projects WHERE id=?",
+                           (pid,)).fetchone()
+    if project is None:
+        raise KeyError(pid)
+    tenant_id = project["tenant_id"]
+    people = ui_roles.pick(conn, [node["role"]], entity_id=entity)
+    if not people:
+        raise PermissionError("FlowEmployeeRequired")
+    employee = people[0]
+    actor_id = _execution_actor(conn, project["owner_identity"], entity, tenant_id)["id"]
+    brief = (f"{node['title']}（{node['key']}）：围绕「{requirement[:120]}」"
+             f"只交付本阶段需要的那一份内容，按验收口径「{node.get('gate') or '完成'}」写。")
+    gen = task_generator.generate(conn, brief, legal_entity_id=entity, tenant_id=tenant_id)
+    tid = gen["task_id"]
+    conn.execute("UPDATE tasks SET project_id=?,stage=?,owner_employee_id=? WHERE id=?",
+                 (pid, node["key"], employee["id"], tid))
+    run_id = "RUN-" + _uuid.uuid4().hex[:16]
+    conn.execute(
+        "INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id,tenant_id,state,"
+        " runner, actor_identity) VALUES (?,?,1,?,?, 'spawned', 'acp', ?)",
+        (run_id, tid, entity, tenant_id, actor_id))
+    conn.commit()
+    from . import state_machine as _sm
+    try:
+        _sm.transition(conn, tid, "run_spawned", actor="system")
+    except Exception:                    # noqa: BLE001
+        pass
+    conn.commit()
+    out = dsh_adapter.execute_run(conn, run_id,
+                                  runner=os.environ.get("UI_RUNNER", "acp"),
+                                  budget_tokens=int(os.environ.get(
+                                      "M0_PROJECT_TASK_BUDGET", "120000")))
+    state = out.get("task_state")
+    if state in ("pending_review", "completed"):
+        reviewed = acceptance_run.run(conn, tid, [entity])
+        state = reviewed["task_state"]
+    if state != "completed":
+        raise RuntimeError(f"阶段 {node['key']} 未通过：{state}")
+    return {"task_id": tid, "run_id": run_id, "employee": employee["id"], "state": state}
 
 
 def _task_entity(conn, pid: str) -> str:
@@ -897,7 +991,8 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
             raise KeyError(pid)
         _execution_actor(conn, project["owner_identity"], project["legal_entity_id"],
                          project["tenant_id"])
-    keys = keys or [k for k, _ in STAGES]
+    keys = keys or [r["key"] for r in conn.execute(
+        "SELECT key FROM project_stages WHERE project_id=? ORDER BY seq", (pid,)).fetchall()]
     # v2.4 分层记忆：立项时把同类「驳回经验 / 共识结论」注入需求上下文。
     # 注入文本会随立项书/纪要落盘，审计留 experience_injected，可回溯是哪几条。
     try:
@@ -922,7 +1017,17 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
         pass
     done = []
     for key in keys:
-        run_stage(conn, pid, key, requirement)
+        try:
+            run_stage(conn, pid, key, requirement)
+        except BaseException:
+            # v4.1：流程/产线任一阶段失败，阶段与项目都必须落到 blocked，
+            # 否则界面上的阶段会永远停在「进行中」（战役四要靠这个定位失败）。
+            conn.execute("UPDATE project_stages SET state='blocked'"
+                         " WHERE project_id=? AND key=? AND state<>'done'", (pid, key))
+            conn.execute("UPDATE projects SET state='blocked' WHERE id=? AND state<>'done'",
+                         (pid,))
+            conn.commit()
+            raise
         done.append(key)
     # v4.0：9/9 阶段全部 done ⇒ 企微群推「商业闭环」。投递走后台线程，
     # 通知失败只落 notifications.state='failed'，绝不回滚产线。

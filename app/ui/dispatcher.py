@@ -1,17 +1,22 @@
-"""CEO 调度台：老板的模糊需求 → 标签 → 角色库挑人 → 建群 → 派活。
+"""CEO 调度台：老板的模糊需求 → 标签 → 流程规划 → 挑人建群 → 派活。
 
-设计取舍（M15 基础版）：
-  * 路由先走**确定性标签匹配**（`roles.TAG_WORDS`），结果可解释、可测试；
-    标签判不出来时才让模型兜底（下一步），否则每条闲聊都要烧 token。
-  * 建群只拉「标签命中」的人：测试用例要求「开发一个计算器」只能拉开发，
-    所以这里没有默认 PM，也不加无关角色。
-  * 群里第一条派活消息由 CEO 自己发（`author=CEO 调度台`），随后 PM 接手。
+设计取舍：
+
+* 路由先走**确定性标签匹配**（`roles.TAG_WORDS`），结果可解释、可测试；
+  标签判不出来时才让模型兜底，否则每条闲聊都要烧 token。
+* v4.1 起多了一步**流程规划**（`flows.plan`）：同样先关键词、后模型。规划结果决定
+  项目阶段（DAG）与要拉谁进群——分析类需求不会再冒出开发/测试/发布节点。
+* 建群只拉**规划里用到的角色**：测试用例要求「开发一个计算器」只能拉开发，
+  所以这里没有默认 PM，也不加无关角色。
+* 群里第一条派活消息是「作战计划」（阶段 / 角色 / 依赖 / 闸门），由 CEO 发出，
+  随后 PM 接手；PM 的汇总读黑板（`project_artifacts`），不重读文件。
 """
 from __future__ import annotations
 
 import json
+import os
 import re
-import secrets
+import threading
 
 from . import roles, store
 
@@ -55,21 +60,85 @@ def _group_title(text: str, tags: list[str]) -> str:
     head = re.split(r"[，,。；;\n]", (text or "").strip())[0]
     head = head[:16] or "新任务"
     label = {"dev": "开发", "design": "设计", "content": "内容", "data": "数据",
-             "qa": "测试", "translate": "翻译"}.get(tags[0] if tags else "", "攻坚")
+             "qa": "测试", "translate": "翻译", "research": "研究", "audit": "审核",
+             "product": "产品", "architect": "架构", "ops": "运维"}.get(
+                 tags[0] if tags else "", "攻坚")
     return f"{head}·{label}组"
+
+
+def open_group(conn, text: str, plan: dict, *, entity_id: str = "LE-GROUP-HQ",
+               tenant_id: str | None = None) -> dict | None:
+    """按规划里的角色建群：同角色多人会全部拉进来（支持并行）；没角色就不建群。"""
+    wanted = plan.get("roles") or []
+    if not wanted:
+        return None
+    people = roles.pick(conn, wanted, entity_id=entity_id)
+    seen, members = set(), []
+    for person in people:
+        if person["id"] in seen:
+            continue
+        seen.add(person["id"])
+        members.append({"id": person["id"], "name": person["name"], "tag": person.get("tag")})
+    if not members:
+        return None
+    chat = store.create_group(conn, _group_title(text, wanted),
+                              [m["id"] for m in members], tenant_id=tenant_id)
+    return {"chat_id": chat["id"], "members": members}
+
+
+def plan_message(pid: str, plan: dict, group: dict | None) -> str:
+    lines = [f"## 作战计划 · {pid}",
+             f"流程：**{plan['name']}**（{len(plan['nodes'])} 步）｜规划依据："
+             f"{plan['how']}{'：' + plan['reason'] if plan['reason'] else ''}", "",
+             "| # | 阶段 | 负责角色 | 依赖 | 闸门 |", "|---|---|---|---|---|"]
+    for i, node in enumerate(plan["nodes"], start=1):
+        prev = plan["nodes"][i - 2]["title"] if i > 1 else "—"
+        who = "平台" if node["role"] == "platform" else node["role"]
+        lines.append(f"| {i} | {node['title']} | {who} | {prev} | {node['gate']} |")
+    if group and group.get("members"):
+        lines += ["", "群成员：" + "、".join(
+            f"{m['name']}（{m['tag']}）" for m in group["members"])]
+    lines += ["", "执行按上表依赖推进；每段产出先写黑板，PM 收尾时汇总。"]
+    return "\n".join(lines)
+
+
+def assign(conn, pid: str, stage_key: str, employee_id: str, *,
+           actor: str | None = None) -> dict:
+    """PM 指定某阶段的执行人（同角色多人时用来并行分工）。"""
+    from ..audit import write_audit
+    stage = conn.execute("SELECT * FROM project_stages WHERE project_id=? AND key=?",
+                         (pid, stage_key)).fetchone()
+    if stage is None:
+        raise KeyError("StageNotFound")
+    emp = conn.execute("""SELECT e.id,e.name,e.legal_entity_id,r.tag FROM ai_employees e
+                          JOIN role_templates r ON r.id=e.role_id WHERE e.id=?""",
+                       (employee_id,)).fetchone()
+    if emp is None:
+        raise KeyError("EmployeeNotFound")
+    proj = conn.execute("SELECT legal_entity_id FROM projects WHERE id=?",
+                        (pid,)).fetchone()
+    if proj is not None and emp["legal_entity_id"] != proj["legal_entity_id"]:
+        raise PermissionError("EmployeeScopeMismatch")
+    conn.execute("UPDATE project_stages SET assignee_id=?, role_tag=COALESCE(role_tag,?)"
+                 " WHERE project_id=? AND key=?",
+                 (emp["id"], emp["tag"], pid, stage_key))
+    conn.commit()
+    write_audit(conn, legal_entity_id=proj["legal_entity_id"] if proj else "LE-GROUP-HQ",
+                verb="project", actor=actor, layer="system", action="stage_assigned",
+                target=pid, payload={"stage": stage_key, "employee": emp["id"],
+                                     "tag": emp["tag"]}, response={})
+    conn.commit()
+    return {"project_id": pid, "stage": stage_key, "assignee": emp["id"], "name": emp["name"]}
 
 
 def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
           use_llm_docs: int = 0, tenant_id: str | None = None,
           actor_id: str | None = None) -> dict:
-    """把一条需求变成**项目**（v1.5）：立项 → 研讨 → 拆解 → … → 复盘。
-
-    标签只用于记录与后续选人；阶段推进由 pipeline 的模板产物与闸门驱动。
-    """
-    from .. import pipeline
+    """一条需求 → 项目（按规划生成阶段）+ 协作群 + 作战计划 + 后台执行。"""
+    from .. import flows, pipeline
     from ..tenancy import checked_entity_tenant
     tenant_id = checked_entity_tenant(conn, entity_id, tenant_id)
-    chat_id = ensure_ceo_chat(conn, tenant_id, entity_id)["id"]
+    ceo_chat_id = ensure_ceo_chat(conn, tenant_id, entity_id)["id"]
 
     tags = roles.tags_of(text)
     how, reason = "keyword", ""
@@ -79,49 +148,67 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
         if guess and guess.get("tags"):
             tags, reason, how = guess["tags"], guess.get("reason") or "", "llm"
 
+    plan = flows.plan(conn, text, tags)            # v4.1：关键词 → 模型 → 兜底
+
     title = (text.strip().splitlines()[0][:24] if text.strip() else "新项目") or "新项目"
     proj = pipeline.create_project(conn, name=title, requirement=text,
                                    entity=entity_id, owner=actor_id,
-                                   use_llm_docs=use_llm_docs, tenant_id=tenant_id)
+                                   use_llm_docs=use_llm_docs, tenant_id=tenant_id,
+                                   flow=plan)
     pid = proj["project_id"]
 
-    store.add_message(conn, chat_id, "agent",
-                      f"已立项 {pid}，按标签【{'/'.join(tags) or '未识别'}】进入 0-1（接需求与立项）。"
-                      f"（{how}{'：' + reason if reason else ''}）",
+    group = open_group(conn, text, plan, entity_id=entity_id, tenant_id=tenant_id)
+    if group:
+        store.add_message(conn, group["chat_id"], "agent", plan_message(pid, plan, group),
+                          author=CEO_TITLE, kind="plan",
+                          meta=json.dumps({"project_id": pid, "flow_id": plan["flow_id"],
+                                           "nodes": [n["key"] for n in plan["nodes"]]},
+                                          ensure_ascii=False))
+
+    store.add_message(conn, ceo_chat_id, "agent",
+                      f"已立项 {pid}，流程【{plan['name']}】{len(plan['nodes'])} 步"
+                      f"（{'/'.join(n['title'] for n in plan['nodes'])}）。"
+                      f"标签【{'/'.join(tags) or '未识别'}】·{plan['how']}",
                       author=CEO_TITLE, kind="project",
-                      meta=json.dumps({"project_id": pid,
-                                       "use_llm_docs": bool(use_llm_docs)},
+                      meta=json.dumps({"project_id": pid, "flow_id": plan["flow_id"],
+                                       "use_llm_docs": bool(use_llm_docs),
+                                       "group_id": group["chat_id"] if group else None},
                                       ensure_ascii=False))
 
-    stages = [k for k, _ in pipeline.STAGES]
-
     def _run() -> None:
-        import threading as _th
         from ..db import get_conn as _gc
+        from ..errors import human_error
+        targets = [c for c in (group["chat_id"] if group else None, ceo_chat_id) if c]
         with _gc() as c2:
             try:
                 pipeline.run_project(c2, pid, text)
                 rows = c2.execute("SELECT state FROM project_stages WHERE project_id=?",
                                   (pid,)).fetchall()
                 done = sum(1 for r in rows if r["state"] == "done")
-                store.add_message(c2, chat_id, "agent",
-                                  f"项目 {pid} 跑完 {done}/{len(rows)} 个阶段；"
-                                  "立项书/纪要/WBS/发布清单/复盘都在项目目录。",
-                                  author=CEO_TITLE)
+                summary = flows.pm_summary(c2, pid, llm_docs=bool(use_llm_docs))
+                body = (f"项目 {pid} 跑完 {done}/{len(rows)} 个阶段。\n\n"
+                        + (summary["summary"] or "（黑板为空）"))
+                for chat in targets:
+                    store.add_message(c2, chat, "agent", body, author=CEO_TITLE,
+                                      kind="summary",
+                                      meta=json.dumps({"project_id": pid},
+                                                      ensure_ascii=False))
             except Exception as exc:       # noqa: BLE001
-                from ..errors import human_error
-                store.add_message(c2, chat_id, "agent",
-                                  f"项目 {pid} 已暂停：{human_error(exc)}",
-                                  author=CEO_TITLE)
+                for chat in targets:
+                    store.add_message(c2, chat, "agent",
+                                      f"项目 {pid} 已暂停：{human_error(exc)}",
+                                      author=CEO_TITLE)
             c2.commit()
 
-    import os as _os
-    import threading
-    if _os.environ.get("M0_DISPATCH_SYNC") == "1":     # 测试里同步跑，避免竞态
+    if os.environ.get("M0_DISPATCH_SYNC") == "1":     # 测试里同步跑，避免竞态
         _run()
     else:
         threading.Thread(target=_run, daemon=True).start()
 
     return {"project_id": pid, "tags": tags, "route": how, "reason": reason,
-            "stages": stages, "chat_id": chat_id, "async": True,
-            "members": [], "member_names": []}
+            "stages": [n["key"] for n in plan["nodes"]], "flow": plan,
+            "chat_id": group["chat_id"] if group else ceo_chat_id,
+            "ceo_chat_id": ceo_chat_id,
+            "members": group["members"] if group else [],
+            "member_names": [m["name"] for m in group["members"]] if group else [],
+            "async": True}

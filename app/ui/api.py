@@ -1510,6 +1510,73 @@ def project_detail(project_id: str, oa_ui: str | None = Depends(_token)):
             "timeline": tl}
 
 
+# ------------------------------------------- 阶段详情 / 流程模板（v4.1）
+@router.get("/flow-templates")
+def flow_templates(oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        from .. import flows
+        return {"templates": flows.templates(conn)}
+
+
+@router.get("/projects/{project_id}/stages/{stage_key}")
+def project_stage(project_id: str, stage_key: str, oa_ui: str | None = Depends(_token)):
+    """阶段详情：交付物 + 闸门 + 审计 + 历史 Run/Trace（点已完成阶段进来的页）。"""
+    _require(oa_ui)
+    with get_conn() as conn:
+        if conn.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
+            raise HTTPException(404, detail={"code": "ProjectNotFound"})
+        _task_actor(conn, oa_ui, "task:read")
+        from .. import flows
+        flows.ensure(conn)
+        try:
+            return flows.stage_detail(conn, project_id, stage_key)
+        except KeyError:
+            raise HTTPException(404, detail={"code": "StageNotFound"}) from None
+
+
+class AssignIn(BaseModel):
+    employee_id: str
+
+
+@router.get("/projects/{project_id}/stages/{stage_key}/files/{delivery_id}")
+def project_stage_file(project_id: str, stage_key: str, delivery_id: str,
+                       oa_ui: str | None = Depends(_token)):
+    """下载阶段交付物（阶段详情页里的「下载」）。"""
+    import pathlib as _pathlib
+
+    from fastapi.responses import FileResponse
+
+    _require(oa_ui)
+    with get_conn() as conn:
+        row = conn.execute("SELECT file_path FROM stage_deliverables"
+                           " WHERE id=? AND project_id=? AND stage_key=?",
+                           (delivery_id, project_id, stage_key)).fetchone()
+        if row is None:
+            raise HTTPException(404, detail={"code": "FileNotFound"})
+        path = _pathlib.Path(row["file_path"])
+        if not path.is_file():
+            raise HTTPException(404, detail={"code": "FileNotFound"})
+    return FileResponse(path, filename=path.name)
+
+
+@router.post("/projects/{project_id}/stages/{stage_key}/assign")
+def project_stage_assign(project_id: str, stage_key: str, payload: AssignIn,
+                         oa_ui: str | None = Depends(_token)):
+    """PM 指定阶段执行人（同角色多人时可并行分工）。"""
+    _require(oa_ui)
+    from . import dispatcher
+    with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:write")
+        try:
+            return dispatcher.assign(conn, project_id, stage_key, payload.employee_id,
+                                     actor=actor["id"])
+        except KeyError as exc:
+            raise HTTPException(404, detail={"code": str(exc).strip("'")}) from None
+        except PermissionError as exc:
+            raise HTTPException(403, detail={"code": str(exc)}) from None
+
+
 # ------------------------------------------------------- Tool ACL（v1.5 战役二）
 class ToolCallIn(BaseModel):
     role_tag: str
@@ -1751,6 +1818,87 @@ def span_audit(span_id: str, oa_ui: str | None = Depends(_token)):
         from .. import trace as tr
         rows = tr.audit_for_span(conn, span_id)
     return {"audit": rows}
+
+
+# ------------------------------------- 实时执行流 / 失败诊断（v4.1）
+_TERMINAL_RUN = {"succeeded", "failed", "cancelled", "rejected", "done"}
+
+
+@router.get("/runs/{run_id}/live-stream")
+async def run_live_stream(run_id: str, after: int = 0, oa_ui: str | None = Depends(_token)):
+    """SSE：把 trace_spans 逐条推给前端（thinking / tool_call / tool_result / 模型）。
+
+    span 在关闭时即落库并 commit（`trace.span()`），所以这里是**真实时**，不是跑完补发。
+    没有新 span 时也每 0.8s 发一次 status，前端据此判断还在跑还是已收尾。
+    """
+    from fastapi.responses import StreamingResponse
+    import asyncio
+
+    _require(oa_ui)
+
+    async def gen():
+        last = int(after or 0)
+        idle = 0
+        yield "retry: 3000\n\n"
+        for _ in range(900):                    # 上限 12 分钟，前端断开即结束
+            rows, state = [], None
+            try:
+                with get_conn() as conn:
+                    rows = conn.execute(
+                        "SELECT s.rowid,s.kind,s.name,s.status,s.started_ms,s.ended_ms,"
+                        "s.tokens,s.detail FROM trace_spans s JOIN agent_traces t"
+                        " ON t.trace_id=s.trace_id WHERE t.run_id=? AND s.rowid>?"
+                        " ORDER BY s.rowid LIMIT 50", (run_id, last)).fetchall()
+                    run = conn.execute("SELECT state FROM task_runs WHERE id=?",
+                                       (run_id,)).fetchone()
+                    state = run["state"] if run else None
+            except Exception:                   # noqa: BLE001 - 流不能因为一次读失败就断
+                rows, state = [], None
+            for row in rows:
+                last = int(row["rowid"])
+                kind = row["kind"] or "span"
+                if kind == "tool":
+                    event = "tool_call"
+                elif kind == "thinking":
+                    event = "thinking"
+                elif kind == "model":
+                    event = "model"
+                else:
+                    event = "span"
+                payload = {"kind": kind, "name": row["name"], "status": row["status"],
+                           "start_ms": row["started_ms"], "end_ms": row["ended_ms"],
+                           "tokens": row["tokens"], "detail": row["detail"] or ""}
+                yield "event: " + event + "\ndata: " + json.dumps(
+                    payload, ensure_ascii=False) + "\n\n"
+                if kind == "tool" and (row["detail"] or ""):
+                    yield "event: tool_result\ndata: " + json.dumps(
+                        {"name": row["name"], "detail": row["detail"],
+                         "status": row["status"]}, ensure_ascii=False) + "\n\n"
+                idle = 0
+            yield "event: status\ndata: " + json.dumps(
+                {"run_id": run_id, "state": state}, ensure_ascii=False) + "\n\n"
+            if state in _TERMINAL_RUN:
+                idle += 1
+                if idle >= 2 and not rows:
+                    yield "event: done\ndata: {}\n\n"
+                    return
+            await asyncio.sleep(0.8)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+@router.get("/runs/{run_id}/diagnosis")
+def run_diagnosis(run_id: str, oa_ui: str | None = Depends(_token)):
+    """失败诊断：规则结论优先，模型可用时补一句根因与修复建议（中文）。"""
+    _require(oa_ui)
+    from .. import flows
+    with get_conn() as conn:
+        try:
+            return flows.diagnose(conn, run_id)
+        except KeyError:
+            raise HTTPException(404, detail={"code": "RunNotFound"}) from None
 
 
 # ------------------------------------------------------------ RBAC（v2.3）

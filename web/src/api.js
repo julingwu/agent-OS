@@ -222,6 +222,18 @@ Object.assign(api, {
 Object.assign(api, {
   projects: () => req("/projects"),
   project: (id) => req(`/projects/${id}`),
+  flowTemplates: () => req("/flow-templates"),
+  stageDetail: (pid, key) => req(`/projects/${pid}/stages/${key}`),
+  assignStage: (pid, key, employee_id) =>
+    req(`/projects/${pid}/stages/${key}/assign`, { method: "POST", body: JSON.stringify({ employee_id }) }),
+  runDiagnosis: (runId) => req(`/runs/${runId}/diagnosis`),
+  // SSE / 下载链接不能用自定义头，服务端同时接受 ?t=<token>（与预览票据同一入口）
+  withToken: (path) => {
+    const t = auth.get();
+    return BASE + path + (t ? (path.includes("?") ? "&" : "?") + "t=" + encodeURIComponent(t) : "");
+  },
+  streamUrl: (path) => api.withToken(path),
+  stageFileUrl: (pid, key, id) => api.withToken(`/projects/${pid}/stages/${key}/files/${id}`),
 });
 
 // 项目级开关（v1.6.1）

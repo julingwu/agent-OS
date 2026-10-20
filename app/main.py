@@ -36,7 +36,7 @@ STATIC = pathlib.Path(__file__).resolve().parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    from . import mcp, mailer, notify, pipeline
+    from . import flows, mcp, mailer, notify, pipeline
     from .wecom import robot
     with connect() as conn:
         mcp.ensure(conn)
@@ -44,6 +44,7 @@ async def lifespan(app: FastAPI):
         notify.ensure(conn)
         robot.ensure(conn)
         pipeline.ensure(conn)
+        flows.ensure(conn)
         pipeline.recover_interrupted(conn)
     if os.environ.get("WECOM_WATCHER", "0") == "1":
         wecom_watcher.start(interval=float(os.environ.get("WECOM_TICK", "3")))
@@ -76,7 +77,7 @@ async def lifespan(app: FastAPI):
         wecom_watcher.stop()
 
 
-app = FastAPI(title="Agent OS", version="4.0.0", lifespan=lifespan)
+app = FastAPI(title="Agent OS", version="4.1.0", lifespan=lifespan)
 
 # the desktop shell (tauri://localhost) talks to 127.0.0.1:8077 with a Bearer token,
 # so no credentials are involved and a permissive origin list is safe here.
