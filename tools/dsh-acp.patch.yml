@@ -1,0 +1,5 @@
+# Use the current official model name for this local integration.
+- id: acp
+  config:
+    provider: deepseek-official
+    model: deepseek-flash

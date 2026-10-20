@@ -25,6 +25,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNNER", "mock")
     monkeypatch.setenv("WECOM_MOCK", "1")
     monkeypatch.setenv("WECOM_WATCHER", "0")
+    monkeypatch.setenv("WECOM_AUTORUN", "0")
     monkeypatch.setenv("WECOM_TOKEN", TOKEN)
     monkeypatch.setenv("WECOM_CORP_ID", CORP)
     monkeypatch.setenv("WECOM_AES_KEY", AES_KEY)
@@ -181,10 +182,10 @@ def test_m6_9_autorun_moves_the_task_forward(env, monkeypatch):
 
     for _ in range(40):
         state = env["sys"].get(f"/tasks/{tid}").json()["task"]["state"]
-        if state != "todo":
+        if state in ("pending_review", "completed", "failed"):
             break
         time.sleep(0.1)
-    assert state in ("assigned", "in_progress", "pending_review", "completed"), state
+    assert state in ("pending_review", "completed"), state
 
 
 def test_m6_10_human_criterion_can_be_signed_from_the_chat(env):

@@ -158,6 +158,11 @@ REVIEW_HINT = re.compile(r"(审查|评审|review)", re.I)
 CODE_HINT = re.compile(r"(脚本|代码|爬取|抓取|下载|解析|python|script|crawl|scrape|\.py\b|开发一个|实现一个|写个|写一个|计算器|工具|程序|函数|算法)", re.I)
 URL_RE = re.compile(r"https?://[^\s，。；;\"'）)]+")
 WEB_HINT = re.compile(r"(落地页|网页|页面|官网|首页|index\.html|html|前端界面|banner)", re.I)
+# A script can itself emit HTML. Generic words such as “代码” or “写一个”
+# are insufficient to override a web task; an explicit script/file comes first.
+SCRIPT_DELIVERABLE_HINT = re.compile(
+    r"脚本|python\s*(?:3(?:\.\d+)?\s*)?(?:script|program|程序)|"
+    r"(?<![A-Za-z0-9_/\\.-])[A-Za-z_][A-Za-z0-9_.-]*\.py(?![A-Za-z0-9_])", re.I)
 
 
 FINANCE_HINT = re.compile(r"(财务|报销|对账|核算|费用|发票|审核单)", re.I)
@@ -169,7 +174,11 @@ def task_type_of(text: str) -> str:
         return "review_write"
     if FINANCE_HINT.search(text):
         return "finance_write"
-    if WEB_HINT.search(text):
+    web = WEB_HINT.search(text)
+    script = SCRIPT_DELIVERABLE_HINT.search(text)
+    if script and (web is None or script.start() < web.start()):
+        return "code_write"
+    if web:
         return "web_write"
     return "code_write" if CODE_HINT.search(text) else "content_write"
 

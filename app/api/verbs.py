@@ -253,7 +253,7 @@ def do_request_arbitration(conn: sqlite3.Connection, req: ArbitrationIn,
     run = scoped_run(conn, req.run_id, ident)
     result, detail = "needs_human", "人工判据，转 L1"
     if c["check_type"] == "rule_auto":
-        verdict = l0_rules.evaluate(c["check_ref"], task_text(conn, c["task_id"]) or "")
+        verdict = l0_rules.evaluate(c["check_ref"], task_text(conn, c["task_id"], check_ref=c["check_ref"]) or "")
         result = "passed" if verdict["ok"] else "failed"
         detail = verdict.get("detail") or ""
     elif c["check_type"] == "script_exec":

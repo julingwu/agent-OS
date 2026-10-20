@@ -1,4 +1,8 @@
 .env
+.env.*
+!.env.example
+.c2c.json
+.c2cignore
 .venv/
 __pycache__/
 *.pyc
@@ -6,6 +10,7 @@ data/
 workspace/
 docs/raw/
 docs/runs/
+docs/ui-review/
 *.db
 .pytest_cache/
 acp_test.md

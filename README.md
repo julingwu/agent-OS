@@ -4,6 +4,16 @@
 
 ## 界面
 
+本版新增任务优先的工作台、可筛选任务中心、响应式布局和安全产物预览，并修复任务取消、驳回、重试及授权边界。
+
+完整变更、兼容说明与验证结果见 [本版发布说明](docs/RELEASE_WORKSPACE_UI.md)；本地运行和隔离回归步骤见 [工作空间使用说明](docs/UI_WORKSPACE.md)。
+
+| 新工作台（合成测试数据） | 移动端任务中心 |
+|---|---|
+| <img src="docs/screenshots/workspace-desktop.png" width="620"> | <img src="docs/screenshots/workspace-mobile.png" width="240"> |
+
+以下为原有管理功能展示：
+
 | CEO 调度台：一句话拆成项目 + 群 | 群聊里的任务卡与判据 |
 |---|---|
 | <img src="docs/screenshots/dispatch.png" width="420"> | <img src="docs/screenshots/task-card.png" width="420"> |
@@ -20,15 +30,23 @@
 
 ## 快速开始
 
-```bash
-cd C:\oaagent-m0
-cp .env.example .env            # 填 DEEPSEEK_API_KEY（只给外壳；DSH 自己读环境变量）
-
-.venv\Scripts\python.exe -m uvicorn app.main:app --port 8077
-# 浏览器打开 http://127.0.0.1:8077/?task_id=T-xxxx
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+npm --prefix web ci
+npm --prefix web run build
+Copy-Item .env.example .env
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_hex(32))"
+# 将上一步输出写入本机 .env 的 UI_SESSION_SECRET，再启动服务。
+.\.venv\Scripts\python.exe tools/auth_admin.py issue --name ceo-local --role ceo
+# 保存输出的身份 ID 和 secret，供本机登录使用。
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8077
+# 打开 http://127.0.0.1:8077/app/，使用该身份登录。
 ```
 
-建 venv（已建好，重建时用）：
+示例配置默认使用 mock 执行，不需要模型 Key。真实 DSH 执行需另外安装并配置 DSH，在本机 `.env` 填入模型 Key、设置 `UI_RUNNER=acp`，并确认 `tools/dsh-acp.patch.yml` 的供应商和模型与自己的服务匹配。模型 Key 与身份 secret 均不应提交到仓库。
+
+也可使用 uv 建立环境：
 
 ```bash
 uv venv --python "C:/Users/<you>/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe" .venv

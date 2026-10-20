@@ -114,7 +114,7 @@ def create_from_run(conn, run_id: str, *, name: str | None = None,
                          (task["owner_employee_id"],)).fetchone() if task["owner_employee_id"] else None
     from .engine import dsh_adapter
     prompt = (run["prompt_text"] if "prompt_text" in run.keys() else None) \
-        or dsh_adapter.default_prompt(task)
+        or dsh_adapter.default_prompt(task, conn=conn)
     criteria = [dict(r) for r in conn.execute(
         "SELECT criterion, check_type, state, note FROM acceptance_criteria"
         " WHERE task_id=? ORDER BY seq", (run["task_id"],))]
@@ -214,7 +214,7 @@ def run_case(conn, set_id: str, *, runner: str = "mock_acp",
     conn.commit()
     # 当前员工模型；prompt 模式决定是否照抄基准原文
     task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-    prompt = (s["prompt"] if prompt_mode != "current" else None) or dsh_adapter.default_prompt(task)
+    prompt = (s["prompt"] if prompt_mode != "current" else None) or dsh_adapter.default_prompt(task, conn=conn)
     tokens = budget_tokens if budget_tokens is not None \
         else int(os.environ.get("EVAL_BUDGET", "30000"))
     # 实体池不够时按剩余额度压估，避免 eval 还没起跑就被预算闸拒绝

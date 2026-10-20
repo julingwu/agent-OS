@@ -45,6 +45,7 @@ class AcpClient:
         self.log: list[dict] = []
         self.stderr: list[str] = []
         self._pending: list[dict] = []      # notifications seen while awaiting a response
+        self.on_started = None
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> dict:
@@ -54,6 +55,8 @@ class AcpClient:
             text=True, encoding="utf-8", errors="replace", bufsize=1,
             cwd=self.cwd, env=self.env, shell=False,
         )
+        if self.on_started is not None:
+            self.on_started(self._proc)
         threading.Thread(target=self._read_stdout, name="acp-out", daemon=True).start()
         threading.Thread(target=self._read_stderr, name="acp-err", daemon=True).start()
         return self.request("initialize", {

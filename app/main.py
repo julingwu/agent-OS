@@ -10,6 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .config import load_env
+
+# Runner/model modules resolve launch settings while importing.
+load_env()
+
 from .api import decisions, memory, relay, reports, tasks, verbs
 from .octo import api as octo_api
 from .ui import api as ui_api
@@ -20,14 +25,10 @@ from .octo import runner as octo_runner
 from .wecom import api as wecom_api
 from .wecom import sign_page
 from .wecom import watcher as wecom_watcher
-from .config import load_env
-from .db import init_db
+from .db import connect, init_db
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 STATIC = pathlib.Path(__file__).resolve().parent / "static"
-
-load_env()          # .env must be in os.environ before any dsh child is spawned
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

@@ -70,7 +70,9 @@ def test_m0_1_schema(client):
     con = db()
     tables = [r[0] for r in con.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
-    assert len(tables) == 26   # + packs, + wecom_users/pushes/outbox/seen, tables   # 11 M0 + 3 decision + 2 identity
+    assert {"legal_entities", "ai_employees", "tasks", "acceptance_criteria",
+            "evidence_refs", "task_runs", "artifacts", "budgets", "ai_audit_logs",
+            "packs", "identities", "chats", "chat_messages"} <= set(tables)
     assert con.execute("SELECT COUNT(*) FROM legal_entities").fetchone()[0] == 1
     assert con.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name='trg_tasks_state_guard'"

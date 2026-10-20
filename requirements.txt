@@ -2,3 +2,7 @@ fastapi
 uvicorn[standard]
 pytest
 httpx
+cryptography
+pymysql
+python-multipart
+defusedxml

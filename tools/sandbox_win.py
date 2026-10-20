@@ -129,17 +129,23 @@ def set_dir_low(path: pathlib.Path) -> None:
         "move the workspace under %LOCALAPPDATA% (owner is the current user)")
 
 def sandbox_env(cwd: pathlib.Path) -> dict[str, str]:
-    """Point every scratch location into the task dir; nothing else is writable."""
+    """Use a task-private scratch sibling, compatible with DSH's ACL sandbox.
+
+    DSH requires its temporary root outside the workspace. The sibling belongs
+    only to this task and is labelled Low before the launcher lowers its token.
+    """
     env = dict(os.environ)
+    cwd = cwd.resolve()
+    scratch = cwd.parent / (".tmp-" + cwd.name)
+    scratch.mkdir(parents=True, exist_ok=True)
     for name in ("TEMP", "TMP", "TMPDIR"):
-        env[name] = str(cwd / ".tmp")
+        env[name] = str(scratch)
     env["DSH_HOME"] = str(cwd / ".dsh")
     env["HOME"] = str(cwd)
     env["USERPROFILE"] = str(cwd)
     env["M0_SANDBOX"] = "lowil"
-    (cwd / ".tmp").mkdir(parents=True, exist_ok=True)
     (cwd / ".dsh").mkdir(parents=True, exist_ok=True)
-    set_dir_low(cwd / ".tmp")
+    set_dir_low(scratch)
     set_dir_low(cwd / ".dsh")
     return env
 

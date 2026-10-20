@@ -13,22 +13,36 @@ export const auth = {
 };
 
 async function req(path, opts = {}) {
-  const headers = { "content-type": "application/json" };
+  const headers = opts.body instanceof FormData ? {} : { "content-type": "application/json" };
   const token = auth.get();
   if (token) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(BASE + path, {
-    credentials: DESKTOP ? "omit" : "same-origin",
-    ...opts,
-    headers: { ...headers, ...(opts.headers || {}) },
-  });
-  if (res.status === 401) {
-    auth.clear();
-    throw Object.assign(new Error("unauthorized"), { code: 401 });
+  let res;
+  try {
+    res = await fetch(BASE + path, {
+      credentials: DESKTOP ? "omit" : "same-origin",
+      ...opts,
+      headers: { ...headers, ...(opts.headers || {}) },
+    });
+  } catch {
+    throw Object.assign(new Error("无法连接工作空间，请确认服务已启动后重试。"), { code: 0 });
   }
   if (!res.ok) {
     let detail = {};
     try { detail = await res.json(); } catch { /* ignore */ }
-    throw new Error(detail?.detail?.code || `HTTP ${res.status}`);
+    const code = detail?.detail?.code;
+    const messages = {
+      BadCredentials: "身份 ID 或密钥不正确", NotLoggedIn: "登录已过期，请重新登录。",
+      TaskActionNotAllowed: "任务状态已更新，请刷新后再操作。", NotRetryable: "当前任务状态不支持重试。",
+      EvidenceRequired: "请先查看工作产物，并补充验收说明。", ScopeDenied: "当前账号没有执行此操作的权限。",
+      CrossEntityForbidden: "当前账号无法操作这个工作空间的任务。", FileGone: "产物文件已不存在，请重新执行任务。",
+      FileNotFound: "找不到这个文件，可能已被移除。", TaskNotFound: "找不到这个任务。",
+    };
+    if (res.status === 401) {
+      auth.clear();
+      if (path !== "/login") window.dispatchEvent(new Event("oa-auth-expired"));
+    }
+    const message = messages[code] || detail?.detail?.message || (typeof detail?.detail === "string" ? detail.detail : null);
+    throw Object.assign(new Error(message || (res.status === 401 ? "登录已过期，请重新登录。" : `操作未完成（${res.status}），请刷新后重试。`)), { code: res.status, reason: code });
   }
   return res.json();
 }
@@ -49,11 +63,19 @@ export const api = {
   createGroup: (name, ids) =>
     req("/groups", { method: "POST", body: JSON.stringify({ name, employee_ids: ids }) }),
   messages: (chatId, after = 0) => req(`/chats/${chatId}/messages?after=${after}`),
+  messageStreamUrl: (chatId, after = 0) => {
+    const params = new URLSearchParams({ after: String(after) });
+    if (DESKTOP && auth.get()) params.set("t", auth.get());
+    return `${BASE}/chats/${encodeURIComponent(chatId)}/stream?${params}`;
+  },
   send: (chatId, text) =>
     req(`/chats/${chatId}/messages`, { method: "POST", body: JSON.stringify({ text }) }),
   task: (taskId) => req(`/tasks/${taskId}`),
+  tasks: (limit = 50, options = {}) => req(`/tasks?${new URLSearchParams({ limit, ...options })}`),
   action: (taskId, action, note) =>
     req(`/tasks/${taskId}/action`, { method: "POST", body: JSON.stringify({ action, note }) }),
+  retryTask: (taskId, note = "") =>
+    req(`/tasks/${taskId}/retry`, { method: "POST", body: JSON.stringify({ note }) }),
   addMember: (payload) =>
     req("/members", { method: "POST", body: JSON.stringify(payload) }),
 };
@@ -69,16 +91,12 @@ Object.assign(api, {
   ackAlert: (id) => req(`/alerts/${id}/ack`, { method: "POST" }),
   files: () => req("/files"),
   deleteFile: (id) => req(`/files/${id}`, { method: "DELETE" }),
-  fileUrl: (id) => `${ORIGIN}/ui/files/${id}/download`,
+  fileUrl: (id) => `${ORIGIN}/ui/files/${id}/download${DESKTOP && auth.get() ? `?t=${encodeURIComponent(auth.get())}` : ""}`,
   kb: (entity) => req(`/kb${entity ? `?entity=${entity}` : ""}`),
   uploadKb: (entity, file) => {
     const fd = new FormData();
     fd.append("file", file);
-    return fetch(`${BASE}/kb?entity=${entity}`, {
-      method: "POST",
-      headers: auth.get() ? { authorization: `Bearer ${auth.get()}` } : {},
-      body: fd,
-    }).then((r) => r.json());
+    return req(`/kb?entity=${encodeURIComponent(entity)}`, { method: "POST", body: fd });
   },
   deleteKb: (id) => req(`/kb/${id}`, { method: "DELETE" }),
   jobs: () => req("/jobs"),
@@ -105,7 +123,11 @@ export async function ping() {
 
 // 预览：后端用 CSP sandbox 把产物关进不透明来源，前端再用 iframe 套一层
 Object.assign(api, {
-  previewUrl: (id) => `${ORIGIN}/ui/files/${id}/preview?t=${encodeURIComponent(auth.get())}`,
+  previewTicket: (id) => req(`/files/${encodeURIComponent(id)}/preview-ticket`, { method: "POST", body: "{}" }),
+  previewUrl: (id, ticket) => {
+    if (!ticket) throw new Error("预览授权尚未准备好，请重试。");
+    return `${ORIGIN}/ui/files/${encodeURIComponent(id)}/preview?${new URLSearchParams({ embed: "1", ticket })}`;
+  },
 });
 
 // 设计确认卡（两阶段交付）
@@ -158,11 +180,7 @@ Object.assign(api, {
   deleteRole: (id) => req(`/roles/${id}`, { method: "DELETE" }),
   upload: async (chatId, file) => {
     const fd = new FormData(); fd.append("file", file);
-    const r = await fetch(`${BASE}/chats/${chatId}/attachments`, {
-      method: "POST", body: fd, credentials: "include",
-      headers: auth.get() ? { authorization: `Bearer ${auth.get()}` } : {},
-    });
-    return r.json();
+    return req(`/chats/${chatId}/attachments`, { method: "POST", body: fd });
   },
 });
 

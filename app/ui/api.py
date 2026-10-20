@@ -19,7 +19,7 @@ import time
 
 from fastapi import (APIRouter, Cookie, Depends, File, Header, HTTPException, Query,
                       Response, UploadFile)
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..audit import write_audit
 from ..db import get_conn
@@ -547,7 +547,8 @@ def _run_turn(chat_id: str, employee_id: str | None, text: str, ident: str,
 
         with get_conn() as conn:
             base_prompt = dsh_adapter.default_prompt(
-                conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+                conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone(),
+                conn=conn, request_text=text)
             prompt = intel.build_task_prompt(conn, base_prompt, chat_id=chat_id,
                                              identity_id=ident, entity=entity)
             # 把本会话最近的附件正文拼进上下文（PDF/文本/代码）
@@ -878,17 +879,112 @@ def _dev_phase(chat_id: str, design_id: str, requirement: str, ident: str) -> No
 
 
 # ------------------------------------------------------------------ task view
+def _task_actor(conn, token: str | None, scope: str) -> dict:
+    from .. import identity
+    row = identity.get_identity(conn, _require(token))
+    if row is None:
+        raise HTTPException(401, detail={"code": "UnknownIdentity"})
+    if not identity.has_scope(row, scope):
+        raise HTTPException(403, detail={"code": "Forbidden", "scope": scope})
+    return dict(row)
+
+
+def _task_write_entities(conn, actor: dict) -> list[str]:
+    return (tenant.visible_entities(conn, actor) if actor["role"] == "system"
+            else [tenant.entity_of(actor)])
+
+
+def _task_allowed_actions(task, actor: dict) -> list[str]:
+    from ..identity import has_scope
+    if actor["role"] != "system" and task["legal_entity_id"] != tenant.entity_of(actor):
+        return []
+    if task["state"] == "pending_review" and has_scope(actor, "accept:judge"):
+        return ["accept", "reject"]
+    if has_scope(actor, "task:*"):
+        if task["state"] == "in_progress":
+            return ["abort"]
+        if task["state"] in ("rejected", "failed"):
+            return ["retry"]
+    return []
+
+
+def _task_execution_summary(conn, task, actor: dict) -> dict:
+    """A bounded execution status, with no process/session or approval arguments."""
+    run = conn.execute(
+        """SELECT id,run_seq,state,runner,usage_tokens,started_at,ended_at
+           FROM task_runs WHERE task_id=? ORDER BY run_seq DESC,rowid DESC LIMIT 1""",
+        (task["id"],)).fetchone()
+    summary = {"latest_run": dict(run) if run else None,
+               "awaiting_approval": False, "pending_approval": None}
+    if not run or run["state"] != "awaiting_approval" or task["state"] != "in_progress":
+        return summary
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tool_approvals'").fetchone():
+        return summary
+    approval = conn.execute(
+        """SELECT id,state FROM tool_approvals
+           WHERE run_id=? AND task_id=? AND state='pending' ORDER BY rowid DESC LIMIT 1""",
+        (run["id"], task["id"])).fetchone()
+    if approval:
+        from .approval_access import APPROVER_ROLES
+        summary["awaiting_approval"] = True
+        if actor["role"] == "system" or (actor["role"] in APPROVER_ROLES
+                and task["legal_entity_id"] == tenant.entity_of(actor)):
+            summary["pending_approval"] = dict(approval)
+    return summary
+
+
+@router.get("/tasks")
+def task_list(limit: int = 50, offset: int = 0, state: str | None = None,
+              q: str | None = None, oa_ui: str | None = Depends(_token)):
+    with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:read")
+        where, args = tenant.clause(conn, actor, "t.legal_entity_id")
+        filtered, values = where, list(args)
+        if state == "active":
+            filtered += " AND t.state IN ('todo','assigned','in_progress')"
+        elif state and state != "all":
+            if state not in ("todo", "assigned", "in_progress", "pending_review", "rejected", "failed", "completed", "cancelled"):
+                raise HTTPException(400, detail={"code": "UnknownTaskState"})
+            filtered += " AND t.state=?"
+            values.append(state)
+        if (q or "").strip():
+            filtered += " AND (t.title LIKE ? OR t.id LIKE ? OR e.name LIKE ?)"
+            values.extend(["%" + q.strip()[:200] + "%"] * 3)
+        limit, offset = max(1, min(200, limit)), max(0, offset)
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM tasks t LEFT JOIN ai_employees e ON e.id=t.owner_employee_id"
+            f" WHERE {filtered}", values).fetchone()[0]
+        tasks = [dict(row) for row in conn.execute(
+            f"""SELECT t.*, e.name AS owner_name,
+                      (SELECT m.chat_id FROM chat_messages m WHERE m.task_id=t.id
+                       ORDER BY m.id DESC LIMIT 1) AS chat_id
+               FROM tasks t LEFT JOIN ai_employees e ON e.id=t.owner_employee_id
+               WHERE {filtered} ORDER BY t.rowid DESC LIMIT ? OFFSET ?""", (*values, limit, offset))]
+        for task in tasks:
+            task["allowed_actions"] = _task_allowed_actions(task, actor)
+            task.update(_task_execution_summary(conn, task, actor))
+        counts = {row["state"]: row["count"] for row in conn.execute(
+            f"SELECT t.state,COUNT(*) AS count FROM tasks t WHERE {where} GROUP BY t.state", args)}
+    return {"tasks": tasks, "counts": counts, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("/tasks/{task_id}")
 def task_view(task_id: str, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
     with get_conn() as conn:
-        t = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if t is None:
-            raise HTTPException(404, detail={"code": "TaskNotFound"})
+        actor = _task_actor(conn, oa_ui, "task:read")
+        t = tenant.scoped_task(conn, task_id, tenant.visible_entities(conn, actor))
+        execution = _task_execution_summary(conn, t, actor)
+        requirement = dsh_adapter.task_requirement(t, conn=conn)
         crit = [dict(r) for r in conn.execute(
             "SELECT * FROM acceptance_criteria WHERE task_id=? ORDER BY seq", (task_id,))]
         runs = [dict(r) for r in conn.execute(
             "SELECT * FROM task_runs WHERE task_id=? ORDER BY rowid DESC", (task_id,))]
+        from .artifacts import unique_paths
+        artifacts = unique_paths(conn.execute(
+            """SELECT a.id,a.file_path,a.bytes,a.run_id,a.created_at
+               FROM artifacts a JOIN task_runs r ON r.id=a.run_id
+               WHERE r.task_id=? AND COALESCE(a.state,'active')='active'
+               ORDER BY r.run_seq DESC,a.art_seq DESC,a.rowid DESC""", (task_id,)))
         stream = []
         if runs:
             stream = store.stream(conn, runs[0]["id"], limit=60)
@@ -905,7 +1001,12 @@ def task_view(task_id: str, oa_ui: str | None = Depends(_token)):
                     """SELECT e.id, e.name, e.preset FROM ai_employees e
                        JOIN chats ch ON ch.employee_id = e.id
                        WHERE ch.id = ? AND ch.kind = 'dm'""", (row["chat_id"],)).fetchone()
-    return {"task": dict(t), "criteria": crit, "runs": runs, "stream": stream,
+    allowed_actions = _task_allowed_actions(t, actor)
+    return {"task": {**dict(t), **execution, "allowed_actions": allowed_actions, "requirement": requirement},
+            **execution,
+            "requirement": requirement,
+            "allowed_actions": allowed_actions, "criteria": crit, "runs": runs, "stream": stream,
+            "artifacts": artifacts,
             "owner": dict(owner) if owner else None}
 
 
@@ -914,32 +1015,40 @@ class ActionIn(BaseModel):
     note: str | None = None
 
 
+def _stop_run(conn, run, *, ident: str, cancelled: bool) -> bool:
+    """Stop an owned worker and invalidate approvals that could restart it."""
+    try:
+        killed = dsh_adapter.stop_process(
+            run["id"], expected_pid=run["pid"] if run["state"] == "running" else None)
+    except RuntimeError as exc:
+        raise HTTPException(409, detail={"code": "RunnerStopFailed", "message": str(exc)}) from exc
+    conn.execute("UPDATE task_runs SET state=?, exit_code=-9, ended_at=CURRENT_TIMESTAMP WHERE id=?",
+                 ("cancelled" if cancelled else "failed", run["id"]))
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tool_approvals'").fetchone():
+        conn.execute("UPDATE tool_approvals SET state='rejected', decided_by=?,"
+                     " decided_at=CURRENT_TIMESTAMP WHERE run_id=? AND state='pending'",
+                     (ident, run["id"]))
+    return killed
+
+
 @router.post("/runs/{run_id}/kill")
 def kill_run(run_id: str, payload: DesignIn | None = None, oa_ui: str | None = Depends(_token)):
     """紧急熔断：直接杀掉底层 DSH 进程树，run 记 failed，写审计。"""
     ident = _require(oa_ui)
-    import subprocess
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        actor = _task_actor(conn, oa_ui, "verb:*")
         run = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
         if run is None:
             raise HTTPException(404, detail={"code": "RunNotFound"})
+        task = tenant.scoped_task(conn, run["task_id"], _task_write_entities(conn, actor))
+        if run["state"] not in ("spawned", "running", "awaiting_approval") or task["state"] not in ("assigned", "in_progress"):
+            raise HTTPException(409, detail={"code": "RunNotActive", "state": run["state"]})
         pid = run["pid"]
-        killed = False
-        if pid:
-            try:
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
-                               capture_output=True, timeout=15)
-                killed = True
-            except Exception:                # noqa: BLE001
-                killed = False
-        conn.execute("UPDATE task_runs SET state='failed', exit_code=-9 WHERE id=?", (run_id,))
-        if run["task_id"]:
-            from .. import state_machine
-            try:
-                state_machine.transition(conn, run["task_id"], "run_failed",
-                                         actor=ident, reason="kill switch")
-            except Exception:                # noqa: BLE001  已在终态或不允许流转
-                pass
+        killed = _stop_run(conn, run, ident=ident, cancelled=False)
+        from .. import state_machine
+        state_machine.transition(conn, run["task_id"], "run_failed",
+                                 actor=ident, payload={"reason": "kill switch"})
         write_audit(conn, legal_entity_id=run["legal_entity_id"], verb="kill",
                     task_id=run["task_id"], run_id=run_id, layer="system",
                     action="run_killed", target=run_id,
@@ -952,9 +1061,15 @@ def kill_run(run_id: str, payload: DesignIn | None = None, oa_ui: str | None = D
 def task_action(task_id: str, payload: ActionIn, oa_ui: str | None = Depends(_token)):
     ident = _require(oa_ui)
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, detail={"code": "TaskNotFound"})
+        conn.execute("BEGIN IMMEDIATE")
+        if payload.action not in ("accept", "reject", "abort"):
+            raise HTTPException(400, detail={"code": "UnknownAction"})
+        actor = _task_actor(conn, oa_ui, "task:*" if payload.action == "abort" else "accept:judge")
+        row = tenant.scoped_task(conn, task_id, _task_write_entities(conn, actor))
+        if ((payload.action in ("accept", "reject") and row["state"] != "pending_review") or
+                (payload.action == "abort" and row["state"] != "in_progress")):
+            raise HTTPException(409, detail={"code": "TaskActionNotAllowed", "state": row["state"],
+                                             "action": payload.action})
         if payload.action == "accept":
             from ..acceptance import l1_manual
             # 人工判据要求证据；老板点「验收通过」时，自动附上产物片段，
@@ -962,36 +1077,159 @@ def task_action(task_id: str, payload: ActionIn, oa_ui: str | None = Depends(_to
             snippet = None
             art = conn.execute(
                 """SELECT a.file_path FROM artifacts a JOIN task_runs r ON r.id=a.run_id
-                   WHERE r.task_id=? ORDER BY a.created_at DESC LIMIT 1""", (task_id,)).fetchone()
+                   WHERE r.task_id=? AND a.state='active'
+                   ORDER BY r.run_seq DESC, a.art_seq DESC LIMIT 1""", (task_id,)).fetchone()
             if art and art["file_path"]:
                 try:
-                    snippet = open(art["file_path"], encoding="utf-8", errors="replace").read(200)
+                    with open(art["file_path"], encoding="utf-8", errors="replace") as source:
+                        snippet = source.read(200)
                 except OSError:
                     snippet = None
-            for c in conn.execute(
+            manual = conn.execute(
                     """SELECT * FROM acceptance_criteria WHERE task_id=? AND check_type='human_check'
-                       AND state='pending'""", (task_id,)).fetchall():
+                       AND state!='na'""", (task_id,)).fetchall()
+            snippet = snippet or (payload.note or "").strip() or None
+            if not snippet and any(c["evidence_required"] for c in manual):
+                raise HTTPException(400, detail={"code": "EvidenceRequired",
+                                                "message": "验收需要可读取的产物或验收说明"})
+            for c in manual:
                 l1_manual.apply(conn, c["id"], passed=True, checked_by=ident,
                                 note=payload.note or "UI 验收通过",
                                 evidence_snippet=snippet)
             __import__("app.acceptance_run", fromlist=["run"]).run(
                 conn, task_id, [row["legal_entity_id"]])
         elif payload.action == "abort":
-            conn.execute("UPDATE tasks SET state='cancelled', updated_at=CURRENT_TIMESTAMP"
-                         " WHERE id=?", (task_id,))
-        elif payload.action != "reject":
-            raise HTTPException(400, detail={"code": "UnknownAction"})
+            from .. import state_machine
+            runs = conn.execute("SELECT * FROM task_runs WHERE task_id=?"
+                                " AND state IN ('spawned','running','awaiting_approval')", (task_id,)).fetchall()
+            for run in runs:
+                _stop_run(conn, run, ident=ident, cancelled=True)
+            state_machine.transition(conn, task_id, "run_cancelled", actor=ident,
+                                     payload={"note": payload.note})
+        else:
+            from .. import state_machine
+            from ..acceptance import l1_manual
+            note = (payload.note or "").strip() or "UI 驳回，请修改后重新提交"
+            for c in conn.execute("SELECT id FROM acceptance_criteria WHERE task_id=?"
+                                  " AND check_type='human_check' AND state!='na'", (task_id,)).fetchall():
+                l1_manual.apply(conn, c["id"], passed=False, checked_by=ident,
+                                note=note, evidence_snippet=note)
+            state_machine.transition(conn, task_id, "review_failed", actor=ident,
+                                     payload={"note": note})
+        write_audit(conn, legal_entity_id=row["legal_entity_id"], verb="task_action",
+                    task_id=task_id, actor=ident, action=f"task_{payload.action}", target=task_id,
+                    payload={"note": payload.note}, response={"ok": True})
         conn.commit()
         state = conn.execute("SELECT state FROM tasks WHERE id=?", (task_id,)).fetchone()["state"]
     return {"ok": True, "state": state}
 
 
+class TaskRetryIn(BaseModel):
+    note: str | None = None
+    prompt: str | None = None
+    budget_tokens: int | None = Field(default=None, ge=0)
+
+
+def _retry_error(retry: dict, exc: Exception) -> None:
+    from ..state_machine import transition
+    with get_conn() as conn:
+        run = conn.execute("SELECT state FROM task_runs WHERE id=?", (retry["run_id"],)).fetchone()
+        task = conn.execute("SELECT state FROM tasks WHERE id=?", (retry["task_id"],)).fetchone()
+        if run and run["state"] in ("spawned", "running") and task and task["state"] == "in_progress":
+            transition(conn, retry["task_id"], "run_failed", actor="retry-worker",
+                       payload={"reason": "retry_worker_error"})
+            conn.execute("UPDATE task_runs SET state='failed', exit_code=-1,"
+                         " ended_at=CURRENT_TIMESTAMP WHERE id=?", (retry["run_id"],))
+        write_audit(conn, legal_entity_id=retry["legal_entity_id"], verb="retry",
+                    task_id=retry["task_id"], run_id=retry["run_id"], action="retry_worker_failed",
+                    target=retry["run_id"], payload={"error": str(exc)[:500]}, response={"ok": False})
+        if retry.get("chat_id"):
+            store.add_message(conn, retry["chat_id"], "system", f"重试执行失败：{exc}",
+                              kind="text", task_id=retry["task_id"])
+
+
+def _execute_task_retry(retry: dict) -> None:
+    """Run a committed submission without holding the console request open."""
+    from .. import acceptance_run
+    try:
+        with get_conn() as conn:
+            out = dsh_adapter.execute_run(
+                conn, retry["run_id"], prompt=retry["prompt"], runner=retry["runner"],
+                resume_session=retry["session_id"], budget_tokens=retry["budget_tokens"])
+        with get_conn() as conn:
+            task = conn.execute("SELECT state FROM tasks WHERE id=?", (retry["task_id"],)).fetchone()
+            if task and task["state"] == "pending_review":
+                acceptance_run.run(conn, retry["task_id"], [retry["legal_entity_id"]])
+            if out.get("approval_id"):
+                from .. import rbac
+                from . import approval_flow
+                approval = rbac.get(conn, out["approval_id"])
+                if approval is not None:
+                    approval_flow.post_card(conn, approval)
+            elif retry.get("chat_id"):
+                state = conn.execute("SELECT state FROM tasks WHERE id=?", (retry["task_id"],)).fetchone()[0]
+                artifact = conn.execute(
+                    "SELECT id,file_path,bytes FROM artifacts WHERE run_id=?"
+                    " AND COALESCE(state,'active')='active' ORDER BY art_seq DESC LIMIT 1",
+                    (retry["run_id"],)).fetchone()
+                store.add_message(conn, retry["chat_id"], "agent", f"重试完成，任务状态：{state}",
+                                  author="执行助理", kind="card", task_id=retry["task_id"],
+                                  meta=json.dumps({"artifact": dict(artifact) if artifact else None,
+                                                   "state": state}, ensure_ascii=False))
+    except Exception as exc:                        # noqa: BLE001 - preserve worker failure in UI
+        _retry_error(retry, exc)
+
+
+def _launch_task_retry(retry: dict) -> None:
+    threading.Thread(target=_execute_task_retry, args=(retry,),
+                     name=f"retry-{retry['run_id']}", daemon=True).start()
+
+
+@router.post("/tasks/{task_id}/retry", status_code=202)
+def retry_task(task_id: str, payload: TaskRetryIn | None = None,
+               oa_ui: str | None = Depends(_token)):
+    from ..api.tasks import _retry_prompt, prepare_retry
+    from ..models import RetryIn
+    payload = payload or TaskRetryIn()
+    runner = (os.environ.get("UI_RUNNER") or "acp").strip().lower()
+    if runner not in ("acp", "dsh", "mock", "mock_acp"):
+        raise HTTPException(503, detail={"code": "RunnerMisconfigured"})
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        actor = _task_actor(conn, oa_ui, "task:*")
+        task = tenant.scoped_task(conn, task_id, _task_write_entities(conn, actor))
+        prompt = payload.prompt
+        if not prompt and (payload.note or "").strip():
+            prompt = _retry_prompt(conn, task_id) + "\n本次补充要求：" + payload.note.strip()
+        budget = payload.budget_tokens if payload.budget_tokens is not None else _budget_for(conn, task["legal_entity_id"])
+        try:
+            retry = prepare_retry(conn, task_id, RetryIn(prompt=prompt, runner=runner, budget_tokens=budget),
+                                  actor, entities=_task_write_entities(conn, actor))
+        except HTTPException as exc:
+            if isinstance(exc.detail, dict) and exc.detail.get("code") == "NotRetryable":
+                raise HTTPException(409, detail=exc.detail) from exc
+            raise
+        chat = conn.execute("SELECT chat_id FROM chat_messages WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                            (task_id,)).fetchone()
+        retry["chat_id"] = chat["chat_id"] if chat else None
+        conn.commit()
+    try:
+        _launch_task_retry(retry)
+    except RuntimeError as exc:
+        _retry_error(retry, exc)
+        raise HTTPException(503, detail={"code": "RetryWorkerUnavailable"}) from exc
+    return {"ok": True, "task_id": task_id, "run_id": retry["run_id"], "run_seq": retry["run_seq"],
+            "state": "in_progress", "runner": retry["runner"], "resumed": bool(retry["session_id"])}
+
+
 # ------------------------------------------------------------------ live feed
 @router.get("/live/{run_id}")
 def live(run_id: str, after: int = 0, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
     with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:read")
         run = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
+        if run is not None:
+            tenant.scoped_task(conn, run["task_id"], tenant.visible_entities(conn, actor))
         ev = store.stream(conn, run_id, after_id=after) if run else []
     return {"run": dict(run) if run else None, "stream": ev}
 
@@ -1474,19 +1712,21 @@ def check_permission(payload: GrantIn, oa_ui: str | None = Depends(_token)):
 
 @router.get("/rbac/approvals")
 def list_approvals(oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+    from . import approval_access
     with get_conn() as conn:
-        from .. import rbac
-        return {"pending": rbac.pending(conn)}
+        who = approval_access.actor(conn, oa_ui)
+        return approval_access.listing(conn, who)
 
 
 @router.post("/rbac/approvals/{approval_id}")
 def decide_approval(approval_id: str, payload: ApprovalIn,
                     oa_ui: str | None = Depends(_token)):
-    ident = _require(oa_ui)
-    from . import approval_flow
+    from . import approval_access, approval_flow
+    with get_conn() as conn:
+        who = approval_access.actor(conn, oa_ui, deciding=True)
+        approval_access.require_owned(conn, approval_id, who)
     try:
-        return approval_flow.decide(approval_id, payload.approve, by=ident)
+        return approval_flow.decide(approval_id, payload.approve, by=who["id"])
     except ValueError:
         raise HTTPException(404, detail={"code": "ApprovalNotFound"})
 
@@ -1509,21 +1749,16 @@ def guard_tool(payload: HighRiskIn, oa_ui: str | None = Depends(_token)):
 # ------------------------------------------------------- 审批中心（v2.3）
 @router.get("/approvals")
 def ui_approvals(limit: int = 50, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+    from . import approval_access
     with get_conn() as conn:
-        from . import approval_flow
-        return approval_flow.list_all(conn, limit)
+        who = approval_access.actor(conn, oa_ui)
+        return approval_access.listing(conn, who, limit)
 
 
 @router.post("/approvals/{approval_id}")
 def ui_decide_approval(approval_id: str, payload: ApprovalIn,
                        oa_ui: str | None = Depends(_token)):
-    ident = _require(oa_ui)
-    from . import approval_flow
-    try:
-        return approval_flow.decide(approval_id, payload.approve, by=ident)
-    except ValueError:
-        raise HTTPException(404, detail={"code": "ApprovalNotFound"})
+    return decide_approval(approval_id, payload, oa_ui)
 
 
 @router.post("/rbac/revoke")

@@ -45,7 +45,7 @@ def _task(conn, title="写一篇秋季护肤短文", pack="content-v1") -> str:
     return tid
 
 
-def _run(conn, task_id, usage=1_000_000) -> str:
+def _run(conn, task_id, usage=1_000_000, state="succeeded") -> str:
     from app.api import verbs
     from app.models import SpawnRunIn
     out = verbs.do_spawn_run(
@@ -53,7 +53,7 @@ def _run(conn, task_id, usage=1_000_000) -> str:
         ident={"id": "ID-test", "role": "ceo", "legal_entity_id": "LE-FIN"})
     rid = out["run_id"]
     conn.execute("UPDATE task_runs SET usage_tokens=?, usage_baseline=0,"
-                 " state='succeeded' WHERE id=?", (usage, rid))
+                 " state=? WHERE id=?", (usage, state, rid))
     conn.commit()
     return rid
 
@@ -76,7 +76,7 @@ def test_eval_baseline_and_mock_regression(conn, monkeypatch):
     from app.engine import dsh_adapter
 
     tid = _task(conn)
-    rid = _run(conn, tid, usage=1000)
+    rid = _run(conn, tid, usage=0, state="spawned")
     out = dsh_adapter.execute_run(conn, rid, prompt="写护肤短文", runner="mock_acp",
                                   budget_tokens=4000)
     assert out["exit_code"] == 0

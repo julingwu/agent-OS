@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import sqlite3
 import sys
 import threading
@@ -79,7 +80,8 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
         conn.commit()
 
     cmd = ([sys.executable, str(MOCK_ACP_AGENT)] if runner == "mock_acp"
-           else [base.DSH_CLI, "--profile", "acp"])
+           else [base.DSH_CLI, "--profile", "acp", "--patch",
+                 str(base.ROOT / "tools" / "dsh-acp.patch.yml")])
     # ACP 子进程里 DSH 已经自带工具级沙箱（提权时会明确拒绝），再套一层 Low 完整性
     # 会形成嵌套启动，实测偶发死锁（RUN-a45bd37b26704874 卡在 0 token）。
     # M0_SANDBOX_ACP=0 时跳过外层包装；默认仍开启。
@@ -88,6 +90,12 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
 
     live_log = base._log_path(run_id).with_suffix(".live.jsonl")
     client = AcpClient(cmd, cwd=str(ws), env=env, default_timeout=timeout)
+
+    def on_started(process):
+        base.register_process(run_id, process)
+        base.ensure_not_stopped(conn, run_id)
+
+    client.on_started = on_started
     stop = threading.Event()
     hb = base.start_heartbeat(run_id, hb_interval, stop)
 
@@ -99,10 +107,13 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
           "resumed": bool(resume_session), "stop_reason": None, "error": None,
           "sid": resume_session, "updates": 0, "tool_calls": 0, "policy_violation": None,
           "approval": None, "last_used": 0}
+    prompt_started = False
     started = time.time()
 
     try:
+        base.ensure_not_stopped(conn, run_id)
         client.start()
+        base.ensure_not_stopped(conn, run_id)
         if resume_session:
             # A previous process may still be releasing its write handle; the lock
             # clears within a second or two once session/close lands.
@@ -140,7 +151,8 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
         st["last_used"] = max(int(prev_used or 0), baseline)
 
         conn.execute(
-            "UPDATE task_runs SET pid = ?, runner = ?, state = 'running', session_id = ? WHERE id = ?",
+            "UPDATE task_runs SET pid = ?, runner = ?, state = 'running', session_id = ?"
+            " WHERE id = ? AND state NOT IN ('cancelled', 'failed')",
             (client.pid, runner, sid, run_id))
         conn.commit()
 
@@ -257,14 +269,25 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
                     fp = pol.get("target")
                     title = (update.get("title") or "").lower()
                     if fp and title in base.WRITE_TOOLS:
-                        st["writes"].append(str(fp))
+                        # ACP runs with the task workspace as cwd. Resolve the
+                        # permitted target there, never against the server cwd.
+                        path = pathlib.Path(fp)
+                        if not path.is_absolute():
+                            path = ws / path
+                        st["writes"].append(str(path.resolve()))
             elif kind == "agent_message_chunk":
                 st["final"] += ((update.get("content") or {}).get("text") or "")
 
+        base.ensure_not_stopped(conn, run_id)
+        prompt_started = True
         out = client.prompt(sid, prompt, on_update=on_update, timeout=timeout)
         st["stop_reason"] = (out.get("result") or {}).get("stopReason")
         st["updates"] = out.get("updates", 0)
-    except AcpError as exc:
+    except (AcpError, OSError) as exc:
+        if not prompt_started:
+            # A stop can close stdio during initialize; preserve a parked run's
+            # existing usage instead of treating that EOF as a new model turn.
+            base.ensure_not_stopped(conn, run_id)
         st["error"] = str(exc)
     except HTTPException:
         raise
@@ -273,7 +296,10 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
         if hb:
             hb.join(timeout=2)
         rec.flush(status="blocked" if st.get("approval") else "ok")
-        client.close(session_id=st.get("sid"))
+        try:
+            client.close(session_id=st.get("sid"))
+        finally:
+            base.unregister_process(run_id)
 
     base._log_path(run_id).write_text(
         json.dumps({"events": client.log, "stderr": client.stderr[-80:], "state": st},
@@ -281,9 +307,8 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
         encoding="utf-8")
 
     ok_run = (not st["cancelled"]) and (not st["error"]) and st["stop_reason"] == "end_turn"
-    files = [fp for fp in dict.fromkeys(st["writes"]) if os.path.isfile(fp)]
-    if not files and ok_run:
-        files = base._scan_workspace(started, task_id, actor)
+    files = base.collect_artifact_files(st["writes"], since=started, task_id=task_id,
+                                        actor=actor, success=ok_run)
     artifacts = base.attach_files(conn, run_id, files)
     delta = max(0, st["used"] - baseline)
     base.settle_budget(conn, task_id, delta, est_tokens)

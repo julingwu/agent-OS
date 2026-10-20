@@ -184,50 +184,66 @@ def _retry_prompt(conn: sqlite3.Connection, task_id: str) -> str:
             "改完只回复 DONE：\n" + lines)
 
 
+def prepare_retry(conn: sqlite3.Connection, task_id: str, req: RetryIn, ident: dict,
+                  *, entities: list[str] | None = None) -> dict:
+    """Prepare exactly one new submission; callers hold a write transaction.
+
+    Execution is separate so the signed API can keep its synchronous contract
+    while the console can acknowledge a committed run before starting a worker.
+    """
+    t = tenant.scoped_task(conn, task_id, entities if entities is not None
+                           else tenant.visible_entities(conn, ident))
+    if t["state"] not in ("rejected", "failed"):
+        raise HTTPException(400, detail={"code": "NotRetryable", "state": t["state"],
+                                         "message": "只有 rejected / failed 可以打回重跑"})
+
+    prev = conn.execute(
+        """SELECT * FROM task_runs WHERE task_id = ? AND legal_entity_id = ?
+           AND session_id IS NOT NULL ORDER BY run_seq DESC LIMIT 1""",
+        (task_id, t["legal_entity_id"])).fetchone()
+    session_id = prev["session_id"] if prev else None
+    prompt = req.prompt or _retry_prompt(conn, task_id)
+    if session_id is None:
+        from ..engine import dsh_adapter
+        prompt = dsh_adapter.default_prompt(t, conn=conn) + "\n\n本轮修订要求：\n" + prompt
+    run_seq = conn.execute(
+        "SELECT COALESCE(MAX(run_seq), 0) FROM task_runs WHERE task_id = ?"
+        " AND legal_entity_id = ?", (task_id, t["legal_entity_id"])).fetchone()[0] + 1
+    runner = (req.runner or os.environ.get("RUNNER") or "mock").lower()
+    run_id = new_id("RUN")
+    conn.execute(
+        """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state, runner,
+                                 session_id, actor_identity)
+           VALUES (?,?,?,?, 'spawned', ?, ?, ?)""",
+        (run_id, task_id, run_seq, t["legal_entity_id"], runner, session_id, ident["id"]))
+    transition(conn, task_id, "retry", actor=ident["id"],
+               payload={"run_seq": run_seq, "resumed": bool(session_id)})
+    # A retry is a new submission; previous manual verdicts must be checked again.
+    conn.execute(
+        """UPDATE acceptance_criteria
+           SET state = 'pending', checked_by = NULL, note = NULL
+           WHERE task_id = ? AND state != 'na'""", (task_id,))
+    write_audit(conn, legal_entity_id=t["legal_entity_id"], verb="retry", task_id=task_id,
+                run_id=run_id, action="retry", target=run_id,
+                payload={"prompt": prompt[:400], "session_id": session_id, "run_seq": run_seq},
+                response={"resumed": bool(session_id)})
+    return {"task_id": task_id, "run_id": run_id, "run_seq": run_seq,
+            "legal_entity_id": t["legal_entity_id"], "session_id": session_id,
+            "runner": runner, "prompt": prompt, "budget_tokens": req.budget_tokens}
+
+
 @router.post("/tasks/{task_id}/retry")
 def retry_task(task_id: str, req: RetryIn, _ident: dict = Depends(require("task:*"))):
     """L1 rejection / failed run -> new run on the same DSH session (context kept)."""
     from ..engine import dsh_adapter
 
     with get_conn() as conn:
-        t = tenant.scoped_task(conn, task_id, tenant.visible_entities(conn, _ident))
-        if t["state"] not in ("rejected", "failed"):
-            raise HTTPException(400, detail={"code": "NotRetryable", "state": t["state"],
-                                             "message": "只有 rejected / failed 可以打回重跑"})
-
-        prev = conn.execute(
-            """SELECT * FROM task_runs WHERE task_id = ? AND legal_entity_id = ?
-               AND session_id IS NOT NULL ORDER BY run_seq DESC LIMIT 1""",
-            (task_id, t["legal_entity_id"])).fetchone()
-        session_id = prev["session_id"] if prev else None
-        prompt = req.prompt or _retry_prompt(conn, task_id)
-        run_seq = conn.execute(
-            "SELECT COALESCE(MAX(run_seq), 0) FROM task_runs WHERE task_id = ?"
-            " AND legal_entity_id = ?", (task_id, t["legal_entity_id"])).fetchone()[0] + 1
-        runner = (req.runner or os.environ.get("RUNNER") or "mock").lower()
-        run_id = new_id("RUN")
-        conn.execute(
-            """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state, runner,
-                                     session_id, actor_identity)
-               VALUES (?,?,?,?, 'spawned', ?, ?, ?)""",
-            (run_id, task_id, run_seq, t["legal_entity_id"], runner, session_id,
-             _ident["id"]))
-        transition(conn, task_id, "retry", actor="reviewer",
-                   payload={"run_seq": run_seq, "resumed": bool(session_id)})
-        # A retry is a new submission: every non-na criterion goes back to pending,
-        # otherwise the previous manual verdict would keep the task rejected forever.
-        conn.execute(
-            """UPDATE acceptance_criteria
-               SET state = 'pending', checked_by = NULL, note = NULL
-               WHERE task_id = ? AND state != 'na'""", (task_id,))
-        write_audit(conn, legal_entity_id=t["legal_entity_id"], verb="retry", task_id=task_id,
-                    run_id=run_id, action="retry", target=run_id,
-                    payload={"prompt": prompt[:400], "session_id": session_id, "run_seq": run_seq},
-                    response={"resumed": bool(session_id)})
+        conn.execute("BEGIN IMMEDIATE")
+        retry = prepare_retry(conn, task_id, req, _ident)
         conn.commit()
-        return dsh_adapter.execute_run(conn, run_id, prompt=prompt, runner=runner,
-                                       resume_session=session_id,
-                                       budget_tokens=req.budget_tokens)
+        return dsh_adapter.execute_run(conn, retry["run_id"], prompt=retry["prompt"],
+                                       runner=retry["runner"], resume_session=retry["session_id"],
+                                       budget_tokens=retry["budget_tokens"])
 
 
 @router.get("/audit/by-key/{key}")

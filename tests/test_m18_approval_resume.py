@@ -133,3 +133,22 @@ def test_gate_links_run_and_creates_pending(conn):
     assert ap["run_id"] == run_id and ap["session_id"] == "sess-123"
     assert json.loads(ap["args"])["file_path"] == target
     assert rbac.pending(conn)[0]["id"] == out["approval_id"]
+
+
+def test_rejecting_parked_operation_finishes_run_without_writing(conn, monkeypatch):
+    from app.engine import dsh_adapter
+    from app.ui import approval_flow
+
+    resources.ensure_demo(conn)
+    tid = _task(conn)
+    run_id = _spawn(conn, tid)
+    monkeypatch.setenv("MOCK_ACP_TARGET", "shared/RES-FIN/denied.md")
+    monkeypatch.setenv("MOCK_ACP_TEXT", "must not be written")
+    parked = dsh_adapter.execute_run(conn, run_id, runner="mock_acp", budget_tokens=8000)
+    assert parked["state"] == "awaiting_approval"
+    denied = approval_flow.decide(parked["approval_id"], False, by="ID-boss")
+    assert denied["state"] == "rejected" and denied["resumable"] is False
+    assert conn.execute("SELECT state FROM task_runs WHERE id=?", (run_id,)).fetchone()[0] == "failed"
+    assert conn.execute("SELECT state FROM tasks WHERE id=?", (tid,)).fetchone()[0] == "failed"
+    assert not (resources.root() / "RES-FIN" / "denied.md").exists()
+    assert approval_flow.resume(parked["approval_id"])["ok"] is False

@@ -41,9 +41,11 @@ def run(conn: sqlite3.Connection, task_id: str, ents: list[str] | str) -> dict:
                 break
     art = verbs.latest_artifact_path(conn, task_id, expected)
     text = None
+    text_path = None
     if art:
         try:
             text = pathlib.Path(art).read_text(encoding="utf-8", errors="replace")
+            text_path = art
         except OSError:
             text = None
     if text is None:
@@ -56,7 +58,10 @@ def run(conn: sqlite3.Connection, task_id: str, ents: list[str] | str) -> dict:
                             "detail": "待人工", "layer": "L1"})
             continue
         if c["check_type"] == "rule_auto":
-            v = l0_rules.evaluate(c["check_ref"], text or "")
+            rule_text = text or ""
+            if text_path is None and c["check_ref"] == "banned":
+                rule_text = task_text(conn, task_id, check_ref="banned") or ""
+            v = l0_rules.evaluate(c["check_ref"], rule_text, file_path=text_path)
             state = "passed" if v["ok"] else "failed"
             conn.execute("UPDATE acceptance_criteria SET state = ?, note = ? WHERE id = ?",
                          (state, v.get("detail"), c["id"]))

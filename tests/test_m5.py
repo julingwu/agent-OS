@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import sqlite3
 
 import pytest
@@ -109,3 +110,69 @@ def test_m5_5_spawn_on_a_finished_task_is_a_400(env):
     r = sub.post("/verbs/spawn_run", json={"task_id": t["task_id"], "run_seq": 2})
     assert r.status_code == 400 and r.json()["detail"]["code"] == "IllegalStateTransition"
     conn.close()
+
+
+def test_m5_6_acp_artifacts_resolve_relative_paths_in_task_workspace(env, tmp_path, monkeypatch):
+    """A server README must not hide or replace relative task outputs."""
+    from app.engine import runner_acp
+
+    server = tmp_path / "server"
+    server.mkdir()
+    (server / "README.md").write_text("server-only README", encoding="utf-8")
+    monkeypatch.chdir(server)
+
+    class FakeAcpClient:
+        pid = 12345
+
+        def __init__(self, cmd, *, cwd, env, default_timeout):
+            self.cwd = pathlib.Path(cwd)
+            self.log = []
+            self.stderr = []
+
+        def start(self):
+            pass
+
+        def new_session(self):
+            return {"sessionId": "sess-relative-artifacts"}
+
+        def prompt(self, sid, prompt, *, on_update, timeout):
+            targets = [
+                ("solution.py", "print('task solution')\n"),
+                ("README.md", "task README"),
+                ("sub/notes.md", "nested task notes"),
+                (str(self.cwd / "absolute.txt"), "absolute task output"),
+                ("./README.md", "task README"),
+            ]
+            for i, (target, content) in enumerate(targets):
+                on_update({"sessionUpdate": "tool_call", "toolCallId": str(i),
+                           "title": "write", "rawInput": {"file_path": target}})
+                path = self.cwd / target
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                on_update({"sessionUpdate": "tool_call_update", "toolCallId": str(i),
+                           "status": "completed"})
+            return {"result": {"stopReason": "end_turn"}, "updates": len(targets) * 2}
+
+        def close(self, *, session_id):
+            pass
+
+    monkeypatch.setattr(runner_acp, "AcpClient", FakeAcpClient)
+    sub = env["sub"]
+    task = sub.post("/tasks/from_sentence", json={"text": "写一个 Python 计算器"}).json()
+    run = sub.post("/verbs/spawn_run", json={"task_id": task["task_id"], "run_seq": 1}).json()
+    response = sub.post(f"/runs/{run['run_id']}/execute", json={"runner": "mock_acp"})
+    assert response.status_code == 200, response.text
+    out = response.json()
+    assert out["exit_code"] == 0, out
+
+    ws = runner_acp.base.task_workspace(task["task_id"], sub.ident_id).resolve()
+    actual = {pathlib.Path(a["file_path"]): pathlib.Path(a["file_path"]).read_text(encoding="utf-8")
+              for a in out["artifacts"]}
+    assert actual == {
+        ws / "solution.py": "print('task solution')\n",
+        ws / "README.md": "task README",
+        ws / "sub" / "notes.md": "nested task notes",
+        ws / "absolute.txt": "absolute task output",
+    }
+    assert len(out["artifacts"]) == 4
+    assert (server / "README.md").read_text(encoding="utf-8") == "server-only README"

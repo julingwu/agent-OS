@@ -6,6 +6,9 @@ every normal draft.
 """
 from __future__ import annotations
 
+from html.parser import HTMLParser
+from pathlib import PurePath
+
 KEYWORD_GROUPS: dict[str, list[str]] = {
     "保湿": ["保湿", "补水", "水润"],
     "屏障": ["屏障", "修护", "修复"],
@@ -39,13 +42,68 @@ def check_keywords(text: str, min_groups: int = 3,
     }
 
 
-def check_banned(text: str) -> dict:
+class _PageCopy(HTMLParser):
+    """Collect page copy without interpreting CSS, JavaScript or attributes."""
+
+    _NON_COPY = {"script", "style", "template", "noscript"}
+    _BLOCKS = {"address", "article", "aside", "blockquote", "br", "dd", "div",
+               "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+               "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li",
+               "main", "nav", "ol", "p", "pre", "section", "table", "td",
+               "th", "tr", "ul"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.skipped: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._NON_COPY:
+            self.skipped.append(tag)
+        elif not self.skipped and tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self.skipped:
+            # Closing an outer ignored element also closes any malformed nested
+            # elements, so ordinary copy after it is still checked.
+            while self.skipped.pop() != tag:
+                pass
+        elif not self.skipped and tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_startendtag(self, tag, attrs):
+        if not self.skipped and tag in self._BLOCKS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skipped:
+            self.parts.append(data)
+
+
+def text_for_rule(check_ref: str | None, text: str, file_path: str | None = None) -> str:
+    """Only HTML advertising checks inspect copy; structural rules keep source.
+
+    The filename is required: prose and Markdown must not be able to hide a
+    banned claim inside HTML-looking text or a code example.
+    """
     text = text or ""
+    if ((check_ref or "").strip() != "banned" or not file_path
+            or PurePath(file_path).suffix.lower() not in {".html", ".htm"}):
+        return text
+    parser = _PageCopy()
+    parser.feed(text)
+    parser.close()
+    return "".join(parser.parts)
+
+
+def check_banned(text: str, *, file_path: str | None = None) -> dict:
+    text = text_for_rule("banned", text, file_path)
     hits = [p for p in BANNED_PHRASES if p in text]
     return {"ok": not hits, "hits": hits}
 
 
-def evaluate(check_ref: str | None, text: str) -> dict:
+def evaluate(check_ref: str | None, text: str, *, file_path: str | None = None) -> dict:
     """check_ref: 'keywords:<n>' | 'banned' | 'contains:<needle>'."""
     ref = (check_ref or "").strip()
     if ref.startswith("keywords_json:"):
@@ -59,7 +117,7 @@ def evaluate(check_ref: str | None, text: str) -> dict:
         r["detail"] = f"命中 {len(r['hit_groups'])}/{n} 个关键词组"
         return r
     if ref == "banned":
-        r = check_banned(text)
+        r = check_banned(text, file_path=file_path)
         r["detail"] = "无禁用词" if r["ok"] else "命中禁用词: " + "、".join(r["hits"])
         return r
     if ref.startswith("contains_any:"):

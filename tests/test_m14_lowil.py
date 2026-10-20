@@ -13,10 +13,12 @@ import pytest
 from app.engine import lowil
 
 
-def test_workspace_defaults_under_localappdata():
+def test_workspace_defaults_under_localappdata(tmp_path, monkeypatch):
     from app.engine import dsh_adapter
+    monkeypatch.delenv("M0_WORKSPACE", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
     ws = dsh_adapter.workspace()
-    local = (pathlib.Path.home() / "AppData" / "Local").resolve()
+    local = (tmp_path / "Local").resolve()
     assert local in ws.resolve().parents or ws.resolve() == local, ws
 
 

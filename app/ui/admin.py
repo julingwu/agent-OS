@@ -7,11 +7,15 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import pathlib
 import secrets
 import sqlite3
+import time
 import uuid
 
 from fastapi import APIRouter, Cookie, Depends, File, Header, HTTPException, Query, UploadFile
@@ -302,6 +306,9 @@ def files(token: str | None = Auth, limit: int = 100, include_legacy: int = 0):
     旧仓库工作区仅作历史归档，需要时传 include_legacy=1。"""
     _require(token)
     from ..engine import dsh_adapter
+    from .. import tenant
+    from .api import _task_actor
+    from .artifacts import unique_paths
     root = str(dsh_adapter.workspace())
     like = root.rstrip("\\") + "%"
     where = "COALESCE(a.state,'active')='active'"
@@ -310,32 +317,49 @@ def files(token: str | None = Auth, limit: int = 100, include_legacy: int = 0):
         where += " AND a.file_path LIKE ?"
         args.append(like)
     with get_conn() as conn:
+        actor = _task_actor(conn, token, "task:read")
+        scoped, scoped_args = tenant.clause(conn, actor, "t.legal_entity_id")
+        where += " AND " + scoped
+        args.extend(scoped_args)
         rows = conn.execute(
             f"""SELECT a.id, a.file_path, a.bytes, a.created_at, r.task_id, t.title,
                        t.legal_entity_id
                 FROM artifacts a JOIN task_runs r ON r.id=a.run_id
                 JOIN tasks t ON t.id=r.task_id
                 WHERE {where}
-                ORDER BY a.created_at DESC LIMIT ?""", (*args, limit)).fetchall()
-    out, seen = [], set()
-    for r in rows:
+                ORDER BY r.run_seq DESC,a.art_seq DESC,a.rowid DESC""", args).fetchall()
+    rows = sorted(unique_paths(rows), key=lambda row: row["created_at"] or "", reverse=True)
+    out = []
+    for r in rows[:max(1, min(500, limit))]:
         p = pathlib.Path(r["file_path"])
-        key = str(p).lower()
-        if key in seen:                 # 同一路径只留最新一条（重跑会产生重复记录）
-            continue
-        seen.add(key)
         out.append({**dict(r), "name": p.name, "exists": p.exists(),
                     "size": p.stat().st_size if p.exists() else 0})
-    return {"files": out}
+    return {"files": out, "total": len(rows)}
+
+
+def _scoped_artifact(conn, artifact_id: str, token: str | None = None, *, actor=None):
+    """Authenticate the current identity and authorize the artifact's task first."""
+    from .. import tenant
+    from .api import _task_actor
+    if actor is None:
+        actor = _task_actor(conn, token, "task:read")
+    scoped, args = tenant.clause(conn, actor, "t.legal_entity_id")
+    row = conn.execute(
+        "SELECT a.* FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
+        " JOIN tasks t ON t.id=r.task_id"
+        " WHERE a.id=? AND COALESCE(a.state,'active')='active' AND " + scoped,
+        [artifact_id, *args]).fetchone()
+    if row is None:
+        raise HTTPException(404, detail={"code": "FileNotFound"})
+    return row
 
 
 @router.get("/files/{artifact_id}/download")
 def download(artifact_id: str, token: str | None = Auth):
-    _require(token)
     from fastapi.responses import FileResponse
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM artifacts WHERE id=?", (artifact_id,)).fetchone()
-    if row is None or not pathlib.Path(row["file_path"]).exists():
+        row = _scoped_artifact(conn, artifact_id, token)
+    if not pathlib.Path(row["file_path"]).exists():
         raise HTTPException(404, detail={"code": "FileNotFound"})
     return FileResponse(row["file_path"], filename=pathlib.Path(row["file_path"]).name)
 
@@ -344,41 +368,165 @@ PREVIEW_TYPES = {
     ".html": "text/html", ".htm": "text/html", ".css": "text/css",
     ".js": "text/javascript", ".json": "application/json", ".svg": "image/svg+xml",
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-    ".md": "text/markdown", ".txt": "text/plain",
+    # Chromium does not render text/markdown in an iframe; serve readable text.
+    ".md": "text/plain", ".txt": "text/plain",
 }
 
 # 产物里的 HTML 是模型写的，给它一个「不透明来源 + 断网」的环境：
 # 能跑 JS、能渲染，但拿不到控制台的 Cookie/Token，也发不出请求。
-PREVIEW_CSP = ("sandbox allow-scripts allow-popups; "
-               "default-src * data: blob: 'unsafe-inline'; "
-               "connect-src 'none'; frame-ancestors 'self'")
+PREVIEW_CSP = ("sandbox allow-scripts; default-src 'none'; "
+               "script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+               "img-src data: blob:; font-src data: blob:; media-src data: blob:; "
+               "connect-src 'none'; frame-src 'none'; object-src 'none'; "
+               "base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
+PREVIEW_TICKET_TTL = 120
+
+
+def _preview_signature(payload: str) -> str:
+    from .api import _secret
+    return hmac.new(_secret(), b"artifact-preview-v1\0" + payload.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def _make_preview_ticket(artifact_id: str, identity_id: str) -> tuple[str, int]:
+    expires = int(time.time()) + PREVIEW_TICKET_TTL
+    raw = json.dumps({"artifact": artifact_id, "identity": identity_id, "expires": expires},
+                     separators=(",", ":"), sort_keys=True).encode()
+    payload = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return f"artifact-preview.v1.{payload}.{_preview_signature(payload)}", expires
+
+
+def _preview_ticket_actor(conn, artifact_id: str, ticket: str) -> dict:
+    from .. import identity
+    try:
+        if len(ticket) > 2048:
+            raise ValueError("oversized ticket")
+        namespace, version, payload, signature = ticket.split(".")
+        if namespace != "artifact-preview" or version != "v1" or not hmac.compare_digest(signature, _preview_signature(payload)):
+            raise ValueError("invalid signature")
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+        if not isinstance(claims, dict):
+            raise ValueError("invalid claims")
+        expires = claims.get("expires")
+        if (claims.get("artifact") != artifact_id or not isinstance(claims.get("identity"), str)
+                or type(expires) is not int or expires <= time.time()):
+            raise ValueError("expired or mismatched ticket")
+    except (ValueError, TypeError, UnicodeError):
+        raise HTTPException(401, detail={"code": "InvalidPreviewTicket"}) from None
+    actor = identity.get_identity(conn, claims["identity"])
+    if actor is None:
+        raise HTTPException(401, detail={"code": "UnknownIdentity"})
+    if not identity.has_scope(actor, "task:read"):
+        raise HTTPException(403, detail={"code": "Forbidden", "scope": "task:read"})
+    return dict(actor)
+
+
+def _preview_ident(oa_ui: str | None = Cookie(default=None),
+                   authorization: str | None = Header(default=None)) -> str | None:
+    """A preview session can come from a header/cookie, never its document URL."""
+    from .api import _token
+    return _token(oa_ui, authorization, None)
+
+
+@router.post("/files/{artifact_id}/preview-ticket")
+def preview_ticket(artifact_id: str, token: str | None = Depends(_preview_ident)):
+    from .api import _task_actor
+    with get_conn() as conn:
+        actor = _task_actor(conn, token, "task:read")
+        _scoped_artifact(conn, artifact_id, actor=actor)
+        ticket, expires = _make_preview_ticket(artifact_id, actor["id"])
+    return {"ticket": ticket, "expires_at": expires}
+
+PREVIEW_CLOSE_SCRIPT = """<script>
+window.addEventListener('keydown', function (event) {
+  if (event.key === 'Escape' && !event.isComposing) {
+    event.preventDefault();
+    window.parent.postMessage({kind: 'agent-os-preview-close'}, '*');
+  }
+}, true);
+</script>"""
+
+
+def _embedded_preview(path: pathlib.Path, media_type: str) -> str:
+    """Supply an Escape listener inside the opaque frame without parent access.
+
+    Text is escaped and SVG uses image context. The message carries no content
+    or credentials; the parent must check this frame's WindowProxy as source.
+    """
+    import base64
+    import html
+    import re
+
+    maximum = 10 * 1024 * 1024
+    with path.open("rb") as source:
+        raw = source.read(maximum + 1)
+    if len(raw) > maximum:
+        content = "<p>文件较大，请下载后查看。</p>"
+    elif media_type.startswith("image/"):
+        encoded = base64.b64encode(raw).decode("ascii")
+        content = (f'<img src="data:{media_type};base64,{encoded}" '
+                   f'alt="{html.escape(path.name, quote=True)}" '
+                   'style="display:block;max-width:100%;height:auto;margin:auto">')
+    elif media_type == "text/html":
+        page = raw.decode("utf-8-sig", errors="replace")
+        # Register before artifact scripts while retaining the document mode.
+        doctype = re.match(r"\s*<!doctype[^>]*>", page, flags=re.IGNORECASE)
+        if doctype:
+            return page[:doctype.end()] + PREVIEW_CLOSE_SCRIPT + page[doctype.end():]
+        return PREVIEW_CLOSE_SCRIPT + page
+    else:
+        content = "<pre>" + html.escape(raw.decode("utf-8-sig", errors="replace")) + "</pre>"
+    return ("<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='referrer' content='no-referrer'>"
+            "<style>body{margin:20px;color:#172033;background:#fff;font:14px/1.65 ui-monospace,monospace}"
+            "pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}</style>"
+            + PREVIEW_CLOSE_SCRIPT + "</head><body>" + content + "</body></html>")
 
 
 @router.get("/files/{artifact_id}/preview")
-def preview(artifact_id: str, token: str | None = Auth):
-    _require(token)
-    from fastapi.responses import FileResponse
+def preview(artifact_id: str, token: str | None = Depends(_preview_ident), embed: bool = False,
+            ticket: str | None = None, t: str | None = Query(default=None, include_in_schema=False)):
+    from fastapi.responses import FileResponse, HTMLResponse
+    if t is not None:
+        raise HTTPException(400, detail={"code": "UnsafePreviewCredential"})
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM artifacts WHERE id=?", (artifact_id,)).fetchone()
-    if row is None:
-        raise HTTPException(404, detail={"code": "FileNotFound"})
+        actor = _preview_ticket_actor(conn, artifact_id, ticket) if ticket is not None else None
+        row = _scoped_artifact(conn, artifact_id, token, actor=actor)
     path = pathlib.Path(row["file_path"])
     if not path.exists():
         raise HTTPException(404, detail={"code": "FileGone"})
     mt = PREVIEW_TYPES.get(path.suffix.lower(), "text/plain")
     headers = {"Content-Security-Policy": PREVIEW_CSP, "X-Content-Type-Options": "nosniff"}
+    if embed:
+        headers["Cache-Control"] = "no-store"
+        return HTMLResponse(_embedded_preview(path, mt), headers=headers)
     return FileResponse(str(path), media_type=mt, headers=headers)
 
 
 @router.delete("/files/{artifact_id}")
 def delete_file(artifact_id: str, token: str | None = Auth):
-    who = _require(token)
+    from .. import tenant
+    from .api import _task_actor, _task_write_entities
+    from .artifacts import path_key
     with get_conn() as conn:
-        conn.execute("UPDATE artifacts SET state='deleted' WHERE id=?", (artifact_id,))
-        write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="admin", action="file_deleted",
-                    target=artifact_id, layer="system", payload={}, response={"by": who})
+        conn.execute("BEGIN IMMEDIATE")
+        actor = _task_actor(conn, token, "task:*")
+        row = conn.execute("SELECT a.*,r.task_id FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
+                           " WHERE a.id=?", (artifact_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, detail={"code": "FileNotFound"})
+        task = tenant.scoped_task(conn, row["task_id"], _task_write_entities(conn, actor))
+        key = path_key(row["file_path"])
+        aliases = [a["id"] for a in conn.execute(
+            "SELECT a.id,a.file_path FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
+            " WHERE r.task_id=? AND COALESCE(a.state,'active')='active'", (row["task_id"],))
+                   if path_key(a["file_path"]) == key]
+        conn.executemany("UPDATE artifacts SET state='deleted' WHERE id=?", [(a,) for a in aliases])
+        write_audit(conn, legal_entity_id=task["legal_entity_id"], task_id=task["id"],
+                    verb="admin", action="file_deleted", target=artifact_id, layer="system",
+                    payload={"file_path": row["file_path"], "artifact_ids": aliases},
+                    response={"by": actor["id"], "deleted": len(aliases)})
         conn.commit()
-    return {"ok": True}
+    return {"ok": True, "deleted": len(aliases)}
 
 
 # --------------------------------------------------------------- 知识库

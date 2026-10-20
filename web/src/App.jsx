@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import { marked } from "marked";
 import { api, ping } from "./api.js";
+import Workspace from "./Workspace.jsx";
+import NewTaskModal from "./NewTaskModal.jsx";
+import DialogAccessibility from "./DialogAccessibility.jsx";
 import "./styles.css";
 
 // Model output is untrusted. marked drops raw HTML (renderer.html = "") and
@@ -51,20 +54,20 @@ function Login({ onDone }) {
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
         <h2>Agent OS</h2>
-        <div className="sub">数字集团控制台 · 用你的身份密钥登录</div>
+        <div className="sub">登录你的 AI 工作空间，开始与团队协作。</div>
         <div className="field">
           <label>身份 ID</label>
           <input value={id} onChange={(e) => setId(e.target.value)} placeholder="ID-xxxxxxxxxxxx" autoFocus />
         </div>
         <div className="field">
-          <label>密钥（HMAC secret）</label>
+          <label>登录密钥</label>
           <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••••" />
         </div>
         <button className="btn primary" style={{ width: "100%" }} disabled={busy || !id || !secret}>
           {busy ? "登录中…" : "进入控制台"}
         </button>
         {waiting && <div className="hint" style={{ marginTop: 10 }}>
-          若长时间无响应，说明本地 8077 服务还没起来（桌面版会自动拉起，浏览器版请先跑 start_all）。
+          首次启动可能需要片刻；若长时间无响应，请确认工作空间服务已启动。
         </div>}
         {err && <div className="err">{err}</div>}
       </form>
@@ -81,6 +84,14 @@ function Markdown({ text }) {
 
 /* ------------------------------------------------------------- 图标（v1.3.1） */
 const ICONS = {
+  overview: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
+  tasks: "M8 3h8v4H8zM7 5H5v16h14V5h-2M8 12h8M8 16h5",
+  arrow: "M5 12h14M14 7l5 5-5 5",
+  chevron: "M9 5l7 7-7 7",
+  search: "M21 21l-5-5M18 10.5a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0z",
+  refresh: "M20 7v5h-5M4 17v-5h5M6.1 6a7 7 0 0 1 11.5-.5L20 9M4 15l2.4 3.5A7 7 0 0 0 18 18",
+  spark: "m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4z",
+  complete: "M20 11v1a8 8 0 1 1-4.7-7.3M9 11l3 3 8-8",
   chat: "M21 12a8 8 0 0 1-8 8H7l-4 3v-7a8 8 0 0 1 8-8h2a8 8 0 0 1 8 4z",
   org: "M12 3v4M12 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM5 21v-3a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v3",
   files: "M4 5a2 2 0 0 1 2-2h5l2 3h5a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z",
@@ -137,23 +148,50 @@ function Ring({ pct, used, cap }) {
 const STATE_LABEL = { passed: "通过", failed: "不过", pending: "待定", na: "未启用" };
 const STATE_CLASS = { passed: "var(--ok)", failed: "var(--bad)", pending: "var(--warn)", na: "var(--muted)" };
 
-function TaskCard({ taskId, meta, onAct }) {
+function TaskCard({ taskId, meta, onAct, onApproval, compact = false }) {
   const [view, setView] = useState(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [pollVersion, setPollVersion] = useState(0);
+  const [confirmation, setConfirmation] = useState(null);
+  const currentTask = useRef(taskId);
+  currentTask.current = taskId;
+  const stateLabels = { todo: "待分配", assigned: "已分配", in_progress: "执行中",
+    pending_review: "待验收", completed: "已完成", rejected: "已驳回", failed: "执行失败", cancelled: "已中止" };
 
   useEffect(() => {
-    let alive = true;
+    setView(null); setPreview(null); setError(""); setLoadError(""); setBusy(false); setConfirmation(null);
+  }, [taskId]);
+
+  useEffect(() => {
+    let alive = true, timer = null, pending = false;
     const load = async () => {
+      if (!alive || pending) return;
+      if (timer) clearTimeout(timer);
+      pending = true;
       try {
         const v = await api.task(taskId);
-        if (alive) setView(v);
-      } catch { /* ignore */ }
+        if (!alive) return;
+        setView(v); setLoadError("");
+        if (!["completed", "cancelled", "rejected", "failed"].includes(v.task?.state)) {
+          timer = setTimeout(load, 3000);
+        }
+      } catch (e) {
+        if (alive) setLoadError(`任务加载失败：${e.message || "请重新加载"}`);
+      } finally { pending = false; }
     };
     load();
-    const t = setInterval(load, 3000);
-    return () => { alive = false; clearInterval(t); };
-  }, [taskId]);
+    window.addEventListener("focus", load);
+    window.addEventListener("oa-tasks-changed", load);
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("focus", load);
+      window.removeEventListener("oa-tasks-changed", load);
+    };
+  }, [taskId, pollVersion]);
 
   const criteria = view?.criteria || meta?.criteria || [];
   const run = view?.runs?.[0];
@@ -161,28 +199,77 @@ function TaskCard({ taskId, meta, onAct }) {
   const stream = view?.stream || [];
   const thinking = stream.filter((s) => s.kind === "thinking").map((s) => s.text).join("");
   const tools = stream.filter((s) => s.kind === "tool");
+  const artifacts = view?.artifacts === undefined ? (meta?.artifact ? [meta.artifact] : []) : view.artifacts;
 
-  async function act(action) {
-    setBusy(true);
+  async function act(action, note = "") {
+    if (busy) return false;
+    setBusy(true); setError("");
     try {
-      await api.action(taskId, action);
+      await (action === "retry" ? api.retryTask(taskId, note) : api.action(taskId, action, note));
       const v = await api.task(taskId);
+      if (currentTask.current !== taskId) return false;
       setView(v);
+      setPollVersion(value => value + 1);
       onAct && onAct();
-    } finally { setBusy(false); }
+      return true;
+    } catch (e) {
+      if (currentTask.current === taskId) setError(`操作失败：${e.message || "请重试"}`);
+      return false;
+    } finally { if (currentTask.current === taskId) setBusy(false); }
   }
 
-  const running = run && ["spawned", "running"].includes(run.state);
+  function openConfirmation(action) {
+    setError("");
+    setConfirmation({ action, note: "" });
+  }
+
+  function closeConfirmation() {
+    if (busy) return;
+    setConfirmation(null); setError("");
+  }
+
+  async function confirmAction(event) {
+    event.preventDefault();
+    if (!confirmation || busy) return;
+    const note = confirmation.note.trim();
+    if (confirmation.action === "reject" && !note) {
+      setError("请填写驳回原因，说明需要修改的内容。");
+      return;
+    }
+    if (await act(confirmation.action, note)) setConfirmation(null);
+  }
+
+  const waitingForApproval = view?.task?.awaiting_approval ?? view?.awaiting_approval ?? false;
+  const pendingApproval = view?.task?.pending_approval ?? view?.pending_approval;
+  const running = run && ["spawned", "running"].includes(run.state) && !waitingForApproval;
+  const allowedActions = view?.task?.allowed_actions ?? view?.allowed_actions;
+  const allowed = (action, fallback) => !!view && (Array.isArray(allowedActions) ? allowedActions.includes(action) : fallback);
+  const canAccept = allowed("accept", state === "pending_review");
+  const canReject = allowed("reject", state === "pending_review");
+  const canAbort = allowed("abort", state === "in_progress");
+  const canRetry = allowed("retry", ["rejected", "failed"].includes(state));
 
   return (
     <div className="card">
-      <h4>
-        任务 {taskId} · {state}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h4 style={{ margin: "0 0 4px", overflowWrap: "anywhere" }}>{compact ? "验收与交付" : view?.task?.title || "任务执行"}</h4>
+          {!compact && <div className="hint mono" style={{ textAlign: "left", margin: 0, fontSize: 10.5 }}>{taskId}</div>}
+        </div>
+        <span className={cls("pill", waitingForApproval ? "warn" : state === "completed" ? "ok" : ["rejected", "failed"].includes(state) ? "bad" :
+          ["in_progress", "pending_review"].includes(state) ? "run" : "warn")}>
+          {waitingForApproval ? "待审批" : stateLabels[state] || state || "载入中"}
+        </span>
+      </div>
+      {run && <div className="hint" style={{ textAlign: "left", margin: "8px 0" }}>
         {running && <span style={{ marginLeft: 8 }}><span className="spin" /> {run.usage_tokens || 0} tok</span>}
         {!running && run && <span style={{ marginLeft: 8, color: "var(--muted)" }}>
           {run.usage_tokens || 0} tokens
         </span>}
-      </h4>
+      </div>}
+
+      {waitingForApproval && <div className="note-bar" role="status">任务已暂停，等待操作审批。{pendingApproval && onApproval && <button className="btn ghost" style={{ marginLeft: 8 }} onClick={onApproval}>前往审批中心</button>}</div>}
+      {compact && (view?.requirement || view?.task?.requirement) && <details className="task-requirement"><summary>完整需求</summary><p>{view.requirement || view.task.requirement}</p></details>}
 
       {(thinking || tools.length > 0) && (
         <details className="think" open={running}>
@@ -204,27 +291,60 @@ function TaskCard({ taskId, meta, onAct }) {
         </div>
       ))}
 
-      {meta?.artifact && (
-        <div className="crit">
+      {(artifacts || []).map((artifact, i) => (
+        <div className="crit" key={artifact.id || i}>
           <span className="state" style={{ color: "var(--accent)" }}>📄</span>
-          <span className="txt">{meta.artifact.file_path?.split("\\").pop()} · {meta.artifact.bytes} B</span>
-          {meta.artifact.id && PREVIEWABLE.includes(
-            ("." + (meta.artifact.file_path || "").split(".").pop()).toLowerCase()) && (
+          <span className="txt">{(artifact.file_path || artifact.name || "产物").split(/[\\/]/).pop()} · {artifact.bytes || 0} B</span>
+          {artifact.id && PREVIEWABLE.includes(
+            ("." + (artifact.file_path || artifact.name || "").split(".").pop()).toLowerCase()) && (
             <button className="btn ghost" style={{ marginLeft: 8 }}
                     onClick={() => setPreview({
-                      id: meta.artifact.id, name: (meta.artifact.file_path || "").split("\\").pop(),
-                      bytes: meta.artifact.bytes, task_id: taskId,
+                      id: artifact.id, name: (artifact.file_path || artifact.name || "产物").split(/[\\/]/).pop(),
+                      bytes: artifact.bytes, task_id: taskId,
                     })}>预览</button>
           )}
+          {artifact.id && <a className="btn ghost" href={api.fileUrl(artifact.id)} target="_blank" rel="noreferrer">下载</a>}
         </div>
-      )}
+      ))}
       {preview && <PreviewModal file={preview} onClose={() => setPreview(null)} />}
 
-      {!running && (
+      {!confirmation && (error || loadError) && <div className="err" role="alert">{error || loadError}</div>}
+      {loadError && <button className="btn ghost" onClick={() => setPollVersion(value => value + 1)}>重新加载</button>}
+      {(canAccept || canReject || canAbort || canRetry) && (
         <div className="actions">
-          <button className="btn primary" disabled={busy} onClick={() => act("accept")}>验收通过</button>
-          <button className="btn" disabled={busy} onClick={() => act("reject")}>驳回</button>
-          <button className="btn ghost" disabled={busy} onClick={() => act("abort")}>中止</button>
+          {canAccept && <button className="btn primary" disabled={busy} onClick={() => openConfirmation("accept")}>验收通过</button>}
+          {canReject && <button className="btn" disabled={busy} onClick={() => openConfirmation("reject")}>驳回</button>}
+          {canAbort && <button className="btn ghost" disabled={busy} onClick={() => act("abort")}>中止任务</button>}
+          {canRetry && <button className="btn primary" disabled={busy} onClick={() => openConfirmation("retry")}>修改后重试</button>}
+        </div>
+      )}
+      {view && state === "completed" && <div className="hint">验收已通过，任务已完成</div>}
+      {confirmation && (
+        <div className="mask" onClick={closeConfirmation}>
+          <form className="modal" onClick={event => event.stopPropagation()} onSubmit={confirmAction}>
+            <h3>{{ accept: "确认验收", reject: "驳回任务", retry: "修改后重试" }[confirmation.action]}</h3>
+            <p className="hint">{{
+              accept: "确认交付内容符合预期后，完成本任务的验收。",
+              reject: "写明需要修改的内容，方便下一次执行修正。",
+              retry: "可补充修改要求，系统将使用原任务继续执行。",
+            }[confirmation.action]}</p>
+            <div className="field">
+              <label htmlFor={`task-action-note-${taskId}`}>
+                {{ accept: "验收说明（可选）", reject: "驳回原因", retry: "补充修改要求（可选）" }[confirmation.action]}
+              </label>
+              <textarea id={`task-action-note-${taskId}`} rows={4} autoFocus disabled={busy}
+                required={confirmation.action === "reject"} value={confirmation.note}
+                onChange={event => setConfirmation(current => ({ ...current, note: event.target.value }))}
+                placeholder={confirmation.action === "reject" ? "请说明需要调整的内容…" : "补充说明…"} />
+            </div>
+            {error && <div className="err" role="alert">{error}</div>}
+            <div className="actions">
+              <button type="button" className="btn ghost" disabled={busy} onClick={closeConfirmation}>取消</button>
+              <button type="submit" className="btn primary" disabled={busy || (confirmation.action === "reject" && !confirmation.note.trim())}>
+                {busy ? "处理中…" : { accept: "确认验收", reject: "确认驳回", retry: "开始重试" }[confirmation.action]}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>
@@ -232,62 +352,114 @@ function TaskCard({ taskId, meta, onAct }) {
 }
 
 /* ------------------------------------------------------------------ chat */
-function ChatView({ chat, onSent, onMore, onHelp, onAbout }) {
-  const [messages, setMessages] = useState([]);
+function ChatView({ chat, onSent, onMore, onHelp, onAbout, onApproval, onToggleDetail, showDetail }) {
+  const [messageState, setMessageState] = useState({ chatId: chat.id, rows: [] });
+  const messages = messageState.chatId === chat.id ? messageState.rows : [];
+  const latestTaskMessage = [...messages].reverse().find(message => message.task_id);
+  const liveTaskId = latestTaskMessage?.task_id && !messages.some(message =>
+    message.task_id === latestTaskMessage.task_id && message.kind === "card") ? latestTaskMessage.task_id : null;
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [askRole, setAskRole] = useState(false);
   const [roleList, setRoleList] = useState([]);
   const bottom = useRef(null);
   const streamRef = useRef(null);
+  const attachmentInput = useRef(null);
+  const stickToBottom = useRef(true);
+  const scopeRef = useRef({ chatId: chat.id, rows: [], cursor: 0 });
+  if (scopeRef.current.chatId !== chat.id) {
+    scopeRef.current = { chatId: chat.id, rows: [], cursor: 0 };
+  }
+  const mergeMessages = useCallback((scope, incoming) => {
+    if (scopeRef.current !== scope || scope.active === false || !incoming?.length) return;
+    const rows = new Map(scope.rows.map((m) => [m.id, m]));
+    incoming.forEach((m) => rows.set(m.id, m));
+    scope.rows = [...rows.values()].sort((a, b) => Number(a.id) - Number(b.id));
+    scope.cursor = scope.rows.reduce((last, m) => Math.max(last, Number(m.id) || 0), 0);
+    setMessageState({ chatId: scope.chatId, rows: scope.rows });
+  }, []);
 
   const openAskRole = async () => {
     try { setRoleList((await api.roles()).roles); } catch { setRoleList([]); }
     setAskRole(true);
   };
 
-  const load = useCallback(async () => {
-    const last = messages.length ? messages[messages.length - 1].id : 0;
+  const load = useCallback(async (full = false) => {
+    const scope = scopeRef.current;
+    if (scope.chatId !== chat.id || scope.active === false) return;
     try {
-      const r = await api.messages(chat.id, last);
-      if (r.messages.length) setMessages((m) => [...m, ...r.messages]);
-    } catch { /* ignore */ }
-  }, [chat.id, messages]);
+      const r = await api.messages(chat.id, full ? 0 : scope.cursor);
+      if (scopeRef.current !== scope || scope.active === false) return;
+      mergeMessages(scope, r.messages);
+      setLoadError("");
+    } catch (e) {
+      if (scopeRef.current === scope && scope.active !== false) setLoadError(`消息加载失败：${e.message || "请刷新重试"}`);
+    }
+  }, [chat.id, mergeMessages]);
 
-  useEffect(() => { setMessages([]); load(); }, [chat.id]);
   useEffect(() => {
-    // SSE 优先；连不上再退回轮询（v2.1）
-    let es = null, timer = null;
-    const last = messages.length ? messages[messages.length - 1].id : 0;
-    try {
-      es = new EventSource(`${location.origin}/ui/chats/${chat.id}/stream?after=${last}`,
-                           { withCredentials: true });
-      es.onmessage = (ev) => {
-        try {
-          const m = JSON.parse(ev.data);
-          setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
-        } catch { /* ignore */ }
-      };
-      es.onerror = () => { if (es) { es.close(); es = null; } };
-    } catch { /* fallback below */ }
-    timer = setInterval(() => { if (!es) load(); }, 4000);
-    return () => { if (es) es.close(); if (timer) clearInterval(timer); };
-  }, [load]);
+    // A conversation owns one subscription; new messages only advance its cursor.
+    const scope = scopeRef.current;
+    let alive = true, es = null, reconnect = null;
+    scope.active = true;
+    stickToBottom.current = true;
+    setMessageState({ chatId: chat.id, rows: scope.rows });
+    setText(""); setBusy(false); setUploading(false); setError(""); setLoadError("");
+    setAskRole(false);
+    const connect = () => {
+      if (!alive || scopeRef.current !== scope) return;
+      try {
+        const source = new EventSource(api.messageStreamUrl(chat.id, scope.cursor), { withCredentials: true });
+        es = source;
+        source.onmessage = (ev) => {
+          if (!alive || scopeRef.current !== scope) return;
+          try { mergeMessages(scope, [JSON.parse(ev.data)]); setLoadError(""); } catch { /* malformed event */ }
+        };
+        source.onerror = () => {
+          source.close();
+          if (es === source) es = null;
+          if (alive) reconnect = setTimeout(connect, 5000);
+        };
+      } catch {
+        if (alive) reconnect = setTimeout(connect, 5000);
+      }
+    };
+    load(true).then(connect);
+    const timer = setInterval(() => {
+      if (!es || es.readyState !== EventSource.OPEN) load();
+    }, 4000);
+    return () => {
+      alive = false;
+      scope.active = false;
+      if (es) es.close();
+      if (reconnect) clearTimeout(reconnect);
+      clearInterval(timer);
+    };
+  }, [chat.id, load, mergeMessages]);
   useEffect(() => {
-    // 只滚内部消息容器，别让 scrollIntoView 把整个窗口滚走（v1.1 踩过：侧边栏被推出视口）
     const el = streamRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [messages.length]);
 
   async function send() {
-    const body = text.trim();
+    const draft = text;
+    const body = draft.trim();
     if (!body || busy) return;
-    setText(""); setBusy(true);
+    const scope = scopeRef.current;
+    setBusy(true); setError("");
     try {
       await api.send(chat.id, body);
+      if (scopeRef.current !== scope || scope.active === false) return;
+      stickToBottom.current = true;
+      setText((current) => current === draft ? "" : current);
       await load();
       onSent && onSent();
-    } finally { setBusy(false); }
+    } catch (e) {
+      if (scopeRef.current === scope) setError(`发送失败，内容已保留：${e.message || "请重试"}`);
+    } finally { if (scopeRef.current === scope) setBusy(false); }
   }
 
   return (
@@ -296,10 +468,10 @@ function ChatView({ chat, onSent, onMore, onHelp, onAbout }) {
         <div className="avatar">{initials(chat.title)}</div>
         <div>
           <div className="who">{chat.title}</div>
-          <div className="sub">{chat.kind === "dm" ? "AI 员工 · 直连底座" : "群聊 · 多 Agent 协作"}</div>
+          <div className="sub">{chat.kind === "dm" ? "AI 员工 · 直接执行任务" : chat.kind === "ceo" ? "调度台 · 自动组建项目" : "协作群 · 团队分工"}</div>
         </div>
         <div className="spacer" />
-        <button className="btn ghost" onClick={() => { setMessages([]); load(); }}>刷新</button>
+        <button className="btn ghost" onClick={() => load(true)}>刷新</button>
         {chat.kind === "group" && (
           <button className="btn ghost" style={{ padding: "4px 8px" }} onClick={openAskRole}>
             调人
@@ -310,9 +482,15 @@ function ChatView({ chat, onSent, onMore, onHelp, onAbout }) {
         </button>
         <button className="icon-btn" title="帮助" onClick={onHelp}><Icon name="help" /></button>
         <button className="icon-btn" title="关于" onClick={onAbout}><Icon name="alert" size="lg" /></button>
+        <button className="icon-btn" title={showDetail ? "收起运行详情" : "显示运行详情"}
+                aria-label={showDetail ? "收起运行详情" : "显示运行详情"}
+                aria-expanded={!!showDetail} onClick={onToggleDetail}><Icon name="panel" /></button>
       </div>
 
-      <div className="stream" ref={streamRef}>
+      <div className="stream" ref={streamRef} onScroll={() => {
+        const el = streamRef.current;
+        if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+      }}>
         <div className="stream-inner">
           {messages.length === 0 && <div className="empty">还没有对话。下一句任务，它会建群、执行、把产物交回来。</div>}
           {messages.map((m) => (
@@ -321,7 +499,7 @@ function ChatView({ chat, onSent, onMore, onHelp, onAbout }) {
               <div style={{ maxWidth: "86%" }}>
                 <div className="author">{m.role === "human" ? "我" : m.author || "AI"}</div>
                 <div className="bubble">
-                  {m.kind === "project" && safeJson(m.meta).project_id ? (
+                  {m.kind === "project" && safeJson(m.meta)?.project_id ? (
                     <ProjectCard projectId={safeJson(m.meta).project_id} />
                   ) : m.kind === "role_request" ? (
                     <RoleRequestCard msg={m} chatId={chat.id} onDone={load} />
@@ -338,7 +516,7 @@ function ChatView({ chat, onSent, onMore, onHelp, onAbout }) {
                     <>
                       <Markdown text={m.content} />
                       {m.task_id && (
-                        <TaskCard taskId={m.task_id} meta={safeJson(m.meta)} onAct={load} />
+                        <TaskCard taskId={m.task_id} meta={safeJson(m.meta)} onAct={load} onApproval={onApproval} />
                       )}
                     </>
                   ) : (
@@ -348,49 +526,67 @@ function ChatView({ chat, onSent, onMore, onHelp, onAbout }) {
               </div>
             </div>
           ))}
+          {liveTaskId && (
+            <section aria-label="当前任务执行" style={{ margin: "20px 0" }}>
+              <TaskCard key={liveTaskId} taskId={liveTaskId} meta={safeJson(latestTaskMessage.meta)} onAct={load} onApproval={onApproval} />
+            </section>
+          )}
           <div ref={bottom} />
         </div>
       </div>
 
       <div className="composer">
+        {(error || loadError) && <div className="err" role="alert">{error || loadError}</div>}
         <div className="tools">
-          <label className="btn ghost" style={{ padding: "3px 8px", cursor: "pointer" }}>
-            ＋ 附件
-            <input type="file" style={{ display: "none" }} onChange={async (e) => {
+          <button type="button" className="btn ghost" aria-label="上传附件" aria-haspopup="dialog" disabled={uploading} style={{ padding: "3px 8px" }} onClick={() => attachmentInput.current?.click()}>
+            {uploading ? "上传中…" : "＋ 附件"}
+          </button>
+            <input ref={attachmentInput} type="file" aria-label="附件文件" disabled={uploading} style={{ display: "none" }} onChange={async (e) => {
               const f = e.target.files?.[0];
               if (!f) return;
-              await api.upload(chat.id, f);
+              const scope = scopeRef.current;
               e.target.value = "";
-              await load();
+              setUploading(true); setError("");
+              try {
+                await api.upload(chat.id, f);
+                if (scopeRef.current === scope) await load();
+              } catch (err) {
+                if (scopeRef.current === scope) setError(`上传失败：${err.message || "请重试"}`);
+              } finally { if (scopeRef.current === scope) setUploading(false); }
             }} />
-          </label>
           <button className="btn ghost" style={{ padding: "3px 8px" }}
                   onClick={async () => {
                     const path = window.prompt("工作目录（产物会自动保存到这里）", chat.workdir || "");
                     if (path === null) return;
-                    await api.patchChat(chat.id, { workdir: path.trim() });
-                    if (onSent) onSent();
+                    try {
+                      await api.patchChat(chat.id, { workdir: path.trim() });
+                      setError("");
+                      if (onSent) onSent();
+                    } catch (err) { setError(`工作目录保存失败：${err.message || "请重试"}`); }
                   }}>
-            📁 {chat.workdir ? chat.workdir.split(/[\/]/).pop() : "设定工作目录"}
+            📁 {chat.workdir ? chat.workdir.split(/[\\/]/).pop() : "设定工作目录"}
           </button>
           <span className="spacer" />
           <span className="hint">@ 可提及成员</span>
         </div>
         <div className="composer-inner">
           <textarea
+            aria-label="任务内容"
             rows={1}
             value={text}
             placeholder="发任务，或随便聊两句…  (Enter 发送 / Shift+Enter 换行)"
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                e.preventDefault(); send();
+              }
             }}
           />
           <button className="btn primary" onClick={send} disabled={busy || !text.trim()}>
             {busy ? "发送中…" : "发送"}
           </button>
         </div>
-        <div className="hint">模型在沙箱里执行，思考链与工具调用会实时出现在卡片里</div>
+        <div className="hint">描述目标与交付要求，执行进度会自动更新。</div>
       </div>
 
       {askRole && (
@@ -548,7 +744,7 @@ function OrgTree({ org, onPick }) {
   );
 }
 
-function OrgView({ org, onPick }) {
+function OrgView({ org, onPick, departments = [], onRenameDept, onDeleteDept }) {
   let people = 0, positions = 0, entities = 0;
   const walk = (xs) => (xs || []).forEach((e) => {
     entities += 1;
@@ -570,6 +766,10 @@ function OrgView({ org, onPick }) {
       </div>
       <div className="stream">
         <div className="stream-inner">
+          <details className="department-management">
+            <summary>管理部门 <span className="count-label">{departments.length}</span></summary>
+            {departments.map((department) => <div className="department-management-row" key={department.id}><b>{department.name}</b><span>{department.headcount} 人</span><button className="btn ghost" onClick={() => onRenameDept(department)}>重命名</button>{department.type !== "group_hq" && <button className="btn ghost danger" onClick={() => onDeleteDept(department)}>删除部门</button>}</div>)}
+          </details>
           <div className="org-card">
             <OrgTree org={org} onPick={onPick} />
           </div>
@@ -939,7 +1139,26 @@ function ConfirmCard({ taskId, meta, onAct }) {
 const PREVIEWABLE = [".html", ".htm", ".svg", ".png", ".jpg", ".jpeg", ".md", ".txt", ".json"];
 
 function PreviewModal({ file, onClose }) {
-  const name = file.name || (file.file_path || "").split("\\").pop();
+  const frame = useRef(null);
+  const [source, setSource] = useState("");
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    setSource(""); setError("");
+    api.previewTicket(file.id).then(result => {
+      if (alive) setSource(api.previewUrl(file.id, result.ticket));
+    }).catch(err => { if (alive) setError(err.message || "预览暂时不可用，请重试。"); });
+    return () => { alive = false; };
+  }, [file.id, attempt]);
+  useEffect(() => {
+    const receive = event => {
+      if (frame.current && event.source === frame.current.contentWindow && event.data?.kind === "agent-os-preview-close") onClose();
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, [onClose]);
+  const name = file.name || (file.file_path || "").split(/[\\/]/).pop();
   const ext = ("." + name.split(".").pop()).toLowerCase();
   const isImage = [".png", ".jpg", ".jpeg", ".svg"].includes(ext);
   return (
@@ -954,14 +1173,18 @@ function PreviewModal({ file, onClose }) {
           <a className="btn ghost" href={api.fileUrl(file.id)} target="_blank" rel="noreferrer">下载</a>
           <button className="icon-btn" onClick={onClose}>×</button>
         </div>
-        <iframe
+        {source ? <iframe
+          ref={frame}
           className="preview-frame"
-          title="preview"
-          sandbox="allow-scripts allow-popups"
+          title={`文件预览：${name}`}
+          sandbox="allow-scripts"
           referrerPolicy="no-referrer"
-          src={api.previewUrl(file.id)}
-        />
-        {isImage && <div className="hint">图片已按原尺寸显示在上方</div>}
+          src={source}
+        /> : error ? <div className="empty" role="alert">{error}
+          <div className="actions"><button className="btn" onClick={() => setAttempt(value => value + 1)}>重新加载预览</button></div>
+        </div> : <div className="empty" role="status">正在准备预览…</div>}
+        <div className="hint">安全预览会屏蔽外部资源，完整内容可下载查看。</div>
+        {source && isImage && <div className="hint">图片已在上方显示</div>}
       </div>
     </div>
   );
@@ -1818,7 +2041,13 @@ const SPAN_KIND = {
 
 const fmtMs = (ms) => (ms >= 10000 ? (ms / 1000).toFixed(1) + "s" : Math.round(ms) + "ms");
 
-function RunDetail({ chat, show, onToggle }) {
+function RunDetail({ chat, show, onToggle, onApproval }) {
+  const [compact, setCompact] = useState(window.innerWidth <= 1200);
+  useEffect(() => {
+    const resize = () => setCompact(window.innerWidth <= 1200);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
   const [taskId, setTaskId] = useState(null);
   const [view, setView] = useState(null);
   const [members, setMembers] = useState([]);
@@ -1828,16 +2057,27 @@ function RunDetail({ chat, show, onToggle }) {
   const [audit, setAudit] = useState(null);
   const [compress, setCompress] = useState(true);
   const [evalNote, setEvalNote] = useState("");
+  const [preview, setPreview] = useState(null);
+  const chatScope = useRef(chat.id);
+  chatScope.current = chat.id;
+  const runScope = useRef(null);
+  const stateLabels = { todo: "待分配", assigned: "已分配", in_progress: "执行中",
+    pending_review: "待验收", completed: "已完成", rejected: "已驳回", failed: "执行失败", cancelled: "已中止" };
 
   useEffect(() => {
     let alive = true;
+    setTaskId(null); setView(null); setArtifact(null); setTrace(null); setAudit(null);
+    setPane("detail"); setEvalNote(""); setPreview(null); setMembers([]);
     const tick = async () => {
       try {
         const r = await api.messages(chat.id, 0);
         const withTask = [...r.messages].reverse().find((m) => m.task_id);
-        if (alive) setTaskId(withTask ? withTask.task_id : null);
-        const meta = withTask ? safeJson(withTask.meta) : null;
-        if (alive && meta?.artifact) setArtifact(meta.artifact);
+        if (!alive) return;
+        const nextId = withTask ? withTask.task_id : null;
+        setTaskId(nextId);
+        const withArtifact = nextId ? [...r.messages].reverse().find((m) =>
+          m.task_id === nextId && safeJson(m.meta)?.artifact) : null;
+        setArtifact(withArtifact ? safeJson(withArtifact.meta).artifact : null);
       } catch { /* ignore */ }
     };
     tick();
@@ -1846,6 +2086,7 @@ function RunDetail({ chat, show, onToggle }) {
   }, [chat.id]);
 
   useEffect(() => {
+    setView(null); setTrace(null); setAudit(null); setPreview(null); setEvalNote("");
     if (!taskId) { setView(null); return; }
     let alive = true;
     const tick = async () => {
@@ -1854,29 +2095,46 @@ function RunDetail({ chat, show, onToggle }) {
     tick();
     const t = setInterval(tick, 3000);
     return () => { alive = false; clearInterval(t); };
-  }, [taskId]);
+  }, [taskId, chat.id]);
 
   useEffect(() => {
     if (chat.kind !== "group") { setMembers([]); return; }
-    api.groupMembers(chat.id).then((r) => setMembers(r.members)).catch(() => setMembers([]));
-  }, [chat.id]);
+    let alive = true;
+    api.groupMembers(chat.id).then((r) => { if (alive) setMembers(r.members); })
+      .catch(() => { if (alive) setMembers([]); });
+    return () => { alive = false; };
+  }, [chat.id, chat.kind]);
 
   const crit = view?.criteria || [];
   const passed = crit.filter((c) => c.state === "passed").length;
   const pct = crit.length ? Math.round((passed / crit.length) * 100) : 0;
   const run = view?.runs?.[0];
+  runScope.current = run?.id || null;
   const state = view?.task?.state || "—";
+  const waitingForApproval = view?.task?.awaiting_approval ?? view?.awaiting_approval ?? false;
+  const pendingApproval = view?.task?.pending_approval ?? view?.pending_approval;
   const isCordis = view?.owner?.preset === "cordis";
   const running = run && ["running", "spawned"].includes(run.state);
+  const artifacts = view?.artifacts === undefined ? (artifact ? [artifact] : []) : view.artifacts;
+
+  useEffect(() => {
+    let alive = true;
+    setTrace(null); setAudit(null);
+    if (pane === "trace" && run?.id) {
+      api.runTrace(run.id).then((value) => { if (alive) setTrace(value); })
+        .catch(() => { if (alive) setTrace(null); });
+    }
+    return () => { alive = false; };
+  }, [pane, run?.id, chat.id]);
 
   return (
-    <aside className={cls("detail", pane === "trace" && "trace-wide")}>
+    <aside className={cls("detail", pane === "trace" && "trace-wide")} role={compact ? "dialog" : undefined} aria-label="运行详情">
       <div className="head">
         <span className="who">运行详情</span>
-        <span className={cls("pill",
+        <span className={cls("pill", waitingForApproval ? "warn" :
           state === "completed" ? "ok" : state === "rejected" || state === "failed" ? "bad"
           : state === "in_progress" || state === "pending_review" ? "run" : "warn")}>
-          {state}
+          {waitingForApproval ? "待审批" : stateLabels[state] || state}
         </span>
         <span className="spacer" />
         <button className="icon-btn" title="收起详情" onClick={onToggle}><Icon name="close" /></button>
@@ -1886,11 +2144,7 @@ function RunDetail({ chat, show, onToggle }) {
         <button className={cls("seg-btn", pane === "detail" && "on")}
                 onClick={() => setPane("detail")}>详情</button>
         <button className={cls("seg-btn", pane === "trace" && "on")}
-                onClick={async () => {
-                  setPane("trace");
-                  const r = view?.runs?.[0];
-                  if (r) { try { setTrace(await api.runTrace(r.id)); } catch { setTrace(null); } }
-                }}>链路追踪</button>
+                onClick={() => setPane("trace")}>链路追踪</button>
       </div>
 
       {pane === "trace" ? (
@@ -1966,8 +2220,13 @@ function RunDetail({ chat, show, onToggle }) {
                     return (
                       <div key={sp.id} className="wf-row" title={`${sp.name}\n${fmtMs(sp.ended_ms - sp.started_ms)} · ${sp.tokens || 0} tok\n${sp.detail || ""}`}
                            onClick={async () => {
-                             try { setAudit((await api.spanAudit(sp.id)).audit); }
-                             catch { setAudit([]); }
+                             const chatId = chat.id, runId = run?.id;
+                             try {
+                               const value = (await api.spanAudit(sp.id)).audit;
+                               if (chatScope.current === chatId && runScope.current === runId) setAudit(value);
+                             } catch {
+                               if (chatScope.current === chatId && runScope.current === runId) setAudit([]);
+                             }
                            }}>
                         <div className="wf-name"><i className={kind.cls} />{sp.name}</div>
                         <div className="wf-track">
@@ -1988,13 +2247,13 @@ function RunDetail({ chat, show, onToggle }) {
         </div>
       ) : (
       <>
-      <h5>上下文窗口</h5>
-      <Ring pct={((run?.usage_tokens || 0) / 128000) * 100}
-            used={run?.usage_tokens || 0} cap={128000} />
+      <h5>执行用量</h5>
+      <div className="usage-summary"><b>{(run?.usage_tokens || 0).toLocaleString()}</b><span>tokens · 本次执行累计</span></div>
 
       <h5>当前任务</h5>
       <div className="glass" style={{ padding: 10 }}>
-        <div className="kv"><span>{taskId || "暂无任务"}</span><b>{state}</b></div>
+        <div className="kv"><span>{taskId || "暂无任务"}</span><b>{waitingForApproval ? "待审批" : stateLabels[state] || state}</b></div>
+        {waitingForApproval && <div className="hint" style={{ textAlign: "left" }}>任务已暂停，等待操作审批。{pendingApproval && onApproval && <button className="btn ghost" onClick={onApproval}>前往审批中心</button>}</div>}
         <div className="bar"><i style={{ width: `${pct}%` }} /></div>
         <div className="kv"><span>判据通过</span><b>{passed}/{crit.length || 0}</b></div>
         <div className="kv"><span>Token</span><b>{(run?.usage_tokens || 0).toLocaleString()}</b></div>
@@ -2015,19 +2274,25 @@ function RunDetail({ chat, show, onToggle }) {
       </div>
 
       <h5>工作产物</h5>
-      {artifact ? (
-        <div className="art">
+      {(artifacts || []).length ? artifacts.map((item, i) => (
+        <div className="art" key={item.id || i}>
           <span>📄</span>
-          <span>{(artifact.file_path || "").split("\\").pop()}</span>
-          <span className="sz">{artifact.bytes} B</span>
+          <span>{(item.file_path || item.name || "产物").split(/[\\/]/).pop()}</span>
+          <span className="sz">{item.bytes || 0} B</span>
           <span className="spacer" />
-          {artifact.id && (
-            <a className="btn ghost" href={api.fileUrl(artifact.id)} target="_blank" rel="noreferrer">下载</a>
+          {item.id && PREVIEWABLE.includes(("." + (item.file_path || item.name || "").split(".").pop()).toLowerCase()) && (
+            <button className="btn ghost" onClick={() => setPreview({
+              ...item, name: (item.file_path || item.name || "产物").split(/[\\/]/).pop(), task_id: taskId,
+            })}>预览</button>
+          )}
+          {item.id && (
+            <a className="btn ghost" href={api.fileUrl(item.id)} target="_blank" rel="noreferrer">下载</a>
           )}
         </div>
-      ) : (
+      )) : (
         <div className="hint">本任务还没有产物</div>
       )}
+      {preview && <PreviewModal file={preview} onClose={() => setPreview(null)} />}
 
       {run && run.state === "succeeded" && (
         <button className="btn ghost" style={{ marginTop: 8 }}
@@ -2068,7 +2333,10 @@ function App() {
   const [me, setMe] = useState(null);
   const [booted, setBooted] = useState(false);
   const [bootMsg, setBootMsg] = useState("载入中…");
-  const [tab, setTab] = useState(new URLSearchParams(location.search).get("tab") || "chats");
+  const [tab, setTab] = useState(() => {
+    const selected = new URLSearchParams(location.search).get("tab");
+    return ["overview", "tasks", "chats", "files", "approvals", "org", "roles", "finops", "evals", "experience"].includes(selected) ? selected : "overview";
+  });
   const [chats, setChats] = useState([]);
   const [active, setActive] = useState(null);
   const [org, setOrg] = useState(null);
@@ -2080,12 +2348,21 @@ function App() {
   const [showAccount, setShowAccount] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
-  const [theme, setTheme] = useState(localStorage.getItem("oa_theme") || "dark");
-  const [showDetail, setShowDetail] = useState(localStorage.getItem("oa_detail") !== "0");
+  const [theme, setTheme] = useState(localStorage.getItem("oa_theme") || "light");
+  const [showDetail, setShowDetail] = useState(() => localStorage.getItem("oa_detail") === null ? window.innerWidth > 1200 : localStorage.getItem("oa_detail") !== "0");
   const [ctx, setCtx] = useState(null);          // {x,y,items}
   const [depts, setDepts] = useState([]);
   const [depting, setDepting] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [taskCreating, setTaskCreating] = useState(false);
+  const [focusedTask, setFocusedTask] = useState(null);
+  const [chatQuery, setChatQuery] = useState("");
+
+  useEffect(() => {
+    const expired = () => setMe(null);
+    window.addEventListener("oa-auth-expired", expired);
+    return () => window.removeEventListener("oa-auth-expired", expired);
+  }, []);
 
   const refreshApprovals = useCallback(async () => {
     try { const r = await api.approvals(); setPendingCount((r.pending || []).length); }
@@ -2153,12 +2430,12 @@ function App() {
       setMe(m);
       const [c, o, dp] = await Promise.all([api.chats(), api.org(), api.departments()]);
       setChats(c.chats); setOrg(o); setDepts(dp.departments);
-      if (!active && c.chats.length) setActive(c.chats[0]);
+      setActive((previous) => c.chats.find((chat) => chat.id === previous?.id) || c.chats[0] || null);
     } catch (e) {
       if (e.code !== 401) console.error(e);
       setMe(null);
     } finally { setBooted(true); }
-  }, [active]);
+  }, []);
 
   useEffect(() => { boot(); }, []);
 
@@ -2175,197 +2452,81 @@ function App() {
   if (!booted) return <div className="empty"><span className="spin" /> {bootMsg}</div>;
   if (!me) return <Login onDone={boot} />;
 
+  const navItems = [
+    ["overview", "overview", "工作台"], ["tasks", "tasks", "任务中心"],
+    ["chats", "chat", "协作会话"], ["files", "files", "工作产物"],
+    ["approvals", "shield", "审批中心"], ["org", "org", "组织与团队"],
+    ["roles", "role", "角色库"], ["finops", "wallet", "用量与费用"],
+    ["evals", "flask", "评测中心"], ["experience", "brain", "组织经验"],
+  ];
+  const pageName = navItems.find(([key]) => key === tab)?.[2] || "工作台";
+  const chatLayout = tab === "chats";
+  const openChat = (chat) => { setActive(chat); setTab("chats"); };
+  const openApprovals = () => { setFocusedTask(null); setShowDetail(false); setTab("approvals"); };
+  const navButton = ([key, icon, label]) => <button key={key} title={label}
+      aria-label={label} aria-current={tab === key ? "page" : undefined}
+      className={cls("rail-btn", tab === key && "active")} onClick={() => setTab(key)}>
+    <Icon name={icon} /><span className="nav-label">{label}</span>
+    {key === "approvals" && pendingCount > 0 && <span className="rail-badge">{pendingCount}</span>}
+  </button>;
+
   return (
-    <div className={cls("shell", !showDetail && "no-detail")}>
-      <nav className="rail">
-        <div className="logo">A</div>
-        {[
-          ["chats", "chat", "会话"],
-          ["org", "org", "组织架构"],
-          ["roles", "role", "角色库"],
-          ["files", "files", "文件与资源"],
-          ["approvals", "shield", "审批中心"],
-          ["finops", "wallet", "财务总览"],
-          ["evals", "flask", "离线评测"],
-          ["experience", "brain", "组织经验"],
-        ].map(([k, ic, label]) => (
-          <button key={k} title={label}
-                  className={cls("rail-btn", tab === k && "active")}
-                  onClick={() => setTab(k)}>
-            <Icon name={ic} size="lg" />
-            {k === "approvals" && pendingCount > 0 && (
-              <span className="rail-badge">{pendingCount}</span>
-            )}
-          </button>
-        ))}
+    <div className={cls("shell", chatLayout && "chat-layout", (!chatLayout || !showDetail) && "no-detail")}>
+      <DialogAccessibility />
+      <nav className="rail" aria-label="主导航">
+        <div className="workspace-brand"><span className="brand-mark"><Icon name="spark" /></span><span className="brand-copy"><b>Agent OS</b><small>AI WORKSPACE</small></span></div>
+        <div className="workspace-switcher"><Icon name="org" /><div><b>我的工作空间</b><small>AI 团队协作</small></div><span className="spacer" /><Icon name="chevron" /></div>
+        <div className="nav-section-label">工作空间</div>
+        {navItems.slice(0, 6).map(navButton)}
+        <div className="nav-section-label second">管理与洞察</div>
+        {navItems.slice(6).map(navButton)}
         <div className="grow" />
-        <button className="rail-btn" title="设置" onClick={() => setShowSettings(true)}>⚙</button>
-        <button className="rail-btn" title="账号" onClick={() => setShowAccount(true)}>👤</button>
+        <div className="nav-footer">
+          <button className="rail-btn" title="添加 AI 员工" onClick={() => setAdding(true)}><Icon name="plus" /><span className="nav-label">添加 AI 员工</span></button>
+          <button className="rail-btn" title="工作空间设置" onClick={() => setShowSettings(true)}><Icon name="gear" /><span className="nav-label">工作空间设置</span></button>
+          <div className="rail-account"><button title="账号信息" onClick={() => setShowAccount(true)}><span className="avatar">{initials(me.name)}</span><span className="account-copy"><b>{me.name}</b><small>工作空间管理员</small></span></button><button className="icon-btn" title={theme === "dark" ? "切换浅色主题" : "切换深色主题"} aria-label={theme === "dark" ? "切换浅色主题" : "切换深色主题"} onClick={() => setTheme(theme === "dark" ? "light" : "dark")}><Icon name={theme === "dark" ? "sun" : "moon"} /></button></div>
+        </div>
       </nav>
 
-      <aside className="sidebar">
-        <div className="panel-head">
-          <span className="ttl">
-            {{ chats: "会话", org: "组织架构", roles: "角色库",
-               files: "文件与资源", approvals: "审批中心", finops: "财务总览",
-               evals: "离线评测", experience: "组织经验" }[tab]}
-          </span>
-          <span className="spacer" />
-          {tab === "chats" && (
-            <button className="btn" style={{ padding: "3px 8px" }} onClick={() => setGrouping(true)}>
-              <Icon name="plus" />
-            </button>
-          )}
-          {tab === "org" && (
-            <button className="btn" style={{ padding: "3px 8px" }} onClick={() => setDepting(true)}>+ 部门</button>
-          )}
-        </div>
-
-        {tab === "chats" && (
-          <>
-            <div className="list">
-              {chats.map((c) => (
-                <div key={c.id}
-                     className={cls("chat-item", active?.id === c.id && "active", c.pinned && "pinned")}
-                     onClick={() => setActive(c)}
-                     onContextMenu={(e) => openCtx(e, [
-                       { label: c.pinned ? "取消置顶" : "置顶", onClick: () => patchChat(c.id, { pinned: c.pinned ? 0 : 1 }) },
-                       { label: "隐藏", onClick: () => patchChat(c.id, { hidden: 1 }) },
-                       { sep: true },
-                       { label: "删除会话", danger: true, onClick: () => removeChat(c) },
-                     ])}>
-                  <div className={cls("avatar", c.kind === "ceo" && "ceo")}>
-                    {c.kind === "ceo" ? "CEO" : initials(c.employee_name || c.title)}
-                  </div>
-                  <div className="meta">
-                    <div className="name">
-                      {c.employee_name || c.title}
-                      {c.kind === "ceo" && <span className="tag-ceo">调度台</span>}
-                      <span className="dot" />
-                    </div>
-                    <div className="preview">{c.last_message || "开始对话"}</div>
-                  </div>
-                </div>
-              ))}
-              {chats.length === 0 && <div className="empty">还没有会话</div>}
-            </div>
-          </>
-        )}
-
-        {tab === "org" && (
-          <>
-            <div className="dept-list">
-              {depts.map((d) => (
-                <div key={d.id} className="dept-row"
-                     onContextMenu={(e) => openCtx(e, d.type === "group_hq" ? [
-                       { label: "重命名", onClick: () => renameDept(d) },
-                     ] : [
-                       { label: "重命名", onClick: () => renameDept(d) },
-                       { sep: true },
-                       { label: "删除部门", danger: true, onClick: () => removeDept(d) },
-                     ])}>
-                  <span className="dept-name">{d.name}</span>
-                  <span className="hint">{d.headcount} 人</span>
-                </div>
-              ))}
-            </div>
-            <div className="hint" style={{ padding: "8px 14px" }}>
-              组织树在右侧展开，支持逐级折叠与「全部展开/收起」。
-            </div>
-          </>
-        )}
-
-        {tab === "roles" && (
-          <RolesView onChanged={async () => { const o = await api.org(); setOrg(o); }} />
-        )}
-
-        {tab === "files" && <div className="empty" style={{ padding: 20 }}>左侧是资源目录（RBAC），右侧是产物</div>}
-
-        {tab === "approvals" && (
-          <div className="ap-side">
-            <div className="ap-side-num">{pendingCount}</div>
-            <div className="hint">条待批 · 批准后按 approval_id + run_id 断点续跑</div>
-            <button className="btn ghost" style={{ marginTop: 12 }}
-                    onClick={() => setTab("files")}>去资源目录发起演练</button>
-          </div>
-        )}
-
-        {tab === "finops" && (
-          <div className="empty" style={{ padding: 20 }}>
-            真金白银按部门/员工/模型拆开算，计价口径在 .env。
-          </div>
-        )}
-        {tab === "evals" && (
-          <div className="empty" style={{ padding: 20 }}>
-            基准来自已完成 Run；回归用当前 Prompt 与模型重跑。
-          </div>
-        )}
-        {tab === "experience" && (
-          <div className="empty" style={{ padding: 20 }}>
-            驳回原因、研讨会共识、被否决策自动沉淀，立项时注入。
-          </div>
-        )}
-
-        <div className="sidebar-footer">
-          <button className="icon-btn" title="设置" onClick={() => setShowSettings(true)}>⚙</button>
-          <button className="account" onClick={() => setShowAccount(true)}>
-            <span className="avatar">{initials(me.name)}</span>
-            <span>{me.name}</span>
-            <span className="role">{me.role}</span>
-          </button>
-          <button className="icon-btn" title="主题" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-            {theme === "dark" ? "☀" : "☾"}
-          </button>
-        </div>
-      </aside>
+      {chatLayout && <aside className="sidebar" aria-label="协作会话列表">
+        <div className="panel-head"><span className="ttl">协作会话</span><span className="spacer" /><button className="icon-btn" title="创建协作群" aria-label="创建协作群" onClick={() => setGrouping(true)}><Icon name="plus" /></button></div>
+        <label className="sidebar-search"><Icon name="search" /><input aria-label="搜索会话" placeholder="搜索会话…" value={chatQuery} onChange={(e) => setChatQuery(e.target.value)} /></label>
+        <div className="list">{chats.filter((chat) => `${chat.title} ${chat.employee_name || ""}`.toLowerCase().includes(chatQuery.toLowerCase())).map((chat) => <button key={chat.id}
+          className={cls("chat-item", active?.id === chat.id && "active", chat.pinned && "pinned")}
+          aria-pressed={active?.id === chat.id} onClick={() => setActive(chat)} onContextMenu={(e) => openCtx(e, [
+            { label: chat.pinned ? "取消置顶" : "置顶", onClick: () => patchChat(chat.id, { pinned: chat.pinned ? 0 : 1 }) },
+            { label: "隐藏", onClick: () => patchChat(chat.id, { hidden: 1 }) }, { sep: true },
+            { label: "删除会话", danger: true, onClick: () => removeChat(chat) },
+          ])}>
+          <span className={cls("avatar", chat.kind === "ceo" && "ceo")}>{chat.kind === "ceo" ? "CEO" : initials(chat.employee_name || chat.title)}</span>
+          <span className="meta"><span className="name">{chat.employee_name || chat.title}{chat.kind === "ceo" && <span className="tag-ceo">调度台</span>}</span><span className="preview">{chat.last_message || "开始一项新任务"}</span></span>
+        </button>)}{!chats.length && <div className="empty">暂无会话，请先添加 AI 员工。</div>}</div>
+        <div className="sidebar-bottom-note"><span className="live-dot" /> 进度与消息自动更新</div>
+      </aside>}
 
       <ContextMenu ctx={ctx} />
-      {depting && <NewDept onClose={() => setDepting(false)}
-                            onDone={async () => { setOrg(await api.org()); }} />}
-
+      {depting && <NewDept onClose={() => setDepting(false)} onDone={async () => { setOrg(await api.org()); setDepts((await api.departments()).departments); }} />}
       <div className="right">
+        <header className="app-topbar"><div className="app-breadcrumb"><Icon name="org" /><span className="breadcrumb-workspace">我的工作空间</span><Icon name="chevron" /><b>{pageName}</b></div><span className="spacer" />
+          {chatLayout && <select className="mobile-chat-picker" aria-label="选择协作会话" value={active?.id || ""} onChange={(e) => setActive(chats.find((chat) => chat.id === e.target.value))}>{chats.map((chat) => <option value={chat.id} key={chat.id}>{chat.employee_name || chat.title}</option>)}</select>}
+          <span className="connection-label"><span className="live-dot" /> 本地工作空间</span><button className="icon-btn" title="使用帮助" aria-label="使用帮助" onClick={() => setShowHelp(true)}><Icon name="help" /></button>
+        </header>
         <AlertBanner />
-        {tab === "finops" ? (
-          <FinOpsView />
-        ) : tab === "evals" ? (
-          <EvalsView />
-        ) : tab === "experience" ? (
-          <ExperienceView />
-        ) : tab === "org" ? (
-          <OrgView org={org} onPick={(emp) => setEmpPanel(emp)} />
-        ) : tab === "approvals" ? (
-          <ApprovalsView onChanged={refreshApprovals} />
-        ) : tab === "files" ? (
-          <FilesTab />
-        ) : active ? (
-          <ChatView
-            chat={active}
-            onSent={boot}
-            onMore={(c) => setGroupMenu(c)}
-            onHelp={() => setShowHelp(true)}
-            onAbout={() => setShowAbout(true)}
-            onToggleDetail={() => setShowDetail((v) => !v)}
-          />
-        ) : (
-          <div className="main"><div className="empty">选一个会话，或去组织架构里加个 AI 员工</div></div>
-        )}
-        {empPanel && tab === "org" && (
-          <EmployeePanel
-            emp={empPanel}
-            onClose={() => setEmpPanel(null)}
-            onChanged={boot}
-            onOpenChat={(emp) => {
-              const c = chats.find((x) => x.employee_id === emp.id);
-              if (c) { setActive(c); setTab("chats"); setEmpPanel(null); }
-            }}
-          />
-        )}
+        {tab === "overview" || tab === "tasks" ? <Workspace key={tab} chats={chats} pendingCount={pendingCount} Icon={Icon} onChat={openChat} onSelectTask={setFocusedTask} onNavigate={setTab} onNewTask={() => setTaskCreating(true)} tasksOnly={tab === "tasks"} />
+          : tab === "finops" ? <FinOpsView />
+          : tab === "evals" ? <EvalsView />
+          : tab === "experience" ? <ExperienceView />
+          : tab === "roles" ? <RolesView onChanged={boot} />
+          : tab === "org" ? <><div className="org-actions"><span>组织与团队</span><button className="btn" onClick={() => setDepting(true)}><Icon name="plus" /> 新建部门</button><button className="btn primary" onClick={() => setAdding(true)}><Icon name="plus" /> 添加员工</button></div><OrgView org={org} onPick={(emp) => setEmpPanel(emp)} departments={depts} onRenameDept={renameDept} onDeleteDept={removeDept} /></>
+          : tab === "approvals" ? <ApprovalsView onChanged={refreshApprovals} />
+          : tab === "files" ? <FilesTab />
+          : active ? <ChatView key={active.id} chat={active} onSent={boot} onApproval={openApprovals} onMore={(chat) => setGroupMenu(chat)} onHelp={() => setShowHelp(true)} onAbout={() => setShowAbout(true)} onToggleDetail={() => setShowDetail((v) => !v)} showDetail={showDetail} />
+          : <div className="main"><div className="empty">添加一位 AI 员工，开始协作。</div></div>}
+        {empPanel && tab === "org" && <EmployeePanel emp={empPanel} onClose={() => setEmpPanel(null)} onChanged={boot} onOpenChat={(employee) => { const chat = chats.find((item) => item.employee_id === employee.id); if (chat) { openChat(chat); setEmpPanel(null); } }} />}
       </div>
-
-      {active && !["files", "approvals", "org", "finops", "evals", "experience"].includes(tab) && (
-        <RunDetail chat={active} show={showDetail} onToggle={() => setShowDetail(false)} />
-      )}
-
+      {chatLayout && active && showDetail && <><div className="drawer-mask detail-backdrop" onClick={() => setShowDetail(false)} /><RunDetail key={active.id} chat={active} show={showDetail} onApproval={openApprovals} onToggle={() => setShowDetail(false)} /></>}
+      {taskCreating && <NewTaskModal chats={chats} Icon={Icon} onClose={() => setTaskCreating(false)} onCreated={(chat) => { setTaskCreating(false); openChat(chat); boot(); }} />}
+      {focusedTask && <div className="mask" onClick={() => setFocusedTask(null)}><section className="modal wide task-inspector" onClick={(e) => e.stopPropagation()}><div className="task-inspector-heading"><span className="eyebrow">TASK DETAILS</span><button className="icon-btn" aria-label="关闭任务详情" onClick={() => setFocusedTask(null)}><Icon name="close" /></button></div><h3>{focusedTask.title}</h3><p className="task-inspector-meta">{focusedTask.owner_name || "AI 团队"} · {focusedTask.id}</p><TaskCard compact taskId={focusedTask.id} meta={{}} onApproval={openApprovals} onAct={() => { window.dispatchEvent(new Event("oa-tasks-changed")); boot(); }} /><div className="actions"><button className="btn ghost" onClick={() => setFocusedTask(null)}>关闭</button>{chats.some((chat) => chat.id === focusedTask.chat_id) && <button className="btn" onClick={() => { openChat(chats.find((chat) => chat.id === focusedTask.chat_id)); setFocusedTask(null); }}><Icon name="chat" /> 打开协作会话</button>}</div></section></div>}
       {adding && <AddMember org={org} onClose={() => setAdding(false)} onDone={boot} />}
       {grouping && (
         <NewGroup

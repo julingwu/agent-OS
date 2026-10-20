@@ -16,8 +16,11 @@ def client(tmp_path, monkeypatch):
     init_db()
     from app.main import app
     from app.ui import api as ui_api
+    from app import identity
 
-    tok = ui_api._make_cookie("ID-boss")
+    with get_conn() as conn:
+        who = identity.issue(conn, name="preview test operator", role="system")
+    tok = ui_api._make_cookie(who["id"])
     c = TestClient(app)
     c.headers.update({"authorization": f"Bearer {tok}"})
     return c, tok
@@ -48,9 +51,11 @@ def test_preview_serves_html_inline_with_a_sandbox_csp(client, tmp_path):
     assert "sandbox" in r.headers["content-security-policy"]
     assert "connect-src 'none'" in r.headers["content-security-policy"]
 
-    # iframe 不能带 Authorization，只能用 ?t= 票据
-    r2 = TestClient(c.app).get(f"/ui/files/A-1/preview?t={tok}")
+    # The opaque frame receives a short artifact ticket, never the session.
+    ticket = c.post("/ui/files/A-1/preview-ticket").json()["ticket"]
+    r2 = TestClient(c.app).get(f"/ui/files/A-1/preview?ticket={ticket}")
     assert r2.status_code == 200
+    assert TestClient(c.app).get(f"/ui/files/A-1/preview?t={tok}").status_code == 400
 
 
 def test_preview_requires_a_valid_ticket(client, tmp_path):
@@ -64,7 +69,7 @@ def test_preview_requires_a_valid_ticket(client, tmp_path):
         conn.execute("""INSERT INTO artifacts (id,run_id,art_seq,file_path,checksum,bytes)
                         VALUES ('A-2','R-2',1,?,'x',10)""", (str(f),))
         conn.commit()
-    r = TestClient(c.app).get("/ui/files/A-2/preview?t=forged.token.value")
+    r = TestClient(c.app).get("/ui/files/A-2/preview?ticket=forged.token.value")
     assert r.status_code == 401
 
 

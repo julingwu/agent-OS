@@ -77,6 +77,17 @@ def decide(approval_id: str, approve: bool, by: str) -> dict:
         out = rbac.decide(conn, approval_id, approve, by=by)
         row = rbac.get(conn, approval_id)
         _wait_span(conn, approval_id)
+        if not approve:
+            out["resumable"] = False
+            run = conn.execute("SELECT * FROM task_runs WHERE id=?", (row["run_id"],)).fetchone()
+            task = conn.execute("SELECT state FROM tasks WHERE id=?", (row["task_id"],)).fetchone()
+            if run and run["state"] == "awaiting_approval" and task and task["state"] == "in_progress":
+                from ..state_machine import transition
+                transition(conn, row["task_id"], "run_failed", actor=by,
+                           payload={"reason": "approval_rejected", "approval_id": approval_id})
+                conn.execute("UPDATE task_runs SET state='failed', exit_code=9,"
+                             " ended_at=CURRENT_TIMESTAMP WHERE id=?", (row["run_id"],))
+                trace.finish_run(conn, row["run_id"], tokens=int(run["usage_tokens"] or 0), state="failed")
         chat_id = row["chat_id"]
         if chat_id:
             store.add_message(
@@ -106,11 +117,13 @@ def resume(approval_id: str) -> dict:
         run = conn.execute("SELECT * FROM task_runs WHERE id=?", (ap["run_id"],)).fetchone()
         if run is None:
             return {"ok": False, "reason": "run missing"}
+        task = conn.execute("SELECT * FROM tasks WHERE id=?", (ap["task_id"],)).fetchone()
+        if task is None or task["state"] != "in_progress" or run["state"] != "awaiting_approval":
+            return {"ok": False, "reason": "task or run is no longer awaiting approval"}
         if not conn.execute("SELECT 1 FROM trace_spans WHERE trace_id IN"
                             " (SELECT trace_id FROM agent_traces WHERE run_id=?)"
                             " AND kind='approval' LIMIT 1", (ap["run_id"],)).fetchone():
             _wait_span(conn, approval_id)
-        task = conn.execute("SELECT * FROM tasks WHERE id=?", (ap["task_id"],)).fetchone()
         entity = (task["legal_entity_id"] if task else None) or run["legal_entity_id"]
         applied: dict = {}
         try:
