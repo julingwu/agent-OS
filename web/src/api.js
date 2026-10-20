@@ -6,15 +6,40 @@ const ORIGIN = DESKTOP ? "http://127.0.0.1:8077" : "";
 const BASE = ORIGIN + "/ui";
 
 const TOKEN_KEY = "oa_token";
+let sessionEpoch = 0;
+let sessionScope = "";
+let loginAttempt = 0;
+let pendingLogout = null;
+const staleSession = () => Object.assign(new Error("工作空间会话已切换。"), {
+  code: 0, reason: "SessionChanged", stale: true,
+});
+const advanceSession = () => { sessionScope = ""; return ++sessionEpoch; };
+export const scopeOf = me => JSON.stringify([
+  me.identity_id, me.tenant_id, me.entity_id, me.role, !!me.can_manage_deployment,
+]);
 export const auth = {
   get: () => localStorage.getItem(TOKEN_KEY) || "",
-  set: (t) => localStorage.setItem(TOKEN_KEY, t),
-  clear: () => localStorage.removeItem(TOKEN_KEY),
+  set: (t) => { localStorage.setItem(TOKEN_KEY, t); advanceSession(); },
+  clear: () => { localStorage.removeItem(TOKEN_KEY); advanceSession(); },
+  epoch: () => sessionEpoch,
+  bindScope: (me) => {
+    const scope = scopeOf(me);
+    if (scope !== sessionScope) { sessionScope = scope; sessionEpoch += 1; }
+    return sessionEpoch;
+  },
 };
+
+window.addEventListener("storage", event => {
+  if (event.key !== TOKEN_KEY && event.key !== null) return;
+  advanceSession();
+  window.dispatchEvent(new Event("oa-auth-changed"));
+});
 
 async function req(path, opts = {}) {
   const headers = opts.body instanceof FormData ? {} : { "content-type": "application/json" };
   const token = auth.get();
+  const epoch = auth.epoch();
+  const current = () => epoch === auth.epoch() && token === auth.get();
   if (token) headers.authorization = `Bearer ${token}`;
   let res;
   try {
@@ -24,11 +49,14 @@ async function req(path, opts = {}) {
       headers: { ...headers, ...(opts.headers || {}) },
     });
   } catch {
+    if (!current()) throw staleSession();
     throw Object.assign(new Error("无法连接工作空间，请确认服务已启动后重试。"), { code: 0 });
   }
+  if (!current()) throw staleSession();
   if (!res.ok) {
     let detail = {};
     try { detail = await res.json(); } catch { /* ignore */ }
+    if (!current()) throw staleSession();
     const code = detail?.detail?.code;
     const messages = {
       BadCredentials: "身份 ID 或密钥不正确", NotLoggedIn: "登录已过期，请重新登录。",
@@ -48,25 +76,48 @@ async function req(path, opts = {}) {
       RevisionRequired: "请先修改完整需求，再重新检查。",
       ProjectNotRetryable: "项目状态已变化，请刷新后重试。",
     };
-    if (res.status === 401) {
+    if (res.status === 401 && path !== "/login") {
       auth.clear();
-      if (path !== "/login") window.dispatchEvent(new Event("oa-auth-expired"));
+      window.dispatchEvent(new CustomEvent("oa-auth-expired", { detail: { epoch: auth.epoch() } }));
     }
     const message = messages[code] || detail?.detail?.message || (typeof detail?.detail === "string" ? detail.detail : null);
     throw Object.assign(new Error(message || (res.status === 401 ? "登录已过期，请重新登录。" : `操作未完成（${res.status}），请刷新后重试。`)), { code: res.status, reason: code });
   }
-  return res.json();
+  const result = await res.json();
+  if (!current()) throw staleSession();
+  return result;
 }
 
 export const api = {
   me: () => req("/me"),
   login: async (identity_id, secret) => {
+    const attempt = ++loginAttempt;
+    // A logout response clears the HttpOnly cookie even if its JS result is
+    // stale. Finish it before issuing another login that sets a new cookie.
+    let logout;
+    do {
+      logout = pendingLogout;
+      if (logout) await logout;
+    } while (logout !== pendingLogout);
+    if (attempt !== loginAttempt) throw staleSession();
+    const epoch = auth.epoch();
     const r = await req("/login", { method: "POST", body: JSON.stringify({ identity_id, secret }) });
-    if (r.token) auth.set(r.token);
+    if (attempt !== loginAttempt || epoch !== auth.epoch()) throw staleSession();
+    auth.set(r.token || "");
     return r;
   },
   logout: async () => {
-    try { await req("/logout", { method: "POST" }); } finally { auth.clear(); }
+    const token = auth.get();
+    auth.clear();
+    window.dispatchEvent(new CustomEvent("oa-auth-expired", { detail: { epoch: auth.epoch() } }));
+    const request = req("/logout", { method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {} });
+    pendingLogout = request.catch(() => {});
+    try {
+      return await request;
+    } catch (error) {
+      if (!error.stale) throw error;
+    }
   },
   org: () => req("/org"),
   chats: () => req("/chats"),

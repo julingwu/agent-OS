@@ -14,10 +14,14 @@ python tools/serve_ui_test.py --port 8078
 The helper uses a fresh synthetic database and workspace, enables dev-login only
 for its isolated process, disables model keys and external integrations, and
 creates the required test identity and employee roles. Keep that server running.
-In another terminal, use its printed `test_url` and `test_identity_id`:
+In another terminal, use its printed URL and all three synthetic identity IDs:
 
 ```sh
-AGENT_OS_TEST_URL=http://localhost:8078 AGENT_OS_TEST_ID=<test_identity_id> npm --prefix web run test:browser
+AGENT_OS_TEST_URL='http://localhost:8078' \
+AGENT_OS_TEST_ID='<test_identity_id>' \
+AGENT_OS_TEST_TENANT_ID='<test_tenant_identity_id>' \
+AGENT_OS_TEST_SUBSIDIARY_ID='<test_subsidiary_identity_id>' \
+npm --prefix web run test:browser
 ```
 
 PowerShell users can set these environment variables with `$env:NAME="value"`
@@ -53,6 +57,13 @@ selection, and stale responses cannot replace the current employee's grants.
 `tenant-access.spec.js` exercises a second tenant's normal login form, reload,
 organization/task isolation, optional department failure, and subsidiary CEO
 denial for deployment-wide configuration changes.
+`session-boundary.spec.js` signs in as a different account on the same page after
+expiry, keeps an old task inspector and draft open beforehand, and delays old
+bootstrap/approval successes or 401s until after the new login. It checks that no
+old account text, dialog, draft or approval badge reappears, including briefly.
+Run `npm --prefix web run test:session` for eight isolated API request races,
+including delayed JSON parsing, cookie-only scope changes and logout/login
+request ordering. This Node harness uses synthetic responses and no network.
 
 Artifacts and failure traces go to the OS temporary directory. To save the three
 workspace screenshots elsewhere, set `AGENT_OS_TEST_SCREENSHOT_DIR`; filenames

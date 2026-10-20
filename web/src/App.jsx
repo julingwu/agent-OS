@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { marked } from "marked";
-import { api, ping } from "./api.js";
+import { api, auth, ping, scopeOf } from "./api.js";
 import Workspace from "./Workspace.jsx";
 import NewTaskModal from "./NewTaskModal.jsx";
 import DialogAccessibility from "./DialogAccessibility.jsx";
@@ -2236,9 +2236,73 @@ function RunDetail({ chat, show, onToggle, onApproval }) {
 
 /* ------------------------------------------------------------------ shell */
 function App() {
-  const [me, setMe] = useState(null);
+  const [session, setSession] = useState(null);
   const [booted, setBooted] = useState(false);
   const [bootMsg, setBootMsg] = useState("载入中…");
+  const generation = useRef(0);
+
+  const refreshSession = useCallback(async () => {
+    const request = ++generation.current;
+    const epoch = auth.epoch();
+    const current = () => request === generation.current && epoch === auth.epoch();
+    try {
+      // 桌面启动可能需要等后端；切换会话后旧启动不能继续请求或挂载 UI。
+      for (let i = 0; i < 30; i++) {
+        if (!current()) return null;
+        if (await ping()) break;
+        if (!current()) return null;
+        setBootMsg(i > 1 ? "正在叫醒本地服务…" : "载入中…");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      if (!current()) return null;
+      const me = await api.me();
+      if (!current()) return null;
+      const verified = { me, epoch: auth.bindScope(me) };
+      setSession(verified);
+      return verified;
+    } catch (error) {
+      if (!current() || error.stale) return null;
+      if (error.code === 401) setSession(null);
+      else setBootMsg(error.message || "工作空间暂时无法加载，请刷新重试。");
+      return null;
+    } finally {
+      if (request === generation.current) setBooted(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    const expired = event => {
+      if (event.detail?.epoch !== undefined && event.detail.epoch !== auth.epoch()) return;
+      generation.current += 1;
+      auth.clear();
+      setSession(null);
+      setBooted(true);
+    };
+    const changed = () => {
+      generation.current += 1;
+      setSession(null);
+      setBooted(false);
+      refreshSession();
+    };
+    window.addEventListener("oa-auth-expired", expired);
+    window.addEventListener("oa-auth-changed", changed);
+    refreshSession();
+    return () => {
+      generation.current += 1;
+      window.removeEventListener("oa-auth-expired", expired);
+      window.removeEventListener("oa-auth-changed", changed);
+    };
+  }, [refreshSession]);
+
+  if (!booted) return <div className="empty"><span className="spin" /> {bootMsg}</div>;
+  if (!session) return <Login onDone={refreshSession} />;
+  // Remount the entire authenticated tree, including drafts, previews, dialogs
+  // and event streams, whenever either credentials or verified scope changes.
+  return <AuthenticatedWorkspace key={`${session.epoch}:${scopeOf(session.me)}`}
+    me={session.me} sessionEpoch={session.epoch} refreshSession={refreshSession} />;
+}
+
+function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
   const [bootError, setBootError] = useState("");
   const [tab, setTab] = useState(() => {
     const selected = new URLSearchParams(location.search).get("tab");
@@ -2264,17 +2328,26 @@ function App() {
   const [taskCreating, setTaskCreating] = useState(false);
   const [focusedTask, setFocusedTask] = useState(null);
   const [chatQuery, setChatQuery] = useState("");
+  const mounted = useRef(true);
+  const bootSequence = useRef(0);
+  const approvalSequence = useRef(0);
+  const sessionCurrent = useCallback(
+    () => mounted.current && sessionEpoch === auth.epoch(), [sessionEpoch]);
 
   useEffect(() => {
-    const expired = () => setMe(null);
-    window.addEventListener("oa-auth-expired", expired);
-    return () => window.removeEventListener("oa-auth-expired", expired);
+    return () => { mounted.current = false; };
   }, []);
 
   const refreshApprovals = useCallback(async () => {
-    try { const r = await api.approvals(); setPendingCount((r.pending || []).length); }
+    if (!sessionCurrent()) return;
+    const request = ++approvalSequence.current;
+    try {
+      const result = await api.approvals();
+      if (sessionCurrent() && request === approvalSequence.current)
+        setPendingCount((result.pending || []).length);
+    }
     catch { /* 未登录/离线时静默 */ }
-  }, []);
+  }, [sessionCurrent]);
 
   const openCtx = (e, items) => {
     e.preventDefault(); e.stopPropagation();
@@ -2294,29 +2367,44 @@ function App() {
   }, []);
 
   async function patchChat(id, body) {
+    if (!sessionCurrent()) return;
     await api.patchChat(id, body);
-    const c = await api.chats(); setChats(c.chats);
+    if (!sessionCurrent()) return;
+    const c = await api.chats();
+    if (sessionCurrent()) setChats(c.chats);
   }
   async function renameDept(d) {
     const name = window.prompt("部门新名称", d.name);
     if (!name || name === d.name) return;
+    if (!sessionCurrent()) return;
     await api.renameDept(d.id, name);
-    setDepts((await api.departments()).departments);
+    if (!sessionCurrent()) return;
+    const result = await api.departments();
+    if (sessionCurrent()) setDepts(result.departments);
   }
   async function removeDept(d) {
     const ok = window.confirm(`删除部门「${d.name}」？
 部门下 ${d.headcount} 名员工会转到「未分配」。`);
     if (!ok) return;
+    if (!sessionCurrent()) return;
     await api.deleteDept(d.id);
-    setDepts((await api.departments()).departments);
-    setOrg(await api.org());
+    if (!sessionCurrent()) return;
+    const departments = await api.departments();
+    if (!sessionCurrent()) return;
+    setDepts(departments.departments);
+    const organization = await api.org();
+    if (sessionCurrent()) setOrg(organization);
   }
   async function removeChat(chat) {
     const ok = window.confirm(`删除「${chat.title}」？
 会立即停止该会话正在运行的任务，并清理沙箱临时目录。`);
     if (!ok) return;
+    if (!sessionCurrent()) return;
     await api.deleteChat(chat.id);
-    const c = await api.chats(); setChats(c.chats);
+    if (!sessionCurrent()) return;
+    const c = await api.chats();
+    if (!sessionCurrent()) return;
+    setChats(c.chats);
     if (active?.id === chat.id) setActive(c.chats[0] || null);
   }
 
@@ -2325,18 +2413,18 @@ function App() {
     localStorage.setItem("oa_theme", theme);
   }, [theme]);
 
-  const boot = useCallback(async () => {
-    // 桌面版双击时后端可能是刚被拉起来的，等它 30 秒而不是直接白屏
-    for (let i = 0; i < 30; i++) {
-      if (await ping()) break;
-      setBootMsg(i > 1 ? "正在叫醒本地服务…" : "载入中…");
-      await new Promise((r) => setTimeout(r, 1000));
-    }
+  const boot = useCallback(async (verifyIdentity = true) => {
+    if (!sessionCurrent()) return;
+    const request = ++bootSequence.current;
+    const current = () => sessionCurrent() && request === bootSequence.current;
     try {
       setBootError("");
-      const m = await api.me();
-      setMe(m);
+      if (verifyIdentity) {
+        const verified = await refreshSession();
+        if (!verified || !current()) return;
+      }
       const [c, o, dp] = await Promise.allSettled([api.chats(), api.org(), api.departments()]);
+      if (!current()) return;
       const failed = [c, o, dp].filter((result) => result.status === "rejected");
       const expired = failed.find((result) => result.reason.code === 401);
       if (expired) throw expired.reason;
@@ -2348,12 +2436,12 @@ function App() {
       if (dp.status === "fulfilled") setDepts(dp.value.departments);
       if (failed.length) setBootError("部分工作空间数据暂时不可用，可以刷新重试。");
     } catch (e) {
-      if (e.code === 401) setMe(null);
-      else setBootError(e.message || "工作空间暂时无法加载，请刷新重试。");
-    } finally { setBooted(true); }
-  }, []);
+      if (current() && !e.stale && e.code !== 401)
+        setBootError(e.message || "工作空间暂时无法加载，请刷新重试。");
+    }
+  }, [refreshSession, sessionCurrent]);
 
-  useEffect(() => { boot(); }, []);
+  useEffect(() => { boot(false); }, [boot]);
 
   useEffect(() => {
     if (!me) return;
@@ -2364,9 +2452,6 @@ function App() {
 
   // 注意：所有 hook 必须在 early return 之前，否则 React #310（v1.3 踩过）
   useEffect(() => { localStorage.setItem("oa_detail", showDetail ? "1" : "0"); }, [showDetail]);
-
-  if (!booted) return <div className="empty"><span className="spin" /> {bootMsg}</div>;
-  if (!me) return <Login onDone={boot} />;
 
   const navItems = [
     ["overview", "overview", "工作台"], ["tasks", "tasks", "任务中心"],
@@ -2422,7 +2507,7 @@ function App() {
       </aside>}
 
       <ContextMenu ctx={ctx} />
-      {depting && <NewDept onClose={() => setDepting(false)} onDone={async () => { setOrg(await api.org()); setDepts((await api.departments()).departments); }} />}
+      {depting && <NewDept onClose={() => setDepting(false)} onDone={boot} />}
       <div className="right">
         <header className="app-topbar"><div className="app-breadcrumb"><Icon name="org" /><span className="breadcrumb-workspace">我的工作空间</span><Icon name="chevron" /><b>{pageName}</b></div><span className="spacer" />
           {chatLayout && <select className="mobile-chat-picker" aria-label="选择协作会话" value={active?.id || ""} onChange={(e) => setActive(chats.find((chat) => chat.id === e.target.value))}>{chats.map((chat) => <option value={chat.id} key={chat.id}>{chat.employee_name || chat.title}</option>)}</select>}
@@ -2444,15 +2529,18 @@ function App() {
         {empPanel && tab === "org" && <EmployeePanel emp={empPanel} onClose={() => setEmpPanel(null)} onChanged={boot} onOpenChat={(employee) => { const chat = chats.find((item) => item.employee_id === employee.id); if (chat) { openChat(chat); setEmpPanel(null); } }} />}
       </div>
       {chatLayout && active && showDetail && <><div className="drawer-mask detail-backdrop" onClick={() => setShowDetail(false)} /><RunDetail key={active.id} chat={active} show={showDetail} onApproval={openApprovals} onToggle={() => setShowDetail(false)} /></>}
-      {taskCreating && <NewTaskModal chats={chats} Icon={Icon} onClose={() => setTaskCreating(false)} onCreated={(chat) => { setTaskCreating(false); openChat(chat); boot(); }} />}
+      {taskCreating && <NewTaskModal chats={chats} Icon={Icon} onClose={() => setTaskCreating(false)} onCreated={(chat) => { if (!sessionCurrent()) return; setTaskCreating(false); openChat(chat); boot(); }} />}
       {focusedTask && <div className="mask" onClick={() => setFocusedTask(null)}><section className="modal wide task-inspector" onClick={(e) => e.stopPropagation()}><div className="task-inspector-heading"><span className="eyebrow">TASK DETAILS</span><button className="icon-btn" aria-label="关闭任务详情" onClick={() => setFocusedTask(null)}><Icon name="close" /></button></div><h3>{focusedTask.title}</h3><p className="task-inspector-meta">{focusedTask.owner_name || "AI 团队"} · {focusedTask.id}</p><TaskCard compact taskId={focusedTask.id} meta={{}} onApproval={openApprovals} onAct={() => { window.dispatchEvent(new Event("oa-tasks-changed")); boot(); }} /><div className="actions"><button className="btn ghost" onClick={() => setFocusedTask(null)}>关闭</button>{chats.some((chat) => chat.id === focusedTask.chat_id) && <button className="btn" onClick={() => { openChat(chats.find((chat) => chat.id === focusedTask.chat_id)); setFocusedTask(null); }}><Icon name="chat" /> 打开协作会话</button>}</div></section></div>}
       {adding && <AddMember org={org} onClose={() => setAdding(false)} onDone={boot} />}
       {grouping && (
         <NewGroup
           onClose={() => setGrouping(false)}
           onDone={async (chatId) => {
+            if (!sessionCurrent()) return;
             await boot();
+            if (!sessionCurrent()) return;
             const c = await api.chats();
+            if (!sessionCurrent()) return;
             setChats(c.chats);
             const g = c.chats.find((x) => x.id === chatId);
             if (g) setActive(g);
