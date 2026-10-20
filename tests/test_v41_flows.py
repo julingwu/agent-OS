@@ -25,6 +25,7 @@ def env(tmp_path, monkeypatch):
         "M0_WORKSPACE": str(tmp_path / "workspace"),
         "M0_PIPELINE_EXEC": "0",
         "M0_DISPATCH_SYNC": "1",
+        "M0_INTENT_LLM": "0",          # 测试不联网：走离线词表（与模型同一契约）
         "UI_SESSION_SECRET": "v41-test-only-secret",
         "WECOM_MOCK": "1",
     }.items():
@@ -51,7 +52,7 @@ def test_analysis_plan_has_no_dev_or_test_nodes(env):
     assert [n["key"] for n in plan["nodes"]] == ANALYSIS_KEYS
     for forbidden in ("build", "test", "release", "dev", "qa"):
         assert forbidden not in [n["key"] for n in plan["nodes"]]
-    assert plan["how"] == "keyword", "能关键词判定的不该烧模型"
+    assert plan["how"] == "fallback", "没有模型时必须走离线词表，不能联网"
 
 
 def test_urgent_and_research_templates_are_selected(env):

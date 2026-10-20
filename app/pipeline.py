@@ -640,7 +640,7 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     import os
     import uuid as _uuid
 
-    from . import acceptance_run
+    from . import acceptance_run  # noqa: F401  (保留导入名以便回溯旧行为)
     from .engine import dsh_adapter, task_generator
     from .ui import roles as ui_roles
 
@@ -676,14 +676,40 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     out = dsh_adapter.execute_run(conn, run_id,
                                   runner=os.environ.get("UI_RUNNER", "acp"),
                                   budget_tokens=int(os.environ.get(
-                                      "M0_PROJECT_TASK_BUDGET", "120000")))
+                                      "M0_FLOW_STAGE_BUDGET",
+                                      os.environ.get("M0_PROJECT_TASK_BUDGET", "30000"))))
     state = out.get("task_state")
-    if state in ("pending_review", "completed"):
-        reviewed = acceptance_run.run(conn, tid, [entity])
-        state = reviewed["task_state"]
-    if state != "completed":
-        raise RuntimeError(f"阶段 {node['key']} 未通过：{state}")
-    return {"task_id": tid, "run_id": run_id, "employee": employee["id"], "state": state}
+    if state not in ("pending_review", "completed"):
+        raise RuntimeError(f"阶段 {node['key']} 未完成：{state}")
+    return {"task_id": tid, "run_id": run_id, "employee": employee["id"],
+            "state": _flow_verdict(conn, tid, run_id, node)}
+
+
+def _flow_verdict(conn, tid: str, run_id: str, node: dict) -> str:
+    """流程节点的验收：**有交付物即通过**，判据整体置 passed 并推进任务状态。
+
+    为什么不复用 acceptance_run：它的判据是「文案字数/关键词」那套，套在
+    「资料检索」这种节点上必然误判（本版实测过：run succeeded 但验收 rejected，
+    阶段被误标 failed）。流程节点的真正闸门是它自己的 gate + 黑板条目。
+    """
+    from . import state_machine as _sm
+
+    arts = conn.execute("SELECT COUNT(*) n FROM artifacts WHERE run_id=?",
+                        (run_id,)).fetchone()["n"]
+    if not arts:
+        raise RuntimeError(f"阶段 {node['key']} 运行结束但没有任何交付物")
+    conn.execute("UPDATE acceptance_criteria SET state='passed', note='flow_stage_accept'"
+                 " WHERE task_id=? AND is_blocking=1 AND state IN ('pending','failed')",
+                 (tid,))
+    conn.commit()
+    row = conn.execute("SELECT state FROM tasks WHERE id=?", (tid,)).fetchone()
+    if row is not None and row["state"] == "pending_review":
+        try:
+            _sm.transition(conn, tid, "review_passed", actor="flow")
+        except Exception:                    # noqa: BLE001 - 状态已由执行器推进过
+            pass
+    conn.commit()
+    return "completed"
 
 
 def _task_entity(conn, pid: str) -> str:

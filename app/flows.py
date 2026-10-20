@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import uuid
 
@@ -195,67 +196,155 @@ def _trim(nodes: list[dict], text: str) -> list[dict]:
     return out
 
 
-def _keyword_flow(text: str) -> tuple[str | None, str]:
-    low = (text or "").lower()
-    for fid, words in KEYWORDS:
-        hit = [w for w in words if w in low]
-        if hit:
-            return fid, "命中关键词：" + "、".join(hit[:3])
-    return None, ""
+CLARIFY_QUESTION = "请问您是需要一份报告，还是开发一个小工具？"
+
+# v4.2：意图分类的提示词刻意压到 ~200 token —— 每次派单只花一次极轻量调用。
+INTENT_PROMPT = """把需求归到一类。只输出 JSON：
+{{"task_type":"analysis|software|content|design","confidence":0.0-1.0,"reason":"一句话","secondary":"可选，第二类"}}
+
+analysis=行情/数据/研判/报告类；software=开发/脚本/系统/修复类；
+content=文案/文章/改写类；design=界面/视觉/原型类。
+口语也算：例如"瞧瞧金子啥情况"=analysis（要看金价行情）。
+
+需求：{text}"""
+
+# 口语里不出现「分析」「走势」的说法也要能兜住（模型不可用时的后备）
+FALLBACK_WORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("analysis", ("金子", "黄金", "金价", "金市", "白银", "汇率", "行情", "走势", "看一眼",
+                  "瞧瞧", "看看", "情况", "数据", "报表", "指标", "研判", "预测", "评估",
+                  "分析", "研究", "报告")),
+    ("software", ("开发", "实现", "系统", "功能", "页面", "接口", "脚本", "bug", "重构",
+                  "上线", "程序", "计算器", "爬虫", "部署", "监控")),
+    ("content", ("文案", "文章", "公众号", "稿子", "推文", "宣传", "软文", "改写")),
+    ("design", ("设计", "界面", "原型", "配色", "海报", "视觉", "ui")),
+    ("research", ("调研", "竞品", "尽调", "选型", "访谈", "问卷", "走访")),
+]
+
+# 安全兜底：这类词直接走紧急流（不等模型判断；线上故障先止血）
+URGENT_WORDS = ("紧急", "立刻", "马上", "急单", "线上故障", "宕机", "救火", "止血")
+
+TASK_TO_FLOW = {"analysis": "FLOW-ANALYSIS", "software": "FLOW-SOFTWARE",
+                "content": "FLOW-ANALYSIS", "design": "FLOW-RESEARCH",
+                "research": "FLOW-RESEARCH", "urgent": "FLOW-URGENT"}
 
 
-def _llm_flow(text: str) -> tuple[str | None, str, list[str]]:
-    """模型兜底：只允许在四个模板里选，返回 (flow_id, reason, drop_keys)。"""
-    from . import llm
-    catalog = "\n".join(f"- {fid}：{tpl['name']} —— {tpl['description']}"
-                        for fid, tpl in PRESETS.items())
-    prompt = ("把下面这条需求归到最合适的一个流程模板。只输出 JSON："
-              '{"flow":"FLOW-XXX","reason":"一句话","drop":["可裁掉的optional节点key"]}\n\n'
-              f"可选模板：\n{catalog}\n\n需求：{text[:600]}")
-    try:
-        raw = llm.complete(prompt, system="你是流程规划器，只输出 JSON，不要解释。",
-                           max_tokens=300) or ""
-    except Exception as exc:                       # noqa: BLE001 - 规划失败不阻塞派活
-        log.info("flow plan llm failed: %s", exc)
-        return None, "", []
+def _parse_json(raw: str | None) -> dict | None:
+    if not raw:
+        return None
     start, end = raw.find("{"), raw.rfind("}")
     if start < 0 or end <= start:
-        return None, "", []
+        return None
     try:
         data = json.loads(raw[start:end + 1])
     except ValueError:
-        return None, "", []
-    fid = str(data.get("flow") or "")
-    if fid not in PRESETS:
-        return None, "", []
-    drop = [str(k) for k in (data.get("drop") or []) if isinstance(k, str)]
-    return fid, str(data.get("reason") or "")[:200], drop
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _heuristic_intent(text: str) -> dict:
+    """模型不可用/离线时的后备：口语词表 + 置信度 0.75（低于 0.6 会走追问）。"""
+    low = (text or "").lower()
+    best, hits = None, []
+    for task_type, words in FALLBACK_WORDS:
+        found = [w for w in words if w in low]
+        if len(found) > len(hits):
+            best, hits = task_type, found
+    if not best:
+        return {"task_type": "analysis", "confidence": 0.3,
+                "reason": "没有可用信号", "secondary": "", "how": "fallback"}
+    return {"task_type": best, "confidence": 0.75,
+            "reason": "离线词表命中：" + "、".join(hits[:3]), "secondary": "",
+            "how": "fallback"}
+
+
+def classify(text: str) -> dict:
+    """v4.2 战役一：一次轻量模型调用做意图分类；失败才退回离线词表。
+
+    诚实边界：模型只拿到需求前 400 字，输出只认四种 task_type；置信度由模型自己给，
+    低于 0.6 由调用方（dispatcher）追问用户，而不是硬猜一个流程。
+    """
+    from . import llm
+    if os.environ.get("M0_INTENT_LLM", "1") != "1":
+        return _heuristic_intent(text)
+    try:
+        raw = llm.complete(INTENT_PROMPT.format(text=(text or "")[:400]),
+                           system="你是任务意图分类器，只输出 JSON，不要解释。",
+                           max_tokens=120, temperature=0.0, timeout=20.0)
+    except Exception as exc:                      # noqa: BLE001 - 分类失败不阻塞派活
+        log.info("intent llm failed: %s", exc)
+        raw = None
+    data = _parse_json(raw)
+    if data and str(data.get("task_type")) in TASK_TO_FLOW:
+        try:
+            confidence = float(data.get("confidence"))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        secondary = str(data.get("secondary") or "")
+        return {"task_type": str(data["task_type"]), "confidence": max(0.0, min(1.0, confidence)),
+                "reason": str(data.get("reason") or "")[:200],
+                "secondary": secondary if secondary in TASK_TO_FLOW else "",
+                "how": "llm"}
+    return _heuristic_intent(text)
+
+
+def _compose_nodes(primary: str, secondary: str) -> tuple[list[dict], str]:
+    """v4.2 战役三：复合流 = 先主流程，再副流程（副流程节点 key 加前缀防撞车）。"""
+    first = PRESETS[primary]["nodes"]
+    second = PRESETS[secondary]["nodes"]
+    nodes = [dict(n) for n in first if n["key"] != "deliver"]
+    prefix = {"FLOW-SOFTWARE": "sw", "FLOW-ANALYSIS": "an",
+              "FLOW-RESEARCH": "rs", "FLOW-URGENT": "ug"}.get(secondary, "x")
+    for node in second:
+        copy = dict(node)
+        if copy["key"] == "deliver":
+            continue                             # 交付统一放最后，别中途交一次
+        copy["key"] = f"{prefix}_{node['key']}"
+        copy["title"] = node["title"] + "（续）"
+        nodes.append(copy)
+    nodes.append(_node("deliver", "交付", PLATFORM, "已交付", kind="deliver"))
+    return nodes, f"{PRESETS[primary]['name']} + {PRESETS[secondary]['name']}"
 
 
 def plan(conn, text: str, tags: list[str] | None = None) -> dict:
-    """需求 → {flow_id, name, nodes, how, reason}。永远返回可用结果。"""
+    """需求 → 流程规划。v4.2 起由 LLM 意图分类驱动（关键词只作离线后备）。"""
     ensure(conn)
-    fid, reason = _keyword_flow(text)
-    how = "keyword"
-    drop: list[str] = []
-    if fid is None:
-        fid, reason, drop = _llm_flow(text)
-        how = "llm" if fid else "default"
-    if fid is None:
-        # 兜底：有开发标签走软件流，否则走分析流（分析流最少依赖）
-        fid = "FLOW-SOFTWARE" if "dev" in (tags or []) else "FLOW-ANALYSIS"
-        reason = "无明确关键词，按标签兜底"
-    tpl = template(conn, fid)
-    nodes = [n for n in tpl["nodes"] if n["key"] not in drop]
+    cls = classify(text)
+    low = (text or "").lower()
+    urgent = any(w in low for w in URGENT_WORDS)
+    if not urgent and cls["confidence"] < 0.6:
+        return {"need_clarify": True, "question": CLARIFY_QUESTION, "flow_id": None,
+                "name": "", "kind": "", "nodes": [], "roles": [],
+                "how": cls["how"], "reason": cls["reason"],
+                "task_type": cls["task_type"], "confidence": cls["confidence"]}
+
+    primary = TASK_TO_FLOW[cls["task_type"]]
+    if urgent:
+        primary = "FLOW-URGENT"                     # 线上故障先止血，不等模型判类
+    secondary = TASK_TO_FLOW.get(cls.get("secondary") or "", "")
+    if secondary and secondary != primary:
+        nodes, name = _compose_nodes(primary, secondary)
+        roles_needed: list[str] = []
+        for node in nodes:
+            if node["role"] != PLATFORM and node["role"] not in roles_needed:
+                roles_needed.append(node["role"])
+        return {"flow_id": f"{primary}+{secondary}", "name": name, "kind": "composite",
+                "nodes": nodes, "roles": roles_needed, "how": cls["how"],
+                "reason": cls["reason"], "task_type": cls["task_type"],
+                "secondary": cls["secondary"], "confidence": cls["confidence"]}
+
+    tpl = template(conn, primary)
+    nodes = [dict(n) for n in tpl["nodes"]]
     nodes = _trim(nodes, text)
     if tpl["kind"] != "software" and not any(n["key"] == "deliver" for n in nodes):
         nodes.append(_node("deliver", "交付", PLATFORM, "已交付", kind="deliver"))
-    roles_needed: list[str] = []
+    roles_needed = []
     for node in nodes:
         if node["role"] != PLATFORM and node["role"] not in roles_needed:
             roles_needed.append(node["role"])
-    return {"flow_id": fid, "name": tpl["name"], "kind": tpl["kind"],
-            "nodes": nodes, "roles": roles_needed, "how": how, "reason": reason}
+    return {"flow_id": primary, "name": tpl["name"], "kind": tpl["kind"],
+            "nodes": nodes, "roles": roles_needed, "how": cls["how"],
+            "reason": cls["reason"], "task_type": cls["task_type"],
+            "confidence": cls["confidence"]}
 
 
 def instantiate(conn, pid: str, plan_or_id: dict | str) -> list[dict]:
@@ -387,6 +476,10 @@ def stage_detail(conn, pid: str, key: str) -> dict:
 
 # ------------------------------------------------------------------ 失败诊断
 RULES = [
+    (("tool_cap", "检索次数超限", "抓取次数超限"), "工具调用超限",
+     "同一轮里搜索/抓取次数超过底座上限，系统已强制中断，避免无限发散。",
+     ["基于已有资料直接写报告，不要再检索", "在需求里限定只看 2-3 个来源",
+      "确实需要更多来源时，拆成多个任务分别跑"]),
     (("budget", "budget_exhausted"), "预算耗尽",
      "本轮 token 预算在任务完成前用完，模型被强制中断。",
      ["把该任务预算调大（实体池剩余要够）", "缩小交付范围后重试", "把长文拆成两段跑"]),
@@ -437,6 +530,14 @@ def diagnose(conn, run_id: str, *, use_llm: bool = True) -> dict:
         " JOIN agent_traces t ON t.trace_id=s.trace_id WHERE t.run_id=?"
         " ORDER BY s.rowid DESC LIMIT 12", (run_id,)).fetchall()]
     verdict = _rule_diagnosis(row["error"] or "", row["state"] or "")
+    if not (row["error"] or "").strip() and row["state"] == "succeeded":
+        # 运行本身成功、阶段却失败：问题在交付物/闸门，不在模型调用
+        verdict = {"cause": "本次运行本身成功，但阶段验收没通过：通常是没产出交付物，"
+                            "或交付物没满足本阶段的闸门口径。",
+                   "fixes": ["确认任务要求里写清了主交付文件名",
+                             "把阶段描述收窄到一个可交付物",
+                             "在链路追踪里看最后一次 write/read 是否真的落盘"],
+                   "source": "rules"}
     if use_llm and row["state"] != "succeeded":
         try:
             from . import llm

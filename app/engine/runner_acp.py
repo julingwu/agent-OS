@@ -32,6 +32,41 @@ from .acp_client import AcpClient, AcpError
 
 MOCK_ACP_AGENT = base.ROOT / "tools" / "mock_acp_agent.py"
 
+# ---------------------------------------------------------------- v4.2 战役二
+# 工具预算：模型很容易「再搜一次」，只写在 prompt 里没用（§47 已证明模型不听字数
+# 指令），所以次数上限在底座强制。名字识别是保守的包含匹配，宁可多算不漏算。
+_SEARCH_TOKENS = ("search", "搜索", "检索")
+_FETCH_TOKENS = ("fetch", "url", "http_get", "browse", "抓取")
+_TOOL_BUDGET_BLOCK = (
+    "\n\n【工具使用上限（系统硬限制）】\n"
+    "本轮最多调用 web_search {search} 次、抓取网页 {fetch} 次；"
+    "达到上限会被系统直接中断。请在第 {search} 次搜索后用已有资料收尾，"
+    "不要再扩大检索面。"
+)
+
+
+def _cap_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _tool_cap_check(st: dict, tool: str) -> str | None:
+    """累计搜索/抓取次数，超限返回中文错误串（写到 run.error + 审计）。"""
+    name = (tool or "").lower()
+    if any(tok in name for tok in _SEARCH_TOKENS):
+        st["search_calls"] = int(st.get("search_calls") or 0) + 1
+        limit = _cap_env("M0_MAX_SEARCH_CALLS", 5)
+        if st["search_calls"] > limit:
+            return f"网络检索次数超限（{limit} 次），请基于已有资料生成报告"
+    elif any(tok in name for tok in _FETCH_TOKENS):
+        st["fetch_calls"] = int(st.get("fetch_calls") or 0) + 1
+        limit = _cap_env("M0_MAX_FETCH_CALLS", 3)
+        if st["fetch_calls"] > limit:
+            return f"网页抓取次数超限（{limit} 次），请基于已有资料生成报告"
+    return None
+
 
 def _agent_context(conn, task_id: str) -> tuple[str | None, str | None]:
     """(owner_employee_id, chat_id) —— 审批单要能指回「谁」和「哪个会话」。"""
@@ -160,7 +195,9 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
     st = {"used": 0, "cancelled": False, "checks": 0, "writes": [], "final": "",
           "resumed": bool(resume_session), "stop_reason": None, "error": None,
           "sid": resume_session, "updates": 0, "tool_calls": 0, "policy_violation": None,
-          "approval": None, "last_used": 0}
+          "approval": None, "last_used": 0,
+          # v4.2 战役二：工具预算（搜索/抓取次数硬上限，超限即中断）
+          "search_calls": 0, "fetch_calls": 0, "tool_cap": None}
     prompt_started = False
     credential_values = []
     started = time.time()
@@ -291,6 +328,28 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
                 st["tool_calls"] += 1
                 label = update.get("title") or update.get("kind") or ""
                 tool = str(label).split()[0].lower() if label else ""
+                # v4.2 战役二：搜索/抓取次数在**底座**拦截，不靠 prompt 求模型自觉。
+                # 超限立即取消本轮，run 以 tool_cap_exceeded 失败，阶段随之 blocked。
+                cap_error = _tool_cap_check(st, tool)
+                if cap_error:
+                    st["tool_cap"] = cap_error
+                    rec.close_span(f"tool:{update.get('toolCallId')}", status="blocked",
+                                   detail=cap_error)
+                    if not st["cancelled"]:
+                        st["cancelled"] = True
+                        client.cancel(sid)
+                        write_audit(
+                            conn, legal_entity_id=entity, verb="tool_cap", task_id=task_id,
+                            run_id=run_id, layer="system", action="tool_cap_cancel",
+                            target=run_id,
+                            payload={"tool": tool, "search_calls": st["search_calls"],
+                                     "fetch_calls": st["fetch_calls"],
+                                     "max_search": _cap_env("M0_MAX_SEARCH_CALLS", 5),
+                                     "max_fetch": _cap_env("M0_MAX_FETCH_CALLS", 3),
+                                     "reason": cap_error},
+                            response={"cancelled": True})
+                        conn.commit()
+                    return
                 verdict = rbac.gate_tool_call(
                     conn, agent_id=agent_id, tool=tool, update=update, run_id=run_id,
                     task_id=task_id, session_id=sid, chat_id=chat_id, workspace=ws,
@@ -349,6 +408,9 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
                 raise AcpError("McpAuthorityChanged")
             conn.commit()
         prompt_started = True
+        prompt = prompt + _TOOL_BUDGET_BLOCK.format(
+            search=_cap_env("M0_MAX_SEARCH_CALLS", 5),
+            fetch=_cap_env("M0_MAX_FETCH_CALLS", 3))
         out = client.prompt(sid, prompt, on_update=on_update, timeout=timeout)
         st["stop_reason"] = (out.get("result") or {}).get("stopReason")
         st["updates"] = out.get("updates", 0)
@@ -398,7 +460,10 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
                    "parked_ms": trace.now_run(conn, run_id)})
 
     ok = (not cancelled) and (not error) and st["stop_reason"] == "end_turn"
-    if st["policy_violation"]:
+    if st.get("tool_cap"):
+        # 次数超限被底座中断：错误文案直接进 run.error，界面诊断能读懂
+        reason, exit_code = "tool_cap_exceeded", 3
+    elif st["policy_violation"]:
         reason, exit_code = "tool_policy_violation", 4
     elif cancelled:
         reason, exit_code = "budget_exhausted_midturn", 3

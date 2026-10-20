@@ -148,7 +148,18 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
         if guess and guess.get("tags"):
             tags, reason, how = guess["tags"], guess.get("reason") or "", "llm"
 
-    plan = flows.plan(conn, text, tags)            # v4.1：关键词 → 模型 → 兜底
+    plan = flows.plan(conn, text, tags)            # v4.2：LLM 意图分类 → 流程
+    if plan.get("need_clarify"):
+        # 置信度 < 0.6：不建项目、不拉人，先问清楚（省一次错派 + 一次烧 token 的执行）
+        store.add_message(conn, ceo_chat_id, "agent", plan["question"], author=CEO_TITLE,
+                          kind="clarify",
+                          meta=json.dumps({"task_type": plan["task_type"],
+                                           "confidence": plan["confidence"],
+                                           "reason": plan["reason"]}, ensure_ascii=False))
+        return {"project_id": None, "clarify": True, "question": plan["question"],
+                "tags": tags, "route": plan["how"], "flow": plan,
+                "chat_id": ceo_chat_id, "ceo_chat_id": ceo_chat_id,
+                "stages": [], "members": [], "member_names": [], "async": False}
 
     title = (text.strip().splitlines()[0][:24] if text.strip() else "新项目") or "新项目"
     proj = pipeline.create_project(conn, name=title, requirement=text,

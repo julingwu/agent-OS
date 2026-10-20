@@ -1,6 +1,6 @@
 [package]
 name = "oaagent-console"
-version = "4.1.0"
+version = "4.2.0"
 description = "Agent OS desktop console"
 edition = "2021"
 rust-version = "1.77"
