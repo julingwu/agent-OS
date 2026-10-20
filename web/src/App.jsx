@@ -1741,7 +1741,8 @@ function FilesTab() {
 
 /* ------------------------------------------------------------- 设置/账号 */
 function SettingsModal({ onClose, theme, setTheme, onChanged }) {
-  const [form, setForm] = useState({ default_model: "", default_api_base: "", theme });
+  const [form, setForm] = useState({ default_model: "", default_api_base: "", theme,
+                                     flow_stage_budget: 20000 });
   const [jobs, setJobs] = useState([]);
   const [chats, setChats] = useState([]);
   const [job, setJob] = useState({ chat_id: "", title: "每日任务报告", at_time: "09:00" });
@@ -1751,7 +1752,8 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
   useEffect(() => {
     (async () => {
       const [s, j, c, k] = await Promise.all([api.settings(), api.jobs(), api.chats(), api.kb()]);
-      setForm({ default_model: s.default_model, default_api_base: s.default_api_base, theme: s.theme });
+      setForm({ default_model: s.default_model, default_api_base: s.default_api_base,
+                theme: s.theme, flow_stage_budget: s.flow_stage_budget ?? 20000 });
       setJobs(j.jobs); setChats(c.chats); setKb(k.documents);
       setJob((x) => ({ ...x, chat_id: c.chats.find((y) => y.kind === "group")?.id || c.chats[0]?.id || "" }));
     })();
@@ -1788,6 +1790,21 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
             <input value={form.default_model} onChange={(e) => setForm({ ...form, default_model: e.target.value })} /></div>
           <div className="field"><label>默认 Base URL</label>
             <input value={form.default_api_base} onChange={(e) => setForm({ ...form, default_api_base: e.target.value })} /></div>
+        </div>
+
+        <div className="section-title">成本控制</div>
+        <div className="grid2">
+          <div className="field"><label>单阶段 Token 预算（默认 2 万）</label>
+            <input type="number" min="5000" max="500000" step="1000"
+                   value={form.flow_stage_budget ?? 20000}
+                   onChange={(e) => setForm({ ...form, flow_stage_budget: Number(e.target.value) })} />
+          </div>
+          <div className="field"><label>&nbsp;</label>
+            <div className="hint" style={{ paddingTop: 8 }}>
+              {form.flow_stage_budget ? `${Math.round(Number(form.flow_stage_budget) / 1000)}k tokens / 阶段` : "—"}
+              {" · "}5k–50 万，保存后下一阶段生效
+            </div>
+          </div>
         </div>
 
         <div className="section-title">外观</div>

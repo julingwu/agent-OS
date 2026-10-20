@@ -247,6 +247,8 @@ class SettingsIn(BaseModel):
     default_model: str | None = None
     default_api_base: str | None = None
     theme: str | None = None
+    # v4.2.1：单阶段 token 预算，界面可调（5k–50 万），保存后下一个阶段立即生效
+    flow_stage_budget: int | None = None
 
 
 @router.get("/settings")
@@ -255,23 +257,38 @@ def get_settings(token: str | None = Auth):
     with get_conn() as conn:
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
     vals = {r["key"]: r["value"] for r in rows}
+    from .. import flows
+    with get_conn() as conn:
+        budget = flows.stage_budget(conn)
     return {"default_model": vals.get("default_model") or os.environ.get("LLM_MODEL", "deepseek-chat"),
             "default_api_base": vals.get("default_api_base") or os.environ.get("LLM_API_BASE", "https://api.deepseek.com/v1"),
             "theme": vals.get("theme") or "dark",
+            "flow_stage_budget": budget,
+            "flow_stage_budget_source": ("settings" if vals.get("flow_stage_budget")
+                                          else "env"),
             "api_key_set": bool(os.environ.get("DEEPSEEK_API_KEY"))}
 
 
 @router.put("/settings")
 def put_settings(payload: SettingsIn, token: str | None = Auth):
     who = _require(token)
+    data = payload.model_dump()
+    budget = data.pop("flow_stage_budget", None)
     with get_conn() as conn:
-        for k, v in payload.model_dump().items():
+        if budget is not None:
+            from .. import flows
+            try:
+                flows.set_stage_budget(conn, int(budget))
+            except (TypeError, ValueError):
+                raise HTTPException(400, detail={"code": "InvalidFlowBudget"}) from None
+        for k, v in data.items():
             if v is None:
                 continue
             conn.execute("INSERT INTO settings (key,value) VALUES (?,?)"
                          " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (k, v))
         write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="admin", action="settings_changed",
-                    target="settings", layer="system", payload=payload.model_dump(),
+                    target="settings", layer="system", payload={**data,
+                                                                "flow_stage_budget": budget},
                     response={"by": who})
         conn.commit()
     return {"ok": True}

@@ -25,6 +25,11 @@ log = logging.getLogger("flows")
 
 PLATFORM = "platform"          # 平台/PM 自己推进的阶段，不拉人进群
 
+# v4.2.1：单阶段 token 预算。界面上可随时改（settings 表优先），环境变量次之。
+FLOW_STAGE_BUDGET_DEFAULT = 20000
+FLOW_STAGE_BUDGET_MIN = 5000
+FLOW_STAGE_BUDGET_MAX = 500000
+
 DDL = """
 CREATE TABLE IF NOT EXISTS flow_templates (
   id TEXT PRIMARY KEY,
@@ -387,6 +392,39 @@ def node_of(conn, pid: str, key: str) -> dict:
             return node
     return {"key": key, "title": key, "role": "", "kind": "doc", "seq": 0,
             "state": "active", "gate": f"{key}完成"}
+
+
+# ------------------------------------------------------------ 单阶段预算
+def stage_budget(conn) -> int:
+    """单阶段 token 预算：settings 表（界面可改）→ 环境变量 → 20000。
+
+    每次开跑都现读，界面上调完下一个阶段立即生效，不用重启服务。
+    """
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key='flow_stage_budget'"
+                           ).fetchone()
+        if row is not None and str(row["value"]).strip():
+            val = int(float(str(row["value"])))
+            if FLOW_STAGE_BUDGET_MIN <= val <= FLOW_STAGE_BUDGET_MAX:
+                return val
+    except (sqlite3.Error, ValueError, TypeError):
+        pass
+    try:
+        val = int(os.environ.get("M0_FLOW_STAGE_BUDGET", FLOW_STAGE_BUDGET_DEFAULT))
+    except (TypeError, ValueError):
+        val = FLOW_STAGE_BUDGET_DEFAULT
+    return max(FLOW_STAGE_BUDGET_MIN, min(FLOW_STAGE_BUDGET_MAX, val))
+
+
+def set_stage_budget(conn, value: int) -> int:
+    """写入界面可改的预算值（5k–50 万），越界直接拒绝而不是悄悄夹断。"""
+    val = int(value)
+    if not FLOW_STAGE_BUDGET_MIN <= val <= FLOW_STAGE_BUDGET_MAX:
+        raise ValueError("InvalidFlowBudget")
+    conn.execute("INSERT INTO settings (key,value) VALUES ('flow_stage_budget',?)"
+                 " ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(val),))
+    conn.commit()
+    return val
 
 
 # -------------------------------------------------------------------- 黑板

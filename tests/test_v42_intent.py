@@ -159,6 +159,32 @@ def test_succeeded_run_with_failed_stage_has_a_non_generic_diagnosis(env):
     assert "运行本身成功" in out["cause"]
 
 
+# ------------------------------------------------ 单阶段预算（v4.2.1）
+def test_stage_budget_defaults_to_20k_and_reads_settings(env):
+    conn, _ = env
+    assert flows.stage_budget(conn) == 20000, "默认必须收紧到 2 万"
+    flows.set_stage_budget(conn, 50000)
+    assert flows.stage_budget(conn) == 50000
+    with pytest.raises(ValueError, match="InvalidFlowBudget"):
+        flows.set_stage_budget(conn, 100)
+
+
+def test_settings_api_exposes_and_updates_the_budget(env):
+    conn, ceo = env
+    from app.main import app
+    from fastapi.testclient import TestClient
+    from app.ui import api as ui_api
+    with TestClient(app) as client:
+        client.cookies.set("oa_ui", ui_api._make_cookie(ceo["id"]))
+        got = client.get("/ui/settings")
+        assert got.status_code == 200 and got.json()["flow_stage_budget"] == 20000
+        put = client.put("/ui/settings", json={"flow_stage_budget": 35000})
+        assert put.status_code == 200, put.text
+        assert client.get("/ui/settings").json()["flow_stage_budget"] == 35000
+        bad = client.put("/ui/settings", json={"flow_stage_budget": 10})
+        assert bad.status_code == 400 and bad.json()["detail"]["code"] == "InvalidFlowBudget"
+
+
 # ------------------------------------------------ 战役二：工具调用上限
 def test_tool_cap_counts_and_reports_chinese(env):
     st = {}

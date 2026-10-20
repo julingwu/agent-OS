@@ -641,6 +641,7 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     import uuid as _uuid
 
     from . import acceptance_run  # noqa: F401  (保留导入名以便回溯旧行为)
+    from . import flows
     from .engine import dsh_adapter, task_generator
     from .ui import roles as ui_roles
 
@@ -675,9 +676,7 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     conn.commit()
     out = dsh_adapter.execute_run(conn, run_id,
                                   runner=os.environ.get("UI_RUNNER", "acp"),
-                                  budget_tokens=int(os.environ.get(
-                                      "M0_FLOW_STAGE_BUDGET",
-                                      os.environ.get("M0_PROJECT_TASK_BUDGET", "30000"))))
+                                  budget_tokens=flows.stage_budget(conn))
     state = out.get("task_state")
     if state not in ("pending_review", "completed"):
         raise RuntimeError(f"阶段 {node['key']} 未完成：{state}")
