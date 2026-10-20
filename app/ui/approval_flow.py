@@ -218,6 +218,10 @@ def resume(approval_id: str) -> dict:
     return {"ok": True, **out}
 
 
-def list_all(conn, limit: int = 50) -> dict:
-    return {"pending": rbac.pending(conn), "history": rbac.history(conn, limit),
-            "count": len(rbac.pending(conn))}
+def list_all(conn, limit: int = 50, tenant_id: str | None = None) -> dict:
+    pending = rbac.pending(conn)
+    history = rbac.history(conn, limit)
+    if tenant_id:
+        pending = [x for x in pending if (x.get("tenant_id") or "TENANT-HQ") == tenant_id]
+        history = [x for x in history if (x.get("tenant_id") or "TENANT-HQ") == tenant_id]
+    return {"pending": pending, "history": history, "count": len(pending)}

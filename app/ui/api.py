@@ -26,6 +26,8 @@ from ..db import get_conn
 from ..engine import dsh_adapter
 from ..identity import ROLE_SCOPES  # noqa: F401  (kept for parity with the API)
 from .. import tenant
+from .. import tenancy
+from .. import mcp as mcp_mod
 from . import intel, store
 
 router = APIRouter(prefix="/ui", tags=["ui"])
@@ -82,6 +84,33 @@ def _require(token: str | None) -> str:
     return ident
 
 
+def _tenant_of(conn, ident: str, header: str | None) -> str:
+    try:
+        return tenancy.resolve(conn, ident, header)
+    except PermissionError:
+        raise HTTPException(403, detail={"code": "TenantMismatch"}) from None
+
+
+def _scoped_task(conn, task_id: str, tenant_id: str):
+    row = conn.execute(
+        """SELECT * FROM tasks WHERE id=?
+           AND COALESCE(tenant_id,'TENANT-HQ')=?""", (task_id, tenant_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, detail={"code": "TaskNotFound"})
+    return row
+
+
+def _scoped_run(conn, run_id: str, tenant_id: str):
+    row = conn.execute(
+        """SELECT r.*, COALESCE(t.tenant_id,'TENANT-HQ') AS task_tenant
+           FROM task_runs r JOIN tasks t ON t.id=r.task_id
+           WHERE r.id=? AND COALESCE(t.tenant_id,'TENANT-HQ')=?""",
+        (run_id, tenant_id)).fetchone()
+    if row is None:
+        raise HTTPException(404, detail={"code": "RunNotFound"})
+    return row
+
+
 class LoginIn(BaseModel):
     identity_id: str
     secret: str
@@ -98,7 +127,7 @@ def login(payload: LoginIn, response: Response):
     response.set_cookie(COOKIE, token, httponly=True, samesite="lax",
                         max_age=SESSION_TTL, path="/")
     return {"ok": True, "identity_id": row["id"], "name": row["name"], "role": row["role"],
-            "token": token}
+            "tenant_id": row["tenant_id"] or tenancy.DEFAULT_TENANT, "token": token}
 
 
 @router.get("/dev-login")
@@ -132,8 +161,11 @@ def me(oa_ui: str | None = Depends(_token)):
             """SELECT i.*, e.name AS entity_name FROM identities i
                LEFT JOIN legal_entities e ON e.id = i.legal_entity_id WHERE i.id=?""",
             (ident,)).fetchone()
+        tenant_name = tenancy.name_of(conn, row["tenant_id"] or tenancy.DEFAULT_TENANT)
     return {"identity_id": row["id"], "name": row["name"], "role": row["role"],
-            "entity_id": row["legal_entity_id"], "entity_name": row["entity_name"]}
+            "entity_id": row["legal_entity_id"], "entity_name": row["entity_name"],
+            "tenant_id": row["tenant_id"] or tenancy.DEFAULT_TENANT,
+            "tenant_name": tenant_name}
 
 
 # ------------------------------------------------------------------ org tree
@@ -253,17 +285,24 @@ def create_group(payload: GroupIn, oa_ui: str | None = Depends(_token)):
 
 
 @router.get("/chats")
-def chats(oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def chats(oa_ui: str | None = Depends(_token),
+          x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
         _ensure_chats(conn)
-        return {"chats": store.list_chats(conn)}
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        return {"chats": store.list_chats(conn, tenant_id=tid), "tenant_id": tid}
 
 
 @router.get("/chats/{chat_id}/messages")
-def chat_messages(chat_id: str, after: int = 0, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def chat_messages(chat_id: str, after: int = 0, oa_ui: str | None = Depends(_token),
+                  x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        chat = conn.execute("SELECT tenant_id FROM chats WHERE id=?", (chat_id,)).fetchone()
+        if chat is None or (chat["tenant_id"] or tenancy.DEFAULT_TENANT) != tid:
+            raise HTTPException(404, detail={"code": "ChatNotFound"})
         return {"messages": store.messages(conn, chat_id, after_id=after)}
 
 
@@ -272,14 +311,16 @@ class MessageIn(BaseModel):
 
 
 @router.post("/chats/{chat_id}/messages")
-def post_message(chat_id: str, payload: MessageIn, oa_ui: str | None = Depends(_token)):
+def post_message(chat_id: str, payload: MessageIn, oa_ui: str | None = Depends(_token),
+                 x_tenant_id: str | None = Header(default=None)):
     ident = _require(oa_ui)
     text = payload.text.strip()
     if not text:
         raise HTTPException(400, detail={"code": "EmptyMessage"})
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
         chat = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
-        if chat is None:
+        if chat is None or (chat["tenant_id"] or tenancy.DEFAULT_TENANT) != tid:
             raise HTTPException(404, detail={"code": "ChatNotFound"})
         store.add_message(conn, chat_id, "human", text, author="我")
         # 人开口 = 新的一轮，重置 agent 发言预算（否则人类消息会被历史 hop 吃掉）
@@ -294,7 +335,7 @@ def post_message(chat_id: str, payload: MessageIn, oa_ui: str | None = Depends(_
                                   "我在。要派活就把需求说具体点：做什么、要什么产出。",
                                   author=dispatcher.CEO_TITLE)
                 return {"ok": True, "routed": False}
-            result = dispatcher.route(conn, text)
+            result = dispatcher.route(conn, text, tenant_id=tid)
             # v1.5：CEO 建的是项目，不再直接拉群跑任务；项目内的 WBS 才起 run
             return {"ok": True, "routed": True, **result}
     if kind == "group":
@@ -514,9 +555,11 @@ def _run_turn(chat_id: str, employee_id: str | None, text: str, ident: str,
 
         with get_conn() as conn:
             entity = emp["legal_entity_id"] if emp else "LE-GROUP-HQ"
+            _ct = conn.execute("SELECT tenant_id FROM chats WHERE id=?", (chat_id,)).fetchone()
+            tnt = (_ct["tenant_id"] if _ct and _ct["tenant_id"] else "TENANT-HQ")
             if task_id is None:
                 gen = task_generator.generate(conn, text, legal_entity_id=entity,
-                                              pack_id=pack_id)
+                                              pack_id=pack_id, tenant_id=tnt)
                 task_id = gen["task_id"]
             # 私聊也要记住「谁在干」，否则 runner 读不到 preset（cordis 不生效）
             if emp is not None:
@@ -756,7 +799,9 @@ def _start_project_from_dm(dm_chat_id: str, text: str, ident: str, emp) -> None:
 
     title = "UI重构攻坚组" if "UI" in text.upper() else f"{text[:10]}·项目组"
     with get_conn() as conn:
-        chat = store.create_group(conn, title, [m["employee_id"] for m in picked])
+        _dt = conn.execute("SELECT tenant_id FROM chats WHERE id=?", (dm_chat_id,)).fetchone()
+        chat = store.create_group(conn, title, [m["employee_id"] for m in picked],
+                                  tenant_id=(_dt["tenant_id"] if _dt else "TENANT-HQ"))
         names = "、".join(m["name"] for m in picked)
         store.add_message(conn, chat["id"], "system",
                           f"小文 建了群「{title}」，成员：{names}", kind="text")
@@ -783,9 +828,11 @@ def _start_project(chat_id: str, text: str, ident: str, mem: list[dict], title: 
         pm_mod.announce(conn, chat_id, r, text)
 
     with get_conn() as conn:
+        _ct = conn.execute("SELECT tenant_id FROM chats WHERE id=?", (chat_id,)).fetchone()
+        tnt = (_ct["tenant_id"] if _ct and _ct["tenant_id"] else "TENANT-HQ")
         gen = task_generator.generate(conn, pm_mod.design_brief(text, title),
                                       legal_entity_id=r["designer"]["legal_entity_id"],
-                                      pack_id="web-v1")
+                                      pack_id="web-v1", tenant_id=tnt)
         design_id = gen["task_id"]
         conn.execute("UPDATE tasks SET task_type='design', owner_employee_id=? WHERE id=?",
                      (r["designer"]["employee_id"], design_id))
@@ -807,9 +854,12 @@ def _design_message(conn, task_id: str):
 
 @router.post("/designs/{task_id}/approve")
 def approve_design(task_id: str, payload: DesignIn | None = None,
-                   oa_ui: str | None = Depends(_token)):
+                   oa_ui: str | None = Depends(_token),
+                   x_tenant_id: str | None = Header(default=None)):
     ident = _require(oa_ui)
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        _scoped_task(conn, task_id, tid)
         msg = _design_message(conn, task_id)
         if msg is None:
             raise HTTPException(404, detail={"code": "NoDesignCard"})
@@ -835,9 +885,12 @@ def approve_design(task_id: str, payload: DesignIn | None = None,
 
 @router.post("/designs/{task_id}/reject")
 def reject_design(task_id: str, payload: DesignIn | None = None,
-                  oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+                  oa_ui: str | None = Depends(_token),
+                  x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        _scoped_task(conn, task_id, tid)
         msg = _design_message(conn, task_id)
         if msg is None:
             raise HTTPException(404, detail={"code": "NoDesignCard"})
@@ -863,9 +916,11 @@ def _dev_phase(chat_id: str, design_id: str, requirement: str, ident: str) -> No
         chat = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
         mem = store.members(conn, chat_id)
         r = pm_mod.roles(mem)
+        _ct = conn.execute("SELECT tenant_id FROM chats WHERE id=?", (chat_id,)).fetchone()
+        tnt = (_ct["tenant_id"] if _ct and _ct["tenant_id"] else "TENANT-HQ")
         gen = task_generator.generate(conn, pm_mod.dev_brief(requirement),
                                       legal_entity_id=r["dev"]["legal_entity_id"],
-                                      pack_id="web-v1")
+                                      pack_id="web-v1", tenant_id=tnt)
         dev_id = gen["task_id"]
         conn.execute("UPDATE tasks SET owner_employee_id=? WHERE id=?",
                      (r["dev"]["employee_id"], dev_id))
@@ -879,12 +934,12 @@ def _dev_phase(chat_id: str, design_id: str, requirement: str, ident: str) -> No
 
 # ------------------------------------------------------------------ task view
 @router.get("/tasks/{task_id}")
-def task_view(task_id: str, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def task_view(task_id: str, oa_ui: str | None = Depends(_token),
+              x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
-        t = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if t is None:
-            raise HTTPException(404, detail={"code": "TaskNotFound"})
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        t = _scoped_task(conn, task_id, tid)
         crit = [dict(r) for r in conn.execute(
             "SELECT * FROM acceptance_criteria WHERE task_id=? ORDER BY seq", (task_id,))]
         runs = [dict(r) for r in conn.execute(
@@ -915,14 +970,14 @@ class ActionIn(BaseModel):
 
 
 @router.post("/runs/{run_id}/kill")
-def kill_run(run_id: str, payload: DesignIn | None = None, oa_ui: str | None = Depends(_token)):
+def kill_run(run_id: str, payload: DesignIn | None = None, oa_ui: str | None = Depends(_token),
+             x_tenant_id: str | None = Header(default=None)):
     """紧急熔断：直接杀掉底层 DSH 进程树，run 记 failed，写审计。"""
     ident = _require(oa_ui)
     import subprocess
     with get_conn() as conn:
-        run = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
-        if run is None:
-            raise HTTPException(404, detail={"code": "RunNotFound"})
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        run = _scoped_run(conn, run_id, tid)
         pid = run["pid"]
         killed = False
         if pid:
@@ -949,12 +1004,12 @@ def kill_run(run_id: str, payload: DesignIn | None = None, oa_ui: str | None = D
 
 
 @router.post("/tasks/{task_id}/action")
-def task_action(task_id: str, payload: ActionIn, oa_ui: str | None = Depends(_token)):
+def task_action(task_id: str, payload: ActionIn, oa_ui: str | None = Depends(_token),
+                x_tenant_id: str | None = Header(default=None)):
     ident = _require(oa_ui)
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, detail={"code": "TaskNotFound"})
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        row = _scoped_task(conn, task_id, tid)
         if payload.action == "accept":
             from ..acceptance import l1_manual
             # 人工判据要求证据；老板点「验收通过」时，自动附上产物片段，
@@ -986,12 +1041,79 @@ def task_action(task_id: str, payload: ActionIn, oa_ui: str | None = Depends(_to
     return {"ok": True, "state": state}
 
 
+class UiRetryIn(BaseModel):
+    runner: str | None = None
+
+
+def _ui_retry_run(run_id: str, prompt: str, runner: str, session_id: str | None) -> None:
+    with get_conn() as conn:
+        try:
+            dsh_adapter.execute_run(conn, run_id, prompt=prompt, runner=runner,
+                                    resume_session=session_id)
+        except Exception as exc:                       # noqa: BLE001
+            from ..errors import human_error
+            conn.execute("UPDATE task_runs SET state='failed', error=?,"
+                         " ended_at=CURRENT_TIMESTAMP WHERE id=?",
+                         (human_error(exc), run_id))
+            conn.commit()
+
+
+@router.post("/tasks/{task_id}/retry")
+def ui_retry_task(task_id: str, payload: UiRetryIn | None = None,
+                  oa_ui: str | None = Depends(_token),
+                  x_tenant_id: str | None = Header(default=None)):
+    """一键重试：failed / rejected -> 同一会话新 run（不重跑整段 prompt）。"""
+    ident = _require(oa_ui)
+    from .. import state_machine
+    from ..audit import new_id
+    from ..api.tasks import _retry_prompt
+    payload = payload or UiRetryIn()
+    with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        t = _scoped_task(conn, task_id, tid)
+        if t["state"] not in ("failed", "rejected"):
+            raise HTTPException(400, detail={"code": "NotRetryable", "state": t["state"]})
+        prev = conn.execute(
+            """SELECT * FROM task_runs WHERE task_id=? AND session_id IS NOT NULL
+               ORDER BY run_seq DESC LIMIT 1""", (task_id,)).fetchone()
+        session_id = prev["session_id"] if prev else None
+        run_seq = conn.execute(
+            "SELECT COALESCE(MAX(run_seq),0)+1 FROM task_runs WHERE task_id=?",
+            (task_id,)).fetchone()[0]
+        runner = (payload.runner or os.environ.get("RUNNER") or "mock").lower()
+        run_id = new_id("RUN")
+        conn.execute(
+            """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, tenant_id,
+                                     state, runner, session_id, actor_identity)
+               VALUES (?,?,?,?,?, 'spawned', ?, ?, ?)""",
+            (run_id, task_id, run_seq, t["legal_entity_id"],
+             t["tenant_id"] or "TENANT-HQ", runner, session_id, ident))
+        state_machine.transition(conn, task_id, "retry", actor=ident,
+                                 payload={"run_seq": run_seq, "resumed": bool(session_id)})
+        conn.execute("""UPDATE acceptance_criteria SET state='pending', checked_by=NULL,
+                        note=NULL WHERE task_id=? AND state!='na'""", (task_id,))
+        prompt = _retry_prompt(conn, task_id)
+        write_audit(conn, legal_entity_id=t["legal_entity_id"], verb="retry", task_id=task_id,
+                    run_id=run_id, action="ui_retry", target=run_id,
+                    payload={"run_seq": run_seq, "session_id": session_id, "by": ident},
+                    response={"resumed": bool(session_id)})
+        conn.commit()
+    threading.Thread(target=_ui_retry_run,
+                     args=(run_id, prompt, runner, session_id), daemon=True).start()
+    return {"ok": True, "run_id": run_id, "resumed": bool(session_id)}
+
+
 # ------------------------------------------------------------------ live feed
 @router.get("/live/{run_id}")
-def live(run_id: str, after: int = 0, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def live(run_id: str, after: int = 0, oa_ui: str | None = Depends(_token),
+         x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
-        run = conn.execute("SELECT * FROM task_runs WHERE id=?", (run_id,)).fetchone()
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        try:
+            run = _scoped_run(conn, run_id, tid)
+        except HTTPException:
+            run = None
         ev = store.stream(conn, run_id, after_id=after) if run else []
     return {"run": dict(run) if run else None, "stream": ev}
 
@@ -1098,16 +1220,20 @@ def decide_role_request(chat_id: str, message_id: int, payload: RoleDecisionIn,
 
 # ------------------------------------------------------------------ 项目（v1.5）
 @router.get("/projects")
-def list_projects(oa_ui: str | None = Depends(_token), limit: int = 50):
-    _require(oa_ui)
+def list_projects(oa_ui: str | None = Depends(_token), limit: int = 50,
+                  x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
         from .. import pipeline
         pipeline.ensure(conn)
+        tid = _tenant_of(conn, ident, x_tenant_id)
         rows = conn.execute(
             """SELECT p.*, (SELECT COUNT(*) FROM project_stages s
                             WHERE s.project_id=p.id AND s.state='done') AS done_stages
-               FROM projects p ORDER BY p.created_at DESC LIMIT ?""", (limit,)).fetchall()
-    return {"projects": [dict(r) for r in rows]}
+               FROM projects p WHERE COALESCE(p.tenant_id,?)=?
+               ORDER BY p.created_at DESC LIMIT ?""",
+            (tenancy.DEFAULT_TENANT, tid, limit)).fetchall()
+    return {"projects": [dict(r) for r in rows], "tenant_id": tid}
 
 
 class ProjectPatch(BaseModel):
@@ -1135,13 +1261,15 @@ def patch_project(project_id: str, payload: ProjectPatch,
 
 
 @router.get("/projects/{project_id}")
-def project_detail(project_id: str, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def project_detail(project_id: str, oa_ui: str | None = Depends(_token),
+                   x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
         from .. import pipeline
         pipeline.ensure(conn)
+        tid = _tenant_of(conn, ident, x_tenant_id)
         p = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
-        if p is None:
+        if p is None or (p["tenant_id"] or tenancy.DEFAULT_TENANT) != tid:
             raise HTTPException(404, detail={"code": "ProjectNotFound"})
         stages = [dict(r) for r in conn.execute(
             "SELECT * FROM project_stages WHERE project_id=? ORDER BY seq", (project_id,))]
@@ -1390,9 +1518,12 @@ def delete_role(role_id: str, oa_ui: str | None = Depends(_token)):
 
 # ------------------------------------------------------- 链路追踪（v2.2）
 @router.get("/runs/{run_id}/trace")
-def run_trace(run_id: str, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def run_trace(run_id: str, oa_ui: str | None = Depends(_token),
+              x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        _scoped_run(conn, run_id, tid)
         from .. import trace as tr
         data = tr.load(conn, run_id)
     if data is None:
@@ -1401,9 +1532,18 @@ def run_trace(run_id: str, oa_ui: str | None = Depends(_token)):
 
 
 @router.get("/traces/spans/{span_id}/audit")
-def span_audit(span_id: str, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def span_audit(span_id: str, oa_ui: str | None = Depends(_token),
+               x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        row = conn.execute(
+            """SELECT COALESCE(t.tenant_id,'TENANT-HQ') AS tenant_id
+               FROM trace_spans s JOIN agent_traces tr ON tr.trace_id=s.trace_id
+               JOIN task_runs r ON r.id=tr.run_id JOIN tasks t ON t.id=r.task_id
+               WHERE s.id=?""", (span_id,)).fetchone()
+        if row is None or row["tenant_id"] != tid:
+            raise HTTPException(404, detail={"code": "TraceNotFound"})
         from .. import trace as tr
         rows = tr.audit_for_span(conn, span_id)
     return {"audit": rows}
@@ -1473,18 +1613,28 @@ def check_permission(payload: GrantIn, oa_ui: str | None = Depends(_token)):
 
 
 @router.get("/rbac/approvals")
-def list_approvals(oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def list_approvals(oa_ui: str | None = Depends(_token),
+                   x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
         from .. import rbac
-        return {"pending": rbac.pending(conn)}
+        rows = [x for x in rbac.pending(conn)
+                if (x.get("tenant_id") or "TENANT-HQ") == tid]
+        return {"pending": rows}
 
 
 @router.post("/rbac/approvals/{approval_id}")
 def decide_approval(approval_id: str, payload: ApprovalIn,
-                    oa_ui: str | None = Depends(_token)):
+                    oa_ui: str | None = Depends(_token),
+                    x_tenant_id: str | None = Header(default=None)):
     ident = _require(oa_ui)
-    from . import approval_flow
+    from . import approval_flow, rbac
+    with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        ap = rbac.get(conn, approval_id)
+        if ap is None or (ap["tenant_id"] or "TENANT-HQ") != tid:
+            raise HTTPException(404, detail={"code": "ApprovalNotFound"})
     try:
         return approval_flow.decide(approval_id, payload.approve, by=ident)
     except ValueError:
@@ -1508,18 +1658,26 @@ def guard_tool(payload: HighRiskIn, oa_ui: str | None = Depends(_token)):
 
 # ------------------------------------------------------- 审批中心（v2.3）
 @router.get("/approvals")
-def ui_approvals(limit: int = 50, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def ui_approvals(limit: int = 50, oa_ui: str | None = Depends(_token),
+                 x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
         from . import approval_flow
-        return approval_flow.list_all(conn, limit)
+        return approval_flow.list_all(conn, limit, tenant_id=tid)
 
 
 @router.post("/approvals/{approval_id}")
 def ui_decide_approval(approval_id: str, payload: ApprovalIn,
-                       oa_ui: str | None = Depends(_token)):
+                       oa_ui: str | None = Depends(_token),
+                       x_tenant_id: str | None = Header(default=None)):
     ident = _require(oa_ui)
-    from . import approval_flow
+    from . import approval_flow, rbac
+    with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        ap = rbac.get(conn, approval_id)
+        if ap is None or (ap["tenant_id"] or "TENANT-HQ") != tid:
+            raise HTTPException(404, detail={"code": "ApprovalNotFound"})
     try:
         return approval_flow.decide(approval_id, payload.approve, by=ident)
     except ValueError:
@@ -1575,11 +1733,13 @@ def ui_drill(payload: DrillIn, oa_ui: str | None = Depends(_token)):
 
 # ------------------------------------------------------- FinOps（v2.4）
 @router.get("/finops")
-def ui_finops(days: int = 30, oa_ui: str | None = Depends(_token)):
-    _require(oa_ui)
+def ui_finops(days: int = 30, oa_ui: str | None = Depends(_token),
+              x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
     with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
         from .. import finops
-        return finops.overview(conn, days=days)
+        return finops.overview(conn, days=days, tenant_id=tid)
 
 
 # ------------------------------------------------------- 离线评测（v2.4）
@@ -1671,12 +1831,65 @@ class ExperienceQuery(BaseModel):
 
 
 @router.get("/experiences")
-def ui_experiences(kind: str | None = None, oa_ui: str | None = Depends(_token)):
+def ui_experiences(kind: str | None = None, state: str | None = None,
+                   oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
         from .. import experience
-        return {"experiences": experience.list_all(conn, kind=kind),
+        return {"experiences": experience.list_all(conn, kind=kind, state=state),
                 "stats": experience.stats(conn)}
+
+
+class ExperienceIn(BaseModel):
+    title: str
+    content: str
+    tags: str | list[str] | None = None
+    kind: str = "decision"
+    mandatory: bool = False
+    redline_terms: str | list[str] | None = None
+
+
+@router.post("/experiences")
+def ui_experience_create(payload: ExperienceIn, oa_ui: str | None = Depends(_token)):
+    ident = _require(oa_ui)
+    title, content = payload.title.strip(), payload.content.strip()
+    if not title or not content:
+        raise HTTPException(400, detail={"code": "TitleAndContentRequired"})
+    if payload.kind not in ("rejection", "consensus", "decision"):
+        raise HTTPException(400, detail={"code": "BadKind"})
+    tags = payload.tags if isinstance(payload.tags, list) else [
+        x.strip() for x in (payload.tags or "").split(",") if x.strip()]
+    with get_conn() as conn:
+        from .. import experience
+        e = experience.add(conn, kind=payload.kind, title=title, content=content,
+                           tags=tags, source_type="manual",
+                           source_id="manual:" + ident, mandatory=payload.mandatory,
+                           redline_terms=payload.redline_terms)
+        if payload.mandatory:
+            e = experience.review(conn, e["id"], "approve", reviewer=ident,
+                                  note="董事长手写公司红线，强制注入")
+    return {"ok": True, "experience": e}
+
+
+class ExperienceReviewIn(BaseModel):
+    action: str
+    note: str | None = None
+
+
+@router.post("/experiences/{exp_id}/review")
+def ui_experience_review(exp_id: str, payload: ExperienceReviewIn,
+                         oa_ui: str | None = Depends(_token)):
+    ident = _require(oa_ui)
+    with get_conn() as conn:
+        from .. import experience
+        try:
+            exp = experience.review(conn, exp_id, payload.action, reviewer=ident,
+                                    note=payload.note)
+        except KeyError:
+            raise HTTPException(404, detail={"code": "ExperienceNotFound"}) from None
+        except ValueError as exc:
+            raise HTTPException(400, detail={"code": "BadAction", "message": str(exc)}) from None
+    return {"ok": True, "experience": exp}
 
 
 @router.post("/experiences/preview")
@@ -1685,3 +1898,268 @@ def ui_experience_preview(payload: ExperienceQuery, oa_ui: str | None = Depends(
     with get_conn() as conn:
         from .. import experience
         return experience.context_for(conn, payload.text, entity=payload.entity, record=False)
+
+
+# ------------------------------------------------------------------ v3.1 项目重试 / 闸门复核
+@router.post("/projects/{project_id}/gates/{gate_id}/approve")
+def approve_project_gate(project_id: str, gate_id: str, oa_ui: str | None = Depends(_token),
+                         x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
+    with get_conn() as conn:
+        from .. import pipeline
+        pipeline.ensure(conn)
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        p = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if p is None or (p["tenant_id"] or tenancy.DEFAULT_TENANT) != tid:
+            raise HTTPException(404, detail={"code": "ProjectNotFound"})
+        gate = conn.execute("SELECT * FROM stage_gates WHERE id=? AND project_id=?",
+                            (gate_id, project_id)).fetchone()
+        if gate is None:
+            raise HTTPException(404, detail={"code": "GateNotFound"})
+        if gate["state"] not in ("vetoed", "failed"):
+            raise HTTPException(400, detail={"code": "GateNotPending", "state": gate["state"]})
+        conn.execute("""UPDATE stage_gates SET state='passed',
+                        note=COALESCE(note,'') || '｜董事长复核通过', updated_at=CURRENT_TIMESTAMP
+                        WHERE id=?""", (gate_id,))
+        left = conn.execute("SELECT COUNT(*) FROM stage_gates WHERE project_id=? AND state='vetoed'",
+                            (project_id,)).fetchone()[0]
+        if not left:
+            conn.execute("UPDATE projects SET state='active' WHERE id=?", (project_id,))
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM stage_gates WHERE project_id=? AND stage_key=? AND state!='passed'",
+            (project_id, gate["stage_key"])).fetchone()[0]
+        if not pending:
+            conn.execute("""UPDATE project_stages SET state='done', ended_at=CURRENT_TIMESTAMP
+                            WHERE project_id=? AND key=? AND state!='done'""",
+                         (project_id, gate["stage_key"]))
+        write_audit(conn, legal_entity_id=p["legal_entity_id"], verb="project", task_id=None,
+                    layer="system", action="project_gate_approved", target=project_id,
+                    payload={"gate_id": gate_id, "gate": gate["name"], "by": ident},
+                    response={"ok": True})
+        conn.commit()
+    return {"ok": True, "project_active": not left}
+
+
+def _ui_project_retry(project_id: str, requirement: str, keys: list[str]) -> None:
+    from .. import pipeline
+    from ..errors import human_error
+    with get_conn() as conn:
+        try:
+            pipeline.run_project(conn, project_id, requirement, keys=keys)
+            store.add_message(conn, "C-CEO", "agent", "项目已重试，剩余阶段已继续推进。",
+                              author="CEO 调度台")
+        except Exception as exc:                       # noqa: BLE001
+            store.add_message(conn, "C-CEO", "agent",
+                              f"项目 {project_id} 重试暂停：{human_error(exc)}",
+                              author="CEO 调度台")
+        conn.commit()
+
+
+@router.post("/projects/{project_id}/retry")
+def retry_project(project_id: str, oa_ui: str | None = Depends(_token),
+                  x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
+    with get_conn() as conn:
+        from .. import pipeline
+        pipeline.ensure(conn)
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        p = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if p is None or (p["tenant_id"] or tenancy.DEFAULT_TENANT) != tid:
+            raise HTTPException(404, detail={"code": "ProjectNotFound"})
+        veto = conn.execute("SELECT COUNT(*) FROM stage_gates WHERE project_id=? AND state='vetoed'",
+                            (project_id,)).fetchone()[0]
+        if veto:
+            raise HTTPException(400, detail={"code": "GateNotPassed"})
+        rows = conn.execute("SELECT key,state FROM project_stages WHERE project_id=? ORDER BY seq",
+                            (project_id,)).fetchall()
+        keys = [r["key"] for r in rows if r["state"] != "done"]
+        if not keys:
+            raise HTTPException(400, detail={"code": "ProjectAlreadyDone"})
+        conn.execute("UPDATE projects SET state='active' WHERE id=?", (project_id,))
+        write_audit(conn, legal_entity_id=p["legal_entity_id"], verb="project", task_id=None,
+                    layer="system", action="project_retry", target=project_id,
+                    payload={"from": keys[0], "keys": keys, "by": ident}, response={"ok": True})
+        conn.commit()
+        requirement = p["requirement"]
+    threading.Thread(target=_ui_project_retry, args=(project_id, requirement, keys),
+                     daemon=True).start()
+    return {"ok": True, "from_stage": keys[0], "stages": keys}
+
+
+# ------------------------------------------------------------------ v3.1 SMTP
+class SmtpIn(BaseModel):
+    host: str = ""
+    port: int = 587
+    user: str = ""
+    password: str | None = None
+    from_addr: str = ""
+    secure: bool = False
+
+
+class SmtpTestIn(BaseModel):
+    to: str
+
+
+@router.get("/smtp")
+def ui_smtp_settings(oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        from .. import mailer
+        return mailer.smtp_settings(conn)
+
+
+@router.put("/smtp")
+def ui_smtp_save(payload: SmtpIn, oa_ui: str | None = Depends(_token)):
+    ident = _require(oa_ui)
+    with get_conn() as conn:
+        from .. import mailer
+        out = mailer.save_smtp(conn, host=payload.host, port=payload.port,
+                               user=payload.user, password=payload.password,
+                               from_addr=payload.from_addr, secure=payload.secure)
+        write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="settings", task_id=None,
+                    layer="system", action="smtp_saved", target="smtp",
+                    payload={"host": out["host"], "port": out["port"], "user": out["user"],
+                             "from": out["from_addr"], "secure": out["secure"],
+                             "pass_set": out["pass_set"], "by": ident},
+                    response={"ok": True})
+        conn.commit()
+    return out
+
+
+@router.post("/smtp/test")
+def ui_smtp_test(payload: SmtpTestIn, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        from .. import mailer
+        cfg = mailer.smtp_settings(conn)
+        rows = {r["key"]: r["value"] for r in conn.execute(
+            "SELECT key,value FROM settings WHERE key='smtp_pass'")}
+    if not cfg["host"]:
+        return {"ok": False, "error": "还没有配置 SMTP 服务器"}
+    try:
+        mid = mailer.send_mail(host=cfg["host"], port=cfg["port"], user=cfg["user"],
+                               password=rows.get("smtp_pass", ""),
+                               from_addr=cfg["from_addr"], to=payload.to,
+                               subject="AgentOS SMTP 测试",
+                               body="这是一封来自 AgentOS V3.1 的 SMTP 连通性测试邮件。",
+                               secure=cfg["secure"])
+        return {"ok": True, "message_id": mid, "to": payload.to}
+    except Exception as exc:                       # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:500]}
+
+
+# ------------------------------------------------------------------ v3.0 MCP 工具扩展
+class McpServerIn(BaseModel):
+    name: str
+    url: str = ""
+    api_key: str = ""
+    auth_header: str = "Authorization"
+    auth_scheme: str = "Bearer"
+    transport: str = "http"
+
+
+class McpPatchIn(BaseModel):
+    name: str | None = None
+    url: str | None = None
+    api_key: str | None = None
+    auth_header: str | None = None
+    auth_scheme: str | None = None
+    enabled: int | None = None
+
+
+class McpBindIn(BaseModel):
+    server_ids: list[str]
+
+
+@router.get("/mcp")
+def ui_mcp_servers(oa_ui: str | None = Depends(_token),
+                   x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
+    with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        return {"servers": mcp_mod.list_servers(conn, tid), "tenant_id": tid}
+
+
+@router.post("/mcp")
+def ui_mcp_add(payload: McpServerIn, oa_ui: str | None = Depends(_token),
+               x_tenant_id: str | None = Header(default=None)):
+    ident = _require(oa_ui)
+    if not payload.name.strip() or not payload.url.strip():
+        raise HTTPException(400, detail={"code": "NameAndUrlRequired"})
+    with get_conn() as conn:
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        row = mcp_mod.add_server(conn, name=payload.name, url=payload.url,
+                                 api_key=payload.api_key,
+                                 auth_header=payload.auth_header,
+                                 auth_scheme=payload.auth_scheme,
+                                 transport=payload.transport, tenant_id=tid, actor=ident)
+    row["api_key"] = ""
+    row["has_key"] = bool(payload.api_key)
+    return {"ok": True, "server": row}
+
+
+@router.patch("/mcp/{sid}")
+def ui_mcp_patch(sid: str, payload: McpPatchIn, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        try:
+            row = mcp_mod.update_server(conn, sid, **payload.model_dump(exclude_none=True))
+        except KeyError:
+            raise HTTPException(404, detail={"code": "McpServerNotFound"}) from None
+    row["api_key"] = ""
+    return {"ok": True, "server": row}
+
+
+@router.delete("/mcp/{sid}")
+def ui_mcp_delete(sid: str, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        mcp_mod.delete_server(conn, sid)
+    return {"ok": True}
+
+
+@router.post("/mcp/{sid}/test")
+def ui_mcp_test(sid: str, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM mcp_servers WHERE id=?", (sid,)).fetchone()
+        if row is None:
+            raise HTTPException(404, detail={"code": "McpServerNotFound"})
+        try:
+            result = mcp_mod.probe(dict(row))
+            mcp_mod.record_probe(conn, sid, result, None)
+            return {"ok": True, "tools": result["tools"], "tool_names": result["tool_names"],
+                    "server": result["server"]}
+        except Exception as exc:                    # noqa: BLE001
+            mcp_mod.record_probe(conn, sid, None, str(exc))
+            return {"ok": False, "error": str(exc)[:500]}
+
+
+@router.get("/mcp/bindings/{agent_id}")
+def ui_mcp_bindings(agent_id: str, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        mcp_mod.ensure(conn)
+        return {"agent_id": agent_id, "server_ids": mcp_mod.bindings(conn, agent_id)}
+
+
+@router.put("/mcp/bindings/{agent_id}")
+def ui_mcp_bind(agent_id: str, payload: McpBindIn, oa_ui: str | None = Depends(_token)):
+    ident = _require(oa_ui)
+    with get_conn() as conn:
+        if conn.execute("SELECT 1 FROM ai_employees WHERE id=?", (agent_id,)).fetchone() is None:
+            raise HTTPException(404, detail={"code": "EmployeeNotFound"})
+        ids = mcp_mod.set_bindings(conn, agent_id, payload.server_ids)
+        write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="settings", task_id=None,
+                    layer="system", action="mcp_bound", target=agent_id,
+                    payload={"servers": ids, "actor": ident}, response={"ok": True})
+        conn.commit()
+    return {"ok": True, "agent_id": agent_id, "server_ids": ids}
+
+
+@router.post("/mcp/seed")
+def ui_mcp_seed(oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    with get_conn() as conn:
+        mcp_mod.seed_demo(conn)
+        return {"ok": True, "servers": mcp_mod.list_servers(conn)}

@@ -52,7 +52,7 @@ def _group_title(text: str, tags: list[str]) -> str:
 
 
 def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
-          use_llm_docs: int = 0) -> dict:
+          tenant_id: str = "TENANT-HQ", use_llm_docs: int = 0) -> dict:
     """把一条需求变成**项目**（v1.5）：立项 → 研讨 → 拆解 → … → 复盘。
 
     标签只用于记录与后续选人；阶段推进由 pipeline 的模板产物与闸门驱动。
@@ -70,7 +70,7 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
     title = (text.strip().splitlines()[0][:24] if text.strip() else "新项目") or "新项目"
     proj = pipeline.create_project(conn, name=title, requirement=text,
                                    entity=entity_id, owner=CEO_ID,
-                                   use_llm_docs=use_llm_docs)
+                                   use_llm_docs=use_llm_docs, tenant_id=tenant_id)
     pid = proj["project_id"]
 
     store.add_message(conn, "C-CEO", "agent",
@@ -97,8 +97,9 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
                                   "立项书/纪要/WBS/发布清单/复盘都在项目目录。",
                                   author=CEO_TITLE)
             except Exception as exc:       # noqa: BLE001
+                from ..errors import human_error
                 store.add_message(c2, "C-CEO", "agent",
-                                  f"项目 {pid} 在第 {len(stages)} 阶段中断：{exc}",
+                                  f"项目 {pid} 已暂停：{human_error(exc)}",
                                   author=CEO_TITLE)
             c2.commit()
 

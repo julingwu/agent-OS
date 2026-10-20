@@ -13,6 +13,22 @@ from .api import verbs
 from .state_machine import IllegalStateTransition, transition
 
 
+def _all_artifact_text(conn, task_id: str) -> str:
+    rows = conn.execute(
+        """SELECT a.file_path FROM artifacts a JOIN task_runs r ON r.id=a.run_id
+           WHERE r.task_id=? AND COALESCE(a.state,'active')='active'
+           ORDER BY a.rowid""", (task_id,)).fetchall()
+    parts = []
+    for row in rows:
+        try:
+            part = pathlib.Path(row["file_path"]).read_text(encoding="utf-8", errors="replace")
+            if part:
+                parts.append(part)
+        except OSError:
+            continue
+    return chr(10).join(parts)
+
+
 def _evidence(conn, criterion_id, *, snippet, file_path, checksum):
     if not (snippet or file_path):
         return
@@ -50,12 +66,58 @@ def run(conn: sqlite3.Connection, task_id: str, ents: list[str] | str) -> dict:
         text = task_text(conn, task_id)
 
     results = []
+    # v3.2 企业红线：扫全部产物，命中即 L0 失败并直接打回，不进入人工审批。
+    try:
+        from . import redline
+        scan_text = _all_artifact_text(conn, task_id) or text or ""
+        hits = redline.check(conn, scan_text)
+        if hits:
+            terms = []
+            for h in hits:
+                terms.extend(h["terms"])
+            terms = sorted(set(terms))
+            crit = conn.execute(
+                "SELECT id FROM acceptance_criteria WHERE task_id=? AND check_ref='redline'",
+                (task_id,)).fetchone()
+            if crit:
+                conn.execute("""UPDATE acceptance_criteria SET state='failed', note=?
+                                WHERE id=?""",
+                             ("命中企业红线禁用词：" + "、".join(terms), crit["id"]))
+                criterion_id = crit["id"]
+            else:
+                criterion_id = new_id("C")
+                seq = conn.execute(
+                    "SELECT COALESCE(MAX(seq),0)+1 FROM acceptance_criteria WHERE task_id=?",
+                    (task_id,)).fetchone()[0]
+                conn.execute(
+                    """INSERT INTO acceptance_criteria
+                         (id, legal_entity_id, task_id, criterion, check_type, check_ref,
+                          is_blocking, evidence_required, is_compliance, acceptance_layer,
+                          state, note, seq)
+                       VALUES (?,?,?,?, 'rule_auto','redline',1,0,1,'L0','failed',?,?)""",
+                    (criterion_id, entity, task_id,
+                     "企业红线：禁止出现「" + "、".join(terms) + "」",
+                     "命中企业红线禁用词：" + "、".join(terms), seq))
+            results.append({"criterion_id": criterion_id, "state": "failed",
+                            "detail": "命中企业红线：" + "、".join(terms), "layer": "L0"})
+            write_audit(conn, legal_entity_id=entity, verb="acceptance_run", task_id=task_id,
+                        layer="system", action="hard_redline_blocked", target=task_id,
+                        payload={"hits": hits, "terms": terms},
+                        response={"blocked": True, "human_review": False})
+            conn.commit()
+    except Exception:                       # noqa: BLE001 - redline must not crash acceptance
+        pass
+
     for c in criteria:
         if c["check_type"] == "human_check":
             results.append({"criterion_id": c["id"], "state": c["state"],
                             "detail": "待人工", "layer": "L1"})
             continue
         if c["check_type"] == "rule_auto":
+            if c["check_ref"] == "redline":
+                results.append({"criterion_id": c["id"], "state": c["state"],
+                                "detail": c["note"], "layer": "L0"})
+                continue
             v = l0_rules.evaluate(c["check_ref"], text or "")
             state = "passed" if v["ok"] else "failed"
             conn.execute("UPDATE acceptance_criteria SET state = ?, note = ? WHERE id = ?",

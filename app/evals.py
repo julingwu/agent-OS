@@ -196,12 +196,14 @@ def run_case(conn, set_id: str, *, runner: str = "mock_acp",
     agent = conn.execute("SELECT * FROM ai_employees WHERE id=?",
                          (s["agent_id"],)).fetchone() if s["agent_id"] else None
     entity = (agent["legal_entity_id"] if agent else None) or "LE-GROUP-HQ"
+    from .tenancy import of_entity
+    tenant_id = of_entity(conn, entity)
     task_id = new_id("T")
     conn.execute(
-        """INSERT INTO tasks (id, legal_entity_id, task_type, title, state,
+        """INSERT INTO tasks (id, legal_entity_id, tenant_id, task_type, title, state,
                               owner_employee_id, pack_id)
-           VALUES (?,?, 'eval', ?, 'todo', ?, ?)""",
-        (task_id, entity, f"[Eval] {s['name']}", s["agent_id"], s["pack_id"]))
+           VALUES (?,?,?, 'eval', ?, 'todo', ?, ?)""",
+        (task_id, entity, tenant_id, f"[Eval] {s['name']}", s["agent_id"], s["pack_id"]))
     conn.commit()
 
     from .api import verbs

@@ -450,3 +450,82 @@ thinking 上），要用「本 run 已累计 usage」作为 `last_used` 起点�
 否则下一轮共识会把上一轮经验再抄一遍，经验库越滚越长。
 召回按「标签交集 ×3 + 词面 2-4 字重合 ×0.8 + 近 120 天衰减 + weight」排序；
 每条注入内容截到 400 字，默认 3 条，避免 prompt 膨胀。完整内容留在库里供 UI 查看。
+
+## §58 组织经验的人工审核（v3.0）
+
+`org_experiences.state`（pending/approved/rejected）是**唯一注入闸门**：
+`context_for()` 只查 `state='approved'`。升级时老库用 `ALTER ... DEFAULT 'approved'` 回填，
+避免上线瞬间经验全空；新沉淀在 `add()` 里显式写 `pending`。
+审核写 `experience_reviewed` 审计（reviewer/state/note），驳回原因保留给下一轮沉淀参考。
+**不要**用「自动沉淀即生效」当默认——AI 总结错一次，会污染之后所有立项。
+
+## §59 MCP 外部工具：走 ACP `session/new.mcpServers`（v3.0）
+
+DSH ACP `initialize` 只声明 `mcpCapabilities.http=true`（没有 stdio/sse），所以客户端只传
+HTTP 形态：`{type:"http", name, url, headers:[{name,value}]}`。实测 `session/new` 接受后，
+DSH 会把工具暴露成 `mcp__server_<hash>__<tool>`（本次 `mcp__server_8d629141__send_email`），
+`tool_call` 通知照常进 Trace/RBAC 闸门，无需改 runner 的工具循环。
+- 绑定是**按员工**（`agent_mcp_tools`），不是按角色模板；Run 启动时查一次并写 `mcp_attached` 审计。
+- 邮件 MCP 的 `send_email` 在未配 SMTP 时只写 `data/mail_outbox/*.eml` + `sent.jsonl`，
+  返回文本会明确写 `outbox`。**验收时必须区分「工具调用成功」与「真实投递成功」**。
+- 密钥存 SQLite（本机单用户），接口只回 `has_key`；SaaS 化前要换 KMS/Keychain。
+
+## §60 多租户预埋：先做「有 tenant_id + 请求上下文」，不是完整隔离（v3.0）
+
+`tenants` + `identities/projects/chats/mcp_servers.tenant_id` 已落库，老数据回填 `TENANT-HQ`。
+登录返回 tenant_id，前端把 `X-Tenant-Id` 加到每个请求；`_tenant_of()` 用身份自己的租户校验，
+**外来 header 直接 403**（不是 404，避免掩盖配置错误）。
+当前强制点：chats 列表/消息/发消息、projects 列表/详情、mcp 列表/新增。
+其余任务/Run/文件仍走 `legal_entity` 可见域——SaaS 前必须把 claims、后台任务、文件下载
+全部收口到 tenant，否则知道 ID 就能跨租户读。别把「预埋」说成「多租户已完成」。
+
+## §61 报错必须说人话，且卡片上要有下一步（v3.1）
+
+机器码留在 API/审计里，UI 只在边界翻译。前端 `humanize()` + `api.js` 的 `ERROR_TEXT` 双层兜底，
+覆盖 `GateNotPassed / build failed / acp_timeout / budget_exhausted_midturn / pending_review`。
+任务卡失败态给【一键重试】（同 session 新 run，不重跑整段 prompt），挂起态给【去审批】；
+项目卡的失败闸门给【复核通过】，通过后项目解冻、阶段补 done，再由【一键重试】继续剩余阶段。
+**不要**在聊天里直接抛 `str(exc)`；dispatcher 的 `human_error()` 已接管。
+
+## §62 SMTP 配置：MCP Server 每次调用读 DB，不读启动时环境（v3.1）
+
+`settings` 表存 `smtp_host/port/user/pass/from/secure`；`tools/mcp_email_server.py` 每次
+`tools/call` 现读 DB（env 仍优先，供 standalone 调试）。所以设置面板保存后无需重启 MCP。
+- 配了 SMTP 但发送失败：直接返回 `isError:true`，**绝不静默退回 outbox** 冒充已发。
+- 未配置 SMTP：才写 `data/mail_outbox/*.eml`，返回 `transport=outbox`。
+- 密码只存服务端，`GET /ui/smtp` 只回 `pass_set`；审计 `smtp_saved` 不写密码。
+- 实测：Ethereal 真实 SMTP（587/STARTTLS）发出 3 封并用 IMAP 收到；QQ/163 只要把
+  host 换成 `smtp.qq.com`/`smtp.163.com`、账号换邮箱、密码换**授权码**即可。
+- 端口 465 勾选 SSL，587 不勾（STARTTLS）；发件人一般与账号一致，否则 163/QQ 会拒。
+
+## §63 tenant 收口到 tasks / task_runs / artifacts（v3.1）
+
+新增列：`tasks.tenant_id`、`task_runs.tenant_id`、`artifacts.tenant_id`、`tool_approvals.tenant_id`。
+写入端从项目/任务/运行继承，`init_db()._backfill_tenants()` 每次启动同步（项目存在时以项目为准）。
+读取端：`/ui/tasks/{id}`、`/ui/runs/{id}/trace|kill|live`、`/ui/files*`、`/ui/approvals*`、
+`/ui/finops`、`/ui/designs/*`、`/ui/projects*` 全部按身份 tenant 过滤；跨租户一律 404。
+`legal_entities` 也补了 tenant_id，`tenant.visible_entities()` 对非 system 只返回同租户实体，
+所以签名 `/api/*` 的 entity 作用域也间接收口。**残留**：组织经验/评测集是组织级共享，未按租户切。
+
+## §64 公司红线：手工经验 + 每次 Run 强制注入（v3.1）
+
+`org_experiences.mandatory=1`：手工新建时立即 approved（董事长本人签署），
+`context_for()` 无视标签/实体召回（分数 999），`experience.red_lines()` 再由
+`dsh_adapter.execute_run()` 追加到**每个 Run 的 prompt**（含重试/评测/WBS），
+审计 `red_lines_injected`。上限 8 条、每条截 240 字，防止 prompt 膨胀。
+**不要**只靠标签召回实现红线——标签没命中就漏，红线必须无条件注入。
+
+## §60 Role Alignment（v3.2）
+岗位职责边界不是靠 RBAC 兜底，而是在 Prompt 里先“说清楚”：`app/role_alignment.py` 把角色模板 tag 与岗位/员工标题映射成 dev/frontend/backend/qa/audit/legal/architect/content/product/finance/ops/data，再在 `dsh_adapter.execute_run()` 里追加【职责边界声明】，研讨会发言也走同一份边界。  
+注意：标题含“测试开发”的人不能同时吃 dev 边界；已加去重规则，QA 只保留测试边界。Prompt 是软约束，真正的物理拦截仍在 RBAC/审批。
+
+## §61 企业红线 L0（v3.2）
+红线来自 `org_experiences` 中 `state='approved' AND mandatory=1` 的记录，`redline_terms` 是逗号分隔禁用词；`acceptance_run` 在常规判据后扫描**文本产物**，命中即新增 L0 failed 判据并直接 rejected，没有人工审批入口。  
+当前只扫描能解码为文本的产物；图片/PDF/二进制未做 OCR，红线词也不做同义词扩展（如“全网最低”不会自动匹配“全网最低价”之外的说法），需要人工维护词表。
+
+## §62 商业接单演练（v3.2）
+`tools/v32_commercial_order.py` 是真实演练脚本：四个角色各跑一次 ACP，前端写 `index.html`，后端写 `api_contract.md`，文案写 `delivery.md`，测试写 `test_report.md`，再由 MCP 邮件网关带附件走真实 SMTP。  
+它为了让演示稳定，WBS 四条和 build/test 闸门由脚本显式落库，没有复用 `execute_build` 的通用派单；但 ACP Run、产物落盘、验收判据、邮件投递都是真的。生产派单仍以 `pipeline` 的 WBS/任务生成路径为准。
+
+## §63 触发器幂等（v3.2）
+`pipeline.ensure()` 每次项目详情都会调用；原实现先 DROP 再 CREATE 触发器，并发请求会撞 `already exists` 导致 500。已改为 `CREATE TRIGGER IF NOT EXISTS`，不再每次删除重建。

@@ -46,6 +46,15 @@ MIGRATIONS = [
     ("task_runs", "usage_tokens", "ALTER TABLE task_runs ADD COLUMN usage_tokens INTEGER DEFAULT 0"),
     ("task_runs", "usage_baseline", "ALTER TABLE task_runs ADD COLUMN usage_baseline INTEGER DEFAULT 0"),
     ("identities", "employee_id", "ALTER TABLE identities ADD COLUMN employee_id TEXT"),
+    ("identities", "tenant_id", "ALTER TABLE identities ADD COLUMN tenant_id TEXT DEFAULT 'TENANT-HQ'"),
+    ("legal_entities", "tenant_id", "ALTER TABLE legal_entities ADD COLUMN tenant_id TEXT DEFAULT 'TENANT-HQ'"),
+    ("tasks", "tenant_id", "ALTER TABLE tasks ADD COLUMN tenant_id TEXT DEFAULT 'TENANT-HQ'"),
+    ("task_runs", "tenant_id", "ALTER TABLE task_runs ADD COLUMN tenant_id TEXT DEFAULT 'TENANT-HQ'"),
+    ("artifacts", "tenant_id", "ALTER TABLE artifacts ADD COLUMN tenant_id TEXT DEFAULT 'TENANT-HQ'"),
+    ("task_runs", "error", "ALTER TABLE task_runs ADD COLUMN error TEXT"),
+    ("projects", "tenant_id", "ALTER TABLE projects ADD COLUMN tenant_id TEXT DEFAULT 'TENANT-HQ'"),
+    ("projects", "veto_note", "ALTER TABLE projects ADD COLUMN veto_note TEXT"),
+    ("chats", "tenant_id", "ALTER TABLE chats ADD COLUMN tenant_id TEXT DEFAULT 'TENANT-HQ'"),
     ("task_runs", "actor_identity", "ALTER TABLE task_runs ADD COLUMN actor_identity TEXT"),
     ("task_runs", "approval_id", "ALTER TABLE task_runs ADD COLUMN approval_id TEXT"),
     ("task_runs", "prompt_text", "ALTER TABLE task_runs ADD COLUMN prompt_text TEXT"),
@@ -73,6 +82,7 @@ def init_db(path: str | None = None) -> None:
         _migrate(conn)
         conn.execute("UPDATE wecom_pushes SET created_at = CURRENT_TIMESTAMP"
                      " WHERE created_at IS NULL")
+        _backfill_tenants(conn)
         conn.commit()
     finally:
         conn.close()
@@ -89,3 +99,34 @@ def get_conn():
         raise
     finally:
         conn.close()
+
+
+def _backfill_tenants(conn: sqlite3.Connection) -> None:
+    """v3.1：把任务/运行/产物继承项目/任务的 tenant，老库零丢失。"""
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    if "tasks" in tables:
+        if "projects" in tables:
+            conn.execute("""UPDATE tasks SET tenant_id = COALESCE(
+                              (SELECT p.tenant_id FROM projects p WHERE p.id = tasks.project_id),
+                              tenant_id, 'TENANT-HQ')
+                            WHERE project_id IS NOT NULL AND EXISTS (
+                              SELECT 1 FROM projects p WHERE p.id = tasks.project_id)""")
+        conn.execute("""UPDATE tasks SET tenant_id='TENANT-HQ'
+                        WHERE COALESCE(tenant_id,'') = '' OR tenant_id IS NULL""")
+    if "task_runs" in tables:
+        if "tasks" in tables:
+            conn.execute("""UPDATE task_runs SET tenant_id = COALESCE(
+                              (SELECT t.tenant_id FROM tasks t WHERE t.id = task_runs.task_id),
+                              tenant_id, 'TENANT-HQ')
+                            WHERE EXISTS (SELECT 1 FROM tasks t WHERE t.id = task_runs.task_id)""")
+        conn.execute("""UPDATE task_runs SET tenant_id='TENANT-HQ'
+                        WHERE COALESCE(tenant_id,'') = '' OR tenant_id IS NULL""")
+    if "artifacts" in tables:
+        if "task_runs" in tables:
+            conn.execute("""UPDATE artifacts SET tenant_id = COALESCE(
+                              (SELECT r.tenant_id FROM task_runs r WHERE r.id = artifacts.run_id),
+                              tenant_id, 'TENANT-HQ')
+                            WHERE EXISTS (SELECT 1 FROM task_runs r WHERE r.id = artifacts.run_id)""")
+        conn.execute("""UPDATE artifacts SET tenant_id='TENANT-HQ'
+                        WHERE COALESCE(tenant_id,'') = '' OR tenant_id IS NULL""")

@@ -21,7 +21,7 @@ from .wecom import api as wecom_api
 from .wecom import sign_page
 from .wecom import watcher as wecom_watcher
 from .config import load_env
-from .db import init_db
+from .db import connect, init_db
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 STATIC = pathlib.Path(__file__).resolve().parent / "static"
@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
         wecom_watcher.stop()
 
 
-app = FastAPI(title="OA Agent M0", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="OA Agent M0", version="3.2.0", lifespan=lifespan)
 
 # the desktop shell (tauri://localhost) talks to 127.0.0.1:8077 with a Bearer token,
 # so no credentials are involved and a permissive origin list is safe here.

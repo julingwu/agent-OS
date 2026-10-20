@@ -15,6 +15,8 @@ v2.3 的三条关键语义：
 """
 from __future__ import annotations
 
+import sqlite3
+
 import json
 import os
 import pathlib
@@ -49,6 +51,7 @@ CREATE TABLE IF NOT EXISTS tool_approvals (
   tool TEXT NOT NULL,
   args TEXT,
   state TEXT DEFAULT 'pending',    -- pending | approved | rejected
+  tenant_id TEXT DEFAULT 'TENANT-HQ',
   reason TEXT,
   decided_by TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -60,6 +63,7 @@ CREATE TABLE IF NOT EXISTS tool_approvals (
 COLUMNS = {
     "run_id": "TEXT",
     "task_id": "TEXT",
+    "tenant_id": "TEXT DEFAULT 'TENANT-HQ'",
     "chat_id": "TEXT",
     "session_id": "TEXT",
     "resource_id": "TEXT",
@@ -92,6 +96,13 @@ def ensure(conn) -> None:
     for name, decl in COLUMNS.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE tool_approvals ADD COLUMN {name} {decl}")
+    try:
+        conn.execute("""UPDATE tool_approvals SET tenant_id = COALESCE(
+                          (SELECT t.tenant_id FROM tasks t WHERE t.id = tool_approvals.task_id),
+                          tenant_id, 'TENANT-HQ')
+                        WHERE COALESCE(tenant_id,'') = '' OR tenant_id IS NULL""")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
 
@@ -212,12 +223,14 @@ def guard_tool(conn, *, agent_id: str, tool: str, args: dict | None = None,
     if not force and tool not in HIGH_RISK:
         return {"needs_approval": False}
     aid = "AP-" + secrets.token_hex(6)
+    trow = conn.execute("SELECT tenant_id FROM tasks WHERE id=?", (task_id,)).fetchone() if task_id else None
+    ap_tenant = (trow["tenant_id"] if trow and "tenant_id" in trow.keys() else None) or "TENANT-HQ"
     conn.execute(
         """INSERT INTO tool_approvals
-             (id, agent_id, tool, args, state, reason, run_id, task_id, chat_id,
+             (id, agent_id, tool, args, state, tenant_id, reason, run_id, task_id, chat_id,
               session_id, resource_id, resume_prompt, risk, target)
-           VALUES (?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?)""",
-        (aid, agent_id, tool, json.dumps(args or {}, ensure_ascii=False), reason,
+           VALUES (?,?,?,?, 'pending', ?,?,?,?,?,?,?,?,?,?)""",
+        (aid, agent_id, tool, json.dumps(args or {}, ensure_ascii=False), ap_tenant, reason,
          run_id, task_id, chat_id, session_id, resource_id, resume_prompt, risk, target))
     conn.commit()
     write_audit(conn, legal_entity_id=entity, verb="rbac", task_id=task_id, run_id=run_id,

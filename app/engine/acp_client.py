@@ -158,8 +158,10 @@ class AcpClient:
         raise AcpError(f"timeout waiting for {method}")
 
     # ------------------------------------------------------------ protocol
-    def new_session(self, cwd: str | None = None) -> dict:
-        return self.request("session/new", {"cwd": cwd or self.cwd, "mcpServers": []}, timeout=90)
+    def new_session(self, cwd: str | None = None,
+                    mcp_servers: list[dict] | None = None) -> dict:
+        return self.request("session/new", {"cwd": cwd or self.cwd,
+                                            "mcpServers": mcp_servers or []}, timeout=90)
 
     def resume(self, session_id: str, cwd: str | None = None) -> dict:
         return self.request("session/resume", {"sessionId": session_id, "cwd": cwd or self.cwd},

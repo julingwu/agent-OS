@@ -47,20 +47,22 @@ ROLE_SCOPES = {
 
 # ------------------------------------------------------------------ identities
 def issue(conn: sqlite3.Connection, *, name: str, role: str,
-          legal_entity_id: str | None = None, employee_id: str | None = None) -> dict:
+          legal_entity_id: str | None = None, employee_id: str | None = None,
+          tenant_id: str = "TENANT-HQ") -> dict:
     if role not in ROLE_SCOPES:
         raise ValueError(f"unknown role {role!r}; expected one of {sorted(ROLE_SCOPES)}")
     ident_id = new_id("ID")
     secret = secrets.token_hex(32)
     conn.execute(
-        """INSERT INTO identities (id, name, role, legal_entity_id, employee_id, secret, scopes, state)
-           VALUES (?,?,?,?,?,?,?, 'active')""",
+        """INSERT INTO identities (id, name, role, legal_entity_id, employee_id, secret,
+                                   scopes, state, tenant_id)
+           VALUES (?,?,?,?,?,?,?, 'active', ?)""",
         (ident_id, name, role, legal_entity_id or "LE-GROUP-HQ", employee_id, secret,
-         json.dumps(sorted(ROLE_SCOPES[role]))),
+         json.dumps(sorted(ROLE_SCOPES[role])), tenant_id),
     )
     write_audit(conn, legal_entity_id=legal_entity_id or "LE-GROUP-HQ",
                 verb="identity_issued", actor="system", action="identity_issued",
-                target=ident_id, payload={"name": name, "role": role},
+                target=ident_id, payload={"name": name, "role": role, "tenant_id": tenant_id},
                 response={"state": "active"})
     return {"id": ident_id, "name": name, "role": role, "secret": secret}
 

@@ -103,6 +103,10 @@ def test_experience_capture_and_injection(conn, monkeypatch):
                        tags=["dev", "记账"], source_type="task", source_id="T-old",
                        task_id=None)
     assert e["id"].startswith("EXP")
+    assert e["state"] == "pending"
+    ctx = experience.context_for(conn, "开发一个记账小程序，要求金额精确", record=False)
+    assert ctx["count"] == 0          # 人工批准前绝不注入
+    experience.review(conn, e["id"], "approve", reviewer="ID-test", note="判据合理")
     ctx = experience.context_for(conn, "开发一个记账小程序，要求金额精确", record=False)
     assert ctx["count"] >= 1
     assert "金额精度" in ctx["text"]

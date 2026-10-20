@@ -297,7 +297,8 @@ def account(token: str | None = Auth):
 # --------------------------------------------------------------- 文件库
 
 @router.get("/files")
-def files(token: str | None = Auth, limit: int = 100, include_legacy: int = 0):
+def files(token: str | None = Auth, limit: int = 100, include_legacy: int = 0,
+          x_tenant_id: str | None = Header(default=None)):
     """文件库。默认只列**当前工作区**（LOCALAPPDATA 下的 workspace）的产物；
     旧仓库工作区仅作历史归档，需要时传 include_legacy=1。"""
     _require(token)
@@ -310,13 +311,15 @@ def files(token: str | None = Auth, limit: int = 100, include_legacy: int = 0):
         where += " AND a.file_path LIKE ?"
         args.append(like)
     with get_conn() as conn:
+        from .api import _tenant_of
+        tid = _tenant_of(conn, _require(token), x_tenant_id)
         rows = conn.execute(
             f"""SELECT a.id, a.file_path, a.bytes, a.created_at, r.task_id, t.title,
-                       t.legal_entity_id
+                       t.legal_entity_id, t.tenant_id
                 FROM artifacts a JOIN task_runs r ON r.id=a.run_id
                 JOIN tasks t ON t.id=r.task_id
-                WHERE {where}
-                ORDER BY a.created_at DESC LIMIT ?""", (*args, limit)).fetchall()
+                WHERE {where} AND COALESCE(t.tenant_id,'TENANT-HQ')=?
+                ORDER BY a.created_at DESC LIMIT ?""", (*args, tid, limit)).fetchall()
     out, seen = [], set()
     for r in rows:
         p = pathlib.Path(r["file_path"])
@@ -330,11 +333,18 @@ def files(token: str | None = Auth, limit: int = 100, include_legacy: int = 0):
 
 
 @router.get("/files/{artifact_id}/download")
-def download(artifact_id: str, token: str | None = Auth):
-    _require(token)
+def download(artifact_id: str, token: str | None = Auth,
+             x_tenant_id: str | None = Header(default=None)):
+    ident = _require(token)
     from fastapi.responses import FileResponse
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM artifacts WHERE id=?", (artifact_id,)).fetchone()
+        from .api import _tenant_of
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        row = conn.execute(
+            """SELECT a.* FROM artifacts a JOIN task_runs r ON r.id=a.run_id
+               JOIN tasks t ON t.id=r.task_id
+               WHERE a.id=? AND COALESCE(t.tenant_id,'TENANT-HQ')=?""",
+            (artifact_id, tid)).fetchone()
     if row is None or not pathlib.Path(row["file_path"]).exists():
         raise HTTPException(404, detail={"code": "FileNotFound"})
     return FileResponse(row["file_path"], filename=pathlib.Path(row["file_path"]).name)
@@ -355,11 +365,18 @@ PREVIEW_CSP = ("sandbox allow-scripts allow-popups; "
 
 
 @router.get("/files/{artifact_id}/preview")
-def preview(artifact_id: str, token: str | None = Auth):
-    _require(token)
+def preview(artifact_id: str, token: str | None = Auth,
+            x_tenant_id: str | None = Header(default=None)):
+    ident = _require(token)
     from fastapi.responses import FileResponse
     with get_conn() as conn:
-        row = conn.execute("SELECT * FROM artifacts WHERE id=?", (artifact_id,)).fetchone()
+        from .api import _tenant_of
+        tid = _tenant_of(conn, ident, x_tenant_id)
+        row = conn.execute(
+            """SELECT a.* FROM artifacts a JOIN task_runs r ON r.id=a.run_id
+               JOIN tasks t ON t.id=r.task_id
+               WHERE a.id=? AND COALESCE(t.tenant_id,'TENANT-HQ')=?""",
+            (artifact_id, tid)).fetchone()
     if row is None:
         raise HTTPException(404, detail={"code": "FileNotFound"})
     path = pathlib.Path(row["file_path"])
@@ -371,9 +388,19 @@ def preview(artifact_id: str, token: str | None = Auth):
 
 
 @router.delete("/files/{artifact_id}")
-def delete_file(artifact_id: str, token: str | None = Auth):
+def delete_file(artifact_id: str, token: str | None = Auth,
+                x_tenant_id: str | None = Header(default=None)):
     who = _require(token)
     with get_conn() as conn:
+        from .api import _tenant_of
+        tid = _tenant_of(conn, who, x_tenant_id)
+        row = conn.execute(
+            """SELECT a.id FROM artifacts a JOIN task_runs r ON r.id=a.run_id
+               JOIN tasks t ON t.id=r.task_id
+               WHERE a.id=? AND COALESCE(t.tenant_id,'TENANT-HQ')=?""",
+            (artifact_id, tid)).fetchone()
+        if row is None:
+            raise HTTPException(404, detail={"code": "FileNotFound"})
         conn.execute("UPDATE artifacts SET state='deleted' WHERE id=?", (artifact_id,))
         write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="admin", action="file_deleted",
                     target=artifact_id, layer="system", payload={}, response={"by": who})

@@ -16,7 +16,7 @@
 |---|
 | <img src="docs/screenshots/experience.png" width="620"> |
 
-> 截图取自 v2.4.0 桌面端（Tauri 壳 + 本地 FastAPI 底座），数据为演示用。
+> 截图取自 v2.4.0 桌面端（Tauri 壳 + 本地 FastAPI 底座），数据为演示用；当前代码已到 v3.2（职责边界注入、企业红线 L0、真实商业单交付，见 `docs/V3.2.0_验收报告.md`）。
 
 ## 快速开始
 

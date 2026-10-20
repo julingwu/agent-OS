@@ -42,7 +42,11 @@ def visible_entities(conn: sqlite3.Connection, ident: dict | None) -> list[str]:
     role = (ident or {}).get("role")
     if role == "system":
         return [r["id"] for r in conn.execute("SELECT id FROM legal_entities ORDER BY id")]
+    own_tenant = (ident or {}).get("tenant_id") or "TENANT-HQ"
     if role != "ceo":
+        row = conn.execute("SELECT tenant_id FROM legal_entities WHERE id=?", (own,)).fetchone()
+        if row and (row["tenant_id"] or "TENANT-HQ") != own_tenant:
+            return []
         return [own]
     row = conn.execute("SELECT governance_mode FROM legal_entities WHERE id = ?", (own,)).fetchone()
     if row is None or row["governance_mode"] != "group_direct":
@@ -54,7 +58,10 @@ def visible_entities(conn: sqlite3.Connection, ident: dict | None) -> list[str]:
             "SELECT id FROM legal_entities WHERE parent_entity_id = ?", (parent,))]
         out.extend(kids)
         frontier.extend(kids)
-    return out
+    allowed = [r["id"] for r in conn.execute(
+        "SELECT id FROM legal_entities WHERE COALESCE(tenant_id,'TENANT-HQ')=?",
+        (own_tenant,))]
+    return [e for e in out if e in allowed]
 
 
 def _in(column: str, values: list[str]) -> tuple[str, list[str]]:

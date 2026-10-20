@@ -57,7 +57,9 @@ def workshop_statement(pid: str, requirement: str, role: str, title: str) -> dic
   "risk": "一条具体风险（含触发条件与后果）",
   "stance": "同意" 或 "有条件同意" 或 "反对"}}
 要求：质询要具体到能被回答，风险要能被验证。""",
-        system="你是严格的评审专家，不说客套话。", max_tokens=300, temperature=0.6)
+        system=("你是严格的评审专家，不说客套话。" + chr(10)
+                + __import__("app.role_alignment", fromlist=["boundary_for"]).boundary_for([role])),
+        max_tokens=300, temperature=0.6)
     if not raw:
         return None
     try:

@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS org_experiences (
   legal_entity_id TEXT DEFAULT 'LE-GROUP-HQ',
   weight REAL DEFAULT 1.0,
   uses INTEGER DEFAULT 0,
+  mandatory INTEGER DEFAULT 0,          -- 1=公司红线，所有 Agent 强制注入
+  redline_terms TEXT,                   -- 逗号分隔的禁用词（L0 硬拦截）
+  state TEXT NOT NULL DEFAULT 'pending',   -- pending | approved | rejected
+  reviewed_by TEXT,
+  reviewed_at TIMESTAMP,
+  review_note TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_exp_kind ON org_experiences(kind);
@@ -41,6 +47,22 @@ KIND_LABEL = {"rejection": "驳回经验", "consensus": "共识结论", "decisio
 
 def ensure(conn) -> None:
     conn.executescript(DDL)
+    # v3.0：老库补审核状态。已有经验一律视为「已批准」，否则升级后注入会突然全空；
+    # 新沉淀由 add() 显式写 pending。
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(org_experiences)")}
+    if "state" not in cols:
+        conn.execute("ALTER TABLE org_experiences ADD COLUMN state TEXT NOT NULL DEFAULT 'approved'")
+    if "reviewed_by" not in cols:
+        conn.execute("ALTER TABLE org_experiences ADD COLUMN reviewed_by TEXT")
+    if "reviewed_at" not in cols:
+        conn.execute("ALTER TABLE org_experiences ADD COLUMN reviewed_at TIMESTAMP")
+    if "review_note" not in cols:
+        conn.execute("ALTER TABLE org_experiences ADD COLUMN review_note TEXT")
+    if "mandatory" not in cols:
+        conn.execute("ALTER TABLE org_experiences ADD COLUMN mandatory INTEGER DEFAULT 0")
+    if "redline_terms" not in cols:
+        conn.execute("ALTER TABLE org_experiences ADD COLUMN redline_terms TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_state ON org_experiences(state)")
     conn.commit()
 
 
@@ -61,7 +83,8 @@ def _tags(text: str) -> list[str]:
 def add(conn, *, kind: str, title: str, content: str, tags: list[str] | None = None,
         source_type: str = "", source_id: str = "", project_id: str | None = None,
         task_id: str | None = None, entity: str = "LE-GROUP-HQ",
-        weight: float = 1.0) -> dict:
+        weight: float = 1.0, mandatory: bool = False,
+        redline_terms: str | list[str] | None = None) -> dict:
     ensure(conn)
     existing = conn.execute(
         """SELECT * FROM org_experiences WHERE kind=? AND source_id=? AND title=?
@@ -70,17 +93,21 @@ def add(conn, *, kind: str, title: str, content: str, tags: list[str] | None = N
         return dict(existing)
     eid = new_id("EXP")
     tags = tags if tags is not None else _tags(title + " " + content)
+    if isinstance(redline_terms, list):
+        redline_terms = ",".join(redline_terms)
+    redline_terms = (redline_terms or "").strip()
     conn.execute(
         """INSERT INTO org_experiences
              (id, kind, title, content, tags, source_type, source_id, project_id,
-              task_id, legal_entity_id, weight)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+              task_id, legal_entity_id, weight, mandatory, redline_terms, state)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (eid, kind, title[:160], content[:4000], ",".join(tags), source_type, source_id,
-         project_id, task_id, entity, weight))
+         project_id, task_id, entity, weight, 1 if mandatory else 0, redline_terms,
+         "approved" if mandatory else "pending"))
     write_audit(conn, legal_entity_id=entity, verb="memory_write", task_id=task_id,
                 layer="system", action="experience_added", target=eid,
                 payload={"kind": kind, "tags": tags, "source": source_id,
-                         "title": title[:120]},
+                         "title": title[:120], "mandatory": bool(mandatory)},
                 response={"ok": True})
     conn.commit()
     return dict(conn.execute("SELECT * FROM org_experiences WHERE id=?", (eid,)).fetchone())
@@ -151,11 +178,15 @@ def context_for(conn, text: str, *, entity: str | None = None, limit: int = 3,
     tags = set(_tags(text))
     grams = _grams(text)
     rows = conn.execute(
-        """SELECT * FROM org_experiences WHERE weight > 0
-           ORDER BY rowid DESC LIMIT 300""").fetchall()
+        """SELECT * FROM org_experiences WHERE state='approved'
+           AND (weight > 0 OR mandatory=1)
+           ORDER BY mandatory DESC, rowid DESC LIMIT 300""").fetchall()
     scored = []
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     for row in rows:
+        if row["mandatory"]:
+            scored.append((999.0, row))
+            continue
         if entity and row["legal_entity_id"] not in (entity, "LE-GROUP-HQ"):
             continue
         row_tags = set((row["tags"] or "").split(",")) - {""}
@@ -193,21 +224,62 @@ def context_for(conn, text: str, *, entity: str | None = None, limit: int = 3,
             "count": len(picked), "tags": sorted(tags)}
 
 
-def list_all(conn, *, kind: str | None = None, limit: int = 100) -> list[dict]:
+def red_lines(conn) -> list[dict]:
+    """公司红线：已批准且 mandatory=1，所有 Run 强制注入。"""
     ensure(conn)
+    return [dict(r) for r in conn.execute(
+        """SELECT id,title,content FROM org_experiences
+           WHERE state='approved' AND mandatory=1
+           ORDER BY rowid DESC LIMIT 8""").fetchall()]
+
+
+def list_all(conn, *, kind: str | None = None, state: str | None = None,
+             limit: int = 100) -> list[dict]:
+    ensure(conn)
+    where, args = [], []
     if kind:
-        rows = conn.execute("SELECT * FROM org_experiences WHERE kind=?"
-                            " ORDER BY rowid DESC LIMIT ?", (kind, limit)).fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM org_experiences ORDER BY rowid DESC LIMIT ?",
-                            (limit,)).fetchall()
-    return [dict(r) for r in rows]
+        where.append("kind=?"); args.append(kind)
+    if state:
+        where.append("state=?"); args.append(state)
+    sql = "SELECT * FROM org_experiences"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY rowid DESC LIMIT ?"
+    args.append(limit)
+    return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
+def review(conn, exp_id: str, action: str, *, reviewer: str,
+           note: str | None = None) -> dict:
+    """Human gate: pending -> approved / rejected. Only approved is injectable."""
+    ensure(conn)
+    if action not in ("approve", "reject"):
+        raise ValueError("action must be approve|reject")
+    row = conn.execute("SELECT * FROM org_experiences WHERE id=?", (exp_id,)).fetchone()
+    if row is None:
+        raise KeyError(exp_id)
+    state = "approved" if action == "approve" else "rejected"
+    conn.execute("""UPDATE org_experiences
+                    SET state=?, reviewed_by=?, reviewed_at=CURRENT_TIMESTAMP, review_note=?
+                    WHERE id=?""", (state, reviewer, (note or "")[:500], exp_id))
+    write_audit(conn, legal_entity_id=row["legal_entity_id"] or "LE-GROUP-HQ",
+                verb="memory_write", task_id=row["task_id"], layer="system",
+                action="experience_reviewed", target=exp_id,
+                payload={"state": state, "note": (note or "")[:200], "reviewer": reviewer},
+                response={"ok": True})
+    conn.commit()
+    return dict(conn.execute("SELECT * FROM org_experiences WHERE id=?", (exp_id,)).fetchone())
 
 
 def stats(conn) -> dict:
     ensure(conn)
     by_kind = {r["kind"]: r["n"] for r in conn.execute(
         "SELECT kind, COUNT(*) AS n FROM org_experiences GROUP BY kind")}
+    by_state = {r["state"]: r["n"] for r in conn.execute(
+        "SELECT state, COUNT(*) AS n FROM org_experiences GROUP BY state")}
+    mandatory = conn.execute(
+        "SELECT COUNT(*) FROM org_experiences WHERE mandatory=1 AND state='approved'"
+    ).fetchone()[0]
     total = sum(by_kind.values())
     layers = {"preferences": 0, "project_memories": 0, "org_experiences": total}
     try:
@@ -220,4 +292,5 @@ def stats(conn) -> dict:
             "SELECT COUNT(*) FROM memory_entries").fetchone()[0]
     except sqlite3.OperationalError:
         pass
-    return {"total": total, "by_kind": by_kind, "layers": layers}
+    return {"total": total, "by_kind": by_kind, "by_state": by_state,
+            "mandatory": mandatory, "layers": layers}

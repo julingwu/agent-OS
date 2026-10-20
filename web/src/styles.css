@@ -707,3 +707,43 @@ input, textarea, select { font-family: inherit; }
 .exp-tags { display: flex; gap: 5px; flex-wrap: wrap; }
 .eval-set .btn, .eval-batch .btn { flex: none; white-space: nowrap; }
 .fin-kpi b { line-height: 1.25; }
+
+/* v3.0 经验人工审核 */
+.exp-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.exp-toolbar h5 { margin: 0; }
+.chip-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
+  border-radius: 999px; padding: 4px 11px; font-size: 12px; cursor: pointer; }
+.chip-btn:hover { color: var(--text); border-color: #3a4c78; }
+.chip-btn.on { background: rgba(59,130,246,.16); color: #93c5fd; border-color: rgba(59,130,246,.55); }
+.exp-pending { border-left: 2px solid #d97706; background: rgba(180,83,9,.06); }
+.exp-actions, .exp-reject { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.exp-reject input { flex: 1; min-width: 160px; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+.exp-review-note { margin-top: 7px; opacity: .85; }
+
+/* v3.0 设置分段 + MCP */
+.seg { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--border);
+  border-radius: 10px; margin-bottom: 6px; }
+.seg-btn { background: transparent; border: 0; color: var(--muted); padding: 6px 14px;
+  border-radius: 8px; font-size: 13px; cursor: pointer; }
+.seg-btn.on { background: rgba(59,130,246,.18); color: #bfdbfe; }
+.mcp-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+  margin: 10px 0; background: rgba(255,255,255,.015); }
+.mcp-card.off { opacity: .55; }
+.mcp-head { display: flex; align-items: center; gap: 8px; }
+.mcp-url { color: var(--muted); margin: 6px 0; word-break: break-all; }
+.mcp-err { color: #fca5a5; margin-top: 6px; }
+.mcp-note { margin-top: 10px; }
+.mcp-pick { display: flex; align-items: center; gap: 8px; padding: 7px 0;
+  border-bottom: 1px dashed var(--border); }
+.mcp-pick .role { color: var(--muted); font-size: 12px; margin-left: auto; }
+.panel .row .btn { white-space: nowrap; }
+
+/* v3.1 人话报错 + 快捷动作 */
+.errbox { margin: 10px 0; padding: 10px 12px; border-radius: 10px;
+  border: 1px solid rgba(185,28,28,.45); background: rgba(127,29,29,.18);
+  color: #fecaca; font-size: 13px; line-height: 1.55; }
+.errbox.warn-box { border-color: rgba(217,119,6,.5); background: rgba(120,53,15,.18); color: #fde68a; }
+.gate-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.gate-row span { flex: 1; }
+.warn-text { color: #fca5a5; }

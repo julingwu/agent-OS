@@ -251,7 +251,7 @@ def keyword_groups(text: str) -> list[list[str]]:
 
 
 def generate(conn: sqlite3.Connection, text: str, legal_entity_id: str = "LE-GROUP-HQ",
-             pack_id: str | None = None) -> dict:
+             pack_id: str | None = None, tenant_id: str = "TENANT-HQ") -> dict:
     text = (text or "").strip()
     if not text:
         raise ValueError("text is empty")
@@ -285,9 +285,9 @@ def generate(conn: sqlite3.Connection, text: str, legal_entity_id: str = "LE-GRO
             {"n": 2, "groups": keyword_groups(text)}, ensure_ascii=False)
     task_id = new_id("T")
     conn.execute(
-        """INSERT INTO tasks (id, legal_entity_id, task_type, title, state, pack_id)
-           VALUES (?,?,?,?, 'todo', ?)""",
-        (task_id, legal_entity_id, ttype, text[:120], pack),
+        """INSERT INTO tasks (id, legal_entity_id, tenant_id, task_type, title, state, pack_id)
+           VALUES (?,?,?,?,?, 'todo', ?)""",
+        (task_id, legal_entity_id, tenant_id, ttype, text[:120], pack),
     )
     created = []
     for seq, tpl in enumerate(template, start=1):

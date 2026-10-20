@@ -206,12 +206,13 @@ def retry_task(task_id: str, req: RetryIn, _ident: dict = Depends(require("task:
             " AND legal_entity_id = ?", (task_id, t["legal_entity_id"])).fetchone()[0] + 1
         runner = (req.runner or os.environ.get("RUNNER") or "mock").lower()
         run_id = new_id("RUN")
+        retry_tenant = t["tenant_id"] if "tenant_id" in t.keys() else "TENANT-HQ"
         conn.execute(
-            """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state, runner,
-                                     session_id, actor_identity)
-               VALUES (?,?,?,?, 'spawned', ?, ?, ?)""",
-            (run_id, task_id, run_seq, t["legal_entity_id"], runner, session_id,
-             _ident["id"]))
+            """INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, tenant_id,
+                                     state, runner, session_id, actor_identity)
+               VALUES (?,?,?,?,?, 'spawned', ?, ?, ?)""",
+            (run_id, task_id, run_seq, t["legal_entity_id"], retry_tenant or "TENANT-HQ",
+             runner, session_id, _ident["id"]))
         transition(conn, task_id, "retry", actor="reviewer",
                    payload={"run_seq": run_seq, "resumed": bool(session_id)})
         # A retry is a new submission: every non-na criterion goes back to pending,

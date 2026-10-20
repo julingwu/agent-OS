@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { marked } from "marked";
-import { api, ping } from "./api.js";
+import { api, auth, ping } from "./api.js";
 import "./styles.css";
 
 // Model output is untrusted. marked drops raw HTML (renderer.html = "") and
@@ -136,6 +136,44 @@ function Ring({ pct, used, cap }) {
 /* ------------------------------------------------------------- task card */
 const STATE_LABEL = { passed: "通过", failed: "不过", pending: "待定", na: "未启用" };
 const STATE_CLASS = { passed: "var(--ok)", failed: "var(--bad)", pending: "var(--warn)", na: "var(--muted)" };
+const TASK_STATE = { todo: "待开始", assigned: "已派发", in_progress: "执行中",
+  pending_review: "待验收", completed: "已完成", failed: "执行失败",
+  rejected: "已驳回", cancelled: "已取消" };
+const STAGE_STATE = { pending: "未开始", active: "进行中", done: "已完成", blocked: "已挂起" };
+const RUN_STATE = { spawned: "已排程", running: "执行中", succeeded: "已完成",
+  failed: "失败", awaiting_approval: "待审批", timeout: "超时", cancelled: "已取消",
+  pending_review: "待验收", completed: "已完成", done: "已完成",
+  ok: "成功", error: "失败", denied: "预算拒绝" };
+const HUMAN_ERRORS = [
+  ["GateNotPassed", "审批未通过：项目已挂起，等待您的决策"],
+  ["StageSkipped", "阶段顺序未满足：请先完成上一阶段"],
+  ["build failed", "代码构建失败：请查看执行日志进行修复"],
+  ["budget_exhausted_midturn", "预算不足：本次执行已中止，可以一键重试"],
+  ["acp_timeout", "执行超时：任务已中止，可以一键重试"],
+  ["acp_error", "执行异常：请查看执行日志，或一键重试"],
+  ["tool_policy_violation", "权限校验未通过：操作已被安全策略拦截"],
+  ["run_failed", "执行失败"],
+  ["验收：failed", "验收：未通过"],
+  ["验收：rejected", "验收：已驳回"],
+  ["验收：pending", "验收：待人工"],
+  ["state=failed", "状态：执行失败"],
+  ["state=rejected", "状态：已驳回"],
+  ["state=pending_review", "状态：待验收"],
+  ["pending_review", "待验收"],
+  ["NotRetryable", "当前状态不能重试"],
+  ["TaskNotFound", "任务不存在或无权访问"],
+  ["ProjectNotFound", "项目不存在或无权访问"],
+  ["RunNotFound", "运行记录不存在或无权访问"],
+  ["TenantMismatch", "租户上下文不匹配，请重新登录"],
+];
+function humanize(value) {
+  let text = String(value ?? "");
+  for (const [code, label] of HUMAN_ERRORS) {
+    if (text.includes(code)) text = text.split(code).join(label);
+  }
+  text = text.replace(/在第 \d+ 阶段中断：/g, "已暂停：");
+  return text.replace(/(\d+)\s*task\(s\)/g, "$1 个任务");
+}
 
 function TaskCard({ taskId, meta, onAct }) {
   const [view, setView] = useState(null);
@@ -172,17 +210,42 @@ function TaskCard({ taskId, meta, onAct }) {
     } finally { setBusy(false); }
   }
 
+  async function retry() {
+    setBusy(true);
+    try {
+      await api.retryTask(taskId);
+      const v = await api.task(taskId);
+      setView(v);
+      onAct && onAct();
+    } finally { setBusy(false); }
+  }
+
   const running = run && ["spawned", "running"].includes(run.state);
+  const parked = run && run.state === "awaiting_approval";
+  const retryable = ["failed", "rejected"].includes(state);
 
   return (
     <div className="card">
       <h4>
-        任务 {taskId} · {state}
+        任务 {taskId}{view?.task?.title ? ` · ${view.task.title}` : ""} · {TASK_STATE[state] || state}
         {running && <span style={{ marginLeft: 8 }}><span className="spin" /> {run.usage_tokens || 0} tok</span>}
         {!running && run && <span style={{ marginLeft: 8, color: "var(--muted)" }}>
           {run.usage_tokens || 0} tokens
         </span>}
       </h4>
+
+      {state === "failed" && (
+        <div className="errbox">⚠️ {humanize(run?.error || "执行失败：请查看执行日志，或一键重试")}</div>
+      )}
+      {parked && (
+        <div className="errbox warn-box">
+          ⏸ 审批未通过：任务已挂起。批准后会从断点继续，不会重跑前面的对话。
+          <button className="btn primary" style={{ marginLeft: 10 }}
+                  onClick={() => window.dispatchEvent(new CustomEvent("oa-tab", { detail: "approvals" }))}>
+            去审批
+          </button>
+        </div>
+      )}
 
       {(thinking || tools.length > 0) && (
         <details className="think" open={running}>
@@ -222,9 +285,22 @@ function TaskCard({ taskId, meta, onAct }) {
 
       {!running && (
         <div className="actions">
-          <button className="btn primary" disabled={busy} onClick={() => act("accept")}>验收通过</button>
-          <button className="btn" disabled={busy} onClick={() => act("reject")}>驳回</button>
-          <button className="btn ghost" disabled={busy} onClick={() => act("abort")}>中止</button>
+          {state === "pending_review" && (
+            <>
+              <button className="btn primary" disabled={busy} onClick={() => act("accept")}>验收通过</button>
+              <button className="btn" disabled={busy} onClick={() => act("reject")}>驳回</button>
+            </>
+          )}
+          {retryable && (
+            <button className="btn primary" disabled={busy} onClick={retry}>↻ 一键重试</button>
+          )}
+          {parked && (
+            <button className="btn" onClick={() => window.dispatchEvent(
+              new CustomEvent("oa-tab", { detail: "approvals" }))}>去审批</button>
+          )}
+          {["assigned", "in_progress", "pending_review"].includes(state) && (
+            <button className="btn ghost" disabled={busy} onClick={() => act("abort")}>中止</button>
+          )}
         </div>
       )}
     </div>
@@ -342,7 +418,7 @@ function ChatView({ chat, onSent, onMore, onHelp, onAbout }) {
                       )}
                     </>
                   ) : (
-                    <Markdown text={m.content} />
+                    <Markdown text={humanize(m.content)} />
                   )}
                 </div>
               </div>
@@ -792,7 +868,27 @@ function EmployeePanel({ emp, onClose, onChanged, onOpenChat }) {
   const [note, setNote] = useState("");
   const [askAuth, setAskAuth] = useState(false);
   const [authText, setAuthText] = useState("");
+  const [mcpServers, setMcpServers] = useState([]);
+  const [mcpBound, setMcpBound] = useState([]);
+  const [mcpNote, setMcpNote] = useState("");
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  useEffect(() => {
+    api.mcpServers().then((r) => setMcpServers(r.servers || [])).catch(() => {});
+    api.mcpBindings(emp.id).then((r) => setMcpBound(r.server_ids || [])).catch(() => {});
+  }, [emp.id]);
+
+  function toggleMcp(id) {
+    setMcpBound((xs) => xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]);
+  }
+
+  async function saveMcp() {
+    setMcpNote("");
+    try {
+      await api.bindMcp(emp.id, mcpBound);
+      setMcpNote("工具绑定已保存，下次运行生效");
+    } catch (e) { setMcpNote(e.message); }
+  }
 
   async function save() {
     setBusy(true); setNote("");
@@ -834,7 +930,7 @@ function EmployeePanel({ emp, onClose, onChanged, onOpenChat }) {
       <div className="row">
         <span>运行预设</span>
         <span className={cls("pill", emp.preset === "cordis" ? "warn" : "")}>
-          {emp.preset || "standard"}
+          {emp.preset === "cordis" ? "创造模式" : "标准模式"}
         </span>
         <div className="spacer" />
         <button className="btn" onClick={async () => {
@@ -866,6 +962,25 @@ function EmployeePanel({ emp, onClose, onChanged, onOpenChat }) {
         <div className="field"><label>Base URL</label>
           <input value={form.api_base} onChange={set("api_base")} placeholder="https://api.deepseek.com/v1" /></div>
       </div>
+      <div className="section-title">外部工具（MCP）</div>
+      {mcpServers.length === 0 && (
+        <div className="hint">还没有 MCP Server。去「设置 → 工具扩展」添加一个 HTTP MCP 地址。</div>
+      )}
+      {mcpServers.map((s) => (
+        <label key={s.id} className="pick mcp-pick">
+          <input type="checkbox" checked={mcpBound.includes(s.id)}
+                 onChange={() => toggleMcp(s.id)} />
+          <span>{s.name}</span>
+          <span className="role">{s.last_status || "未测试"} · {(s.tools || []).map((t) => t.name).join(", ") || "未发现工具"}</span>
+        </label>
+      ))}
+      {mcpServers.length > 0 && (
+        <div className="row">
+          <span className="hint">{mcpNote || "绑定的工具会随该员工的下一次 Run 注入 ACP 会话"}</span>
+          <div className="spacer" />
+          <button className="btn" onClick={saveMcp}>保存工具绑定</button>
+        </div>
+      )}
       {note && <div className="hint">{note}</div>}
       {askAuth && (
         <div className="authbox">
@@ -1419,7 +1534,7 @@ function EvalsView() {
                   </div>
                   <span className="spacer" />
                   <span className={cls("pill", b.state === "done" ? "ok" : b.state === "failed" ? "bad" : "warn")}>
-                    {b.state}
+                    {RUN_STATE[b.state] || b.state}
                   </span>
                   <b className="money">{b.avg_score ? b.avg_score.toFixed(1) : "—"}</b>
                 </div>
@@ -1440,7 +1555,7 @@ function EvalsView() {
                       <td className="mono">{r.judge_score != null ? r.judge_score.toFixed(1) : "—"}</td>
                       <td><div className="score-bar"><i style={{ width: Math.min(100, r.score) + "%" }} /></div>
                         <span className="mono">{r.score?.toFixed(1)}</span></td>
-                      <td><span className={cls("pill", r.state === "ok" ? "ok" : "bad")}>{r.state}</span></td>
+                      <td><span className={cls("pill", r.state === "ok" ? "ok" : "bad")}>{RUN_STATE[r.state] || r.state}</span></td>
                     </tr>
                   ))}
                   {(!detail.results || detail.results.length === 0) && (
@@ -1459,15 +1574,85 @@ function EvalsView() {
 
 /* ------------------------------------------------------- 组织经验（v2.4） */
 const EXP_KIND = { rejection: "驳回经验", consensus: "共识结论", decision: "决策否决" };
+const EXP_STATE = { pending: "待审核", approved: "已批准", rejected: "已驳回" };
+
+function ExperienceEditor({ onClose, onSaved }) {
+  const [form, setForm] = useState({
+    title: "", content: "", tags: "", kind: "decision", mandatory: true,
+    redline_terms: "最好,最佳,最强,最低价,第一品牌,销量第一,100%,绝对,永久,根治,无副作用",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function save() {
+    if (!form.title.trim() || !form.content.trim()) { setErr("标题和内容都要填"); return; }
+    setBusy(true); setErr("");
+    try {
+      await api.createExperience({ ...form, title: form.title.trim(), content: form.content.trim() });
+      await onSaved();
+      onClose();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  }
+  return (
+    <div className="mask" onClick={onClose}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+        <h3>手动新建经验</h3>
+        <div className="hint">
+          手写经验默认进入待审核；勾选「公司红线」则立即批准，并在每一次 Agent Run 中强制注入。
+        </div>
+        <div className="field"><label>标题</label>
+          <input autoFocus value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
+                 placeholder="如：不得向客户承诺未上线功能" /></div>
+        <div className="field"><label>内容（红线会截取前 240 字注入 prompt）</label>
+          <textarea rows="5" value={form.content}
+                    onChange={(e) => setForm({ ...form, content: e.target.value })}
+                    placeholder="写清楚禁止什么、必须做什么、例外情况…" /></div>
+        <div className="grid2">
+          <div className="field"><label>类型</label>
+            <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+              <option value="decision">决策红线</option>
+              <option value="rejection">驳回经验</option>
+              <option value="consensus">共识结论</option>
+            </select></div>
+          <div className="field"><label>标签（逗号分隔）</label>
+            <input value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })}
+                   placeholder="合规, 销售, 数据" /></div>
+        </div>
+        <label className="pick" style={{ padding: "8px 0" }}>
+          <input type="checkbox" checked={form.mandatory}
+                 onChange={(e) => setForm({ ...form, mandatory: e.target.checked })} />
+          <span><b>公司红线</b>（立即批准，强制注入所有 Agent；并做 L0 硬拦截）</span>
+        </label>
+        {form.mandatory && (
+          <div className="field"><label>禁用词（逗号分隔，命中即 L0 打回）</label>
+            <input value={form.redline_terms}
+                   onChange={(e) => setForm({ ...form, redline_terms: e.target.value })}
+                   placeholder="最好,最佳,第一品牌,100%,绝对" />
+          </div>
+        )}
+        {err && <div className="hint warn-text">{err}</div>}
+        <div className="actions">
+          <button className="btn primary" disabled={busy} onClick={save}>保存经验</button>
+          <button className="btn ghost" onClick={onClose}>取消</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ExperienceView() {
-  const [data, setData] = useState({ experiences: [], stats: { layers: {}, by_kind: {} } });
+  const [data, setData] = useState({ experiences: [], stats: { layers: {}, by_kind: {}, by_state: {} } });
+  const [stateFilter, setStateFilter] = useState("pending");
   const [q, setQ] = useState("再做一个小程序，要求金额计算准确、可回滚");
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [rejecting, setRejecting] = useState(null);
+  const [rejectNote, setRejectNote] = useState("");
+  const [creating, setCreating] = useState(false);
   const load = useCallback(async () => {
-    try { setData(await api.experiences()); } catch { /* ignore */ }
-  }, []);
+    try {
+      setData(await api.experiences(undefined, stateFilter === "all" ? undefined : stateFilter));
+    } catch { /* ignore */ }
+  }, [stateFilter]);
   useEffect(() => { load(); }, [load]);
 
   async function runPreview() {
@@ -1478,7 +1663,23 @@ function ExperienceView() {
     finally { setBusy(false); }
   }
 
+  async function review(id, action, note) {
+    setBusy(true);
+    try {
+      await api.reviewExperience(id, action, note);
+      setRejecting(null); setRejectNote("");
+      await load();
+    } finally { setBusy(false); }
+  }
+
   const layers = data.stats?.layers || {};
+  const byState = data.stats?.by_state || {};
+  const tabs = [
+    ["pending", "待审核", byState.pending || 0],
+    ["approved", "已批准", byState.approved || 0],
+    ["rejected", "已驳回", byState.rejected || 0],
+    ["all", "全部", data.stats?.total || 0],
+  ];
   return (
     <div className="main">
       <div className="topbar">
@@ -1486,9 +1687,10 @@ function ExperienceView() {
         <div>
           <div className="who">组织经验 · 分层记忆</div>
           <div className="sub">个人偏好 {layers.preferences || 0} · 项目记忆 {layers.project_memories || 0} ·
-            组织经验 {layers.org_experiences || 0}</div>
+            组织经验 {layers.org_experiences || 0} · 待审核 {byState.pending || 0}</div>
         </div>
         <div className="spacer" />
+        <button className="btn primary" onClick={() => setCreating(true)}>＋ 手动新建经验</button>
         <button className="btn ghost" onClick={load}>刷新</button>
       </div>
       <div className="stream">
@@ -1499,7 +1701,7 @@ function ExperienceView() {
             <div className="fin-kpi"><span>② 项目记忆</span><b>{layers.project_memories || 0}</b>
               <span className="hint">按 entity / pack 隔离</span></div>
             <div className="fin-kpi"><span>③ 组织经验</span><b>{layers.org_experiences || 0}</b>
-              <span className="hint">驳回 / 共识 / 否决</span></div>
+              <span className="hint">仅「已批准」会注入立项</span></div>
           </div>
 
           <div className="fin-card">
@@ -1516,40 +1718,82 @@ function ExperienceView() {
               <div className="exp-preview">
                 {preview.count > 0 ? (
                   <>
-                    <div className="hint">命中 {preview.count} 条 · 标签 {preview.tags.join(" / ") || "—"}</div>
+                    <div className="hint">命中 {preview.count} 条（仅已批准） · 标签 {preview.tags.join(" / ") || "—"}</div>
                     <pre>{preview.text}</pre>
                   </>
-                ) : <div className="hint">没有命中经验；立项时会跳过注入。</div>}
+                ) : <div className="hint">没有命中已批准的经验；立项时会跳过注入。</div>}
               </div>
             )}
           </div>
 
           <div className="fin-card">
-            <h5>经验库</h5>
+            <div className="exp-toolbar">
+              <h5>经验库</h5>
+              <div className="spacer" />
+              {tabs.map(([k, label, n]) => (
+                <button key={k} className={cls("chip-btn", stateFilter === k && "on")}
+                        onClick={() => setStateFilter(k)}>{label} {n}</button>
+              ))}
+            </div>
             {data.experiences.length === 0 && (
-              <div className="hint">还没有沉淀。任务被驳回、研讨会结束或决策被否决时会自动写入。</div>
+              <div className="hint">
+                {stateFilter === "pending"
+                  ? "没有待审核的经验。任务被驳回、研讨会结束或决策被否决时，会自动进入待审核队列。"
+                  : "这个状态下还没有经验。"}
+              </div>
             )}
             {data.experiences.map((e) => (
-              <div className="exp-row" key={e.id}>
+              <div className={cls("exp-row", e.state === "pending" && "exp-pending")} key={e.id}>
                 <div className="exp-head">
                   <span className={cls("pill", e.kind === "rejection" ? "bad" : e.kind === "consensus" ? "ok" : "warn")}>
                     {EXP_KIND[e.kind] || e.kind}
                   </span>
                   <b>{e.title}</b>
+                  <span className={cls("pill", e.state === "approved" ? "ok" : e.state === "rejected" ? "bad" : "warn")}>
+                    {EXP_STATE[e.state] || e.state}
+                  </span>
+                  {e.mandatory ? <span className="pill bad">公司红线</span> : null}
                   <span className="spacer" />
                   <span className="hint">用过 {e.uses} 次 · {e.created_at}</span>
                 </div>
                 <div className="exp-content">{e.content}</div>
                 <div className="exp-tags">
                   {(e.tags || "").split(",").filter(Boolean).map((t) => <span className="chip" key={t}>{t}</span>)}
+                  {e.redline_terms && <span className="chip">禁用词 {e.redline_terms}</span>}
                   {e.project_id && <span className="chip">项目 {e.project_id}</span>}
                   {e.task_id && <span className="chip">任务 {e.task_id}</span>}
                 </div>
+                {e.state !== "pending" && e.reviewed_at && (
+                  <div className="hint exp-review-note">
+                    审核：{e.reviewed_by} · {e.reviewed_at}{e.review_note ? ` · ${e.review_note}` : ""}
+                  </div>
+                )}
+                {e.state === "pending" && (
+                  rejecting === e.id ? (
+                    <div className="exp-reject">
+                      <input value={rejectNote} onChange={(ev) => setRejectNote(ev.target.value)}
+                             placeholder="驳回原因（会写进审计，帮助 AI 下次别再犯）" />
+                      <button className="btn danger" disabled={busy}
+                              onClick={() => review(e.id, "reject", rejectNote)}>确认驳回</button>
+                      <button className="btn ghost" onClick={() => { setRejecting(null); setRejectNote(""); }}>取消</button>
+                    </div>
+                  ) : (
+                    <div className="exp-actions">
+                      <span className="hint">AI 自动沉淀，需人工批准后才会注入新项目</span>
+                      <div className="spacer" />
+                      <button className="btn primary" disabled={busy}
+                              onClick={() => review(e.id, "approve")}>批准</button>
+                      <button className="btn danger" onClick={() => { setRejecting(e.id); setRejectNote(""); }}>驳回</button>
+                    </div>
+                  )
+                )}
               </div>
             ))}
           </div>
         </div>
       </div>
+      {creating && <ExperienceEditor onClose={() => setCreating(false)}
+        onSaved={async () => { await load(); setStateFilter("approved"); }} />}
     </div>
   );
 }
@@ -1610,6 +1854,167 @@ function FilesTab() {
 }
 
 /* ------------------------------------------------------------- 设置/账号 */
+function McpSettings() {
+  const [servers, setServers] = useState([]);
+  const [form, setForm] = useState({ name: "", url: "", api_key: "" });
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [smtp, setSmtp] = useState({ host: "", port: 587, user: "", from_addr: "", secure: false, pass_set: false });
+  const [smtpPass, setSmtpPass] = useState("");
+  const [smtpNote, setSmtpNote] = useState("");
+  const [smtpTo, setSmtpTo] = useState("");
+  const load = useCallback(async () => {
+    try { setServers((await api.mcpServers()).servers || []); } catch { /* ignore */ }
+    try {
+      const x = await api.smtp();
+      setSmtp(x); setSmtpTo((v) => v || x.from_addr || x.user || "");
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function saveSmtp() {
+    setSmtpNote("");
+    try {
+      const x = await api.saveSmtp({ ...smtp, password: smtpPass || undefined });
+      setSmtp(x); setSmtpPass(""); setSmtpNote("SMTP 已保存，邮件网关下一次调用立即生效");
+    } catch (e) { setSmtpNote(e.message); }
+  }
+
+  async function testSmtp() {
+    if (!smtpTo.trim()) { setSmtpNote("先填一个收件邮箱"); return; }
+    setSmtpNote("正在发送…");
+    try {
+      const r = await api.testSmtp(smtpTo.trim());
+      setSmtpNote(r.ok ? `测试邮件已发送：${r.to}` : `发送失败：${r.error}`);
+    } catch (e) { setSmtpNote(e.message); }
+  }
+
+  async function add() {
+    if (!form.name.trim() || !form.url.trim()) { setNote("名称和 URL 都要填"); return; }
+    setBusy(true); setNote("");
+    try {
+      await api.addMcp(form);
+      setForm({ name: "", url: "", api_key: "" });
+      await load();
+      setNote("已添加，点「测试连接」发现工具");
+    } catch (e) { setNote(e.message); } finally { setBusy(false); }
+  }
+
+  async function test(s) {
+    setBusy(true); setNote(`正在连接 ${s.name}…`);
+    try {
+      const r = await api.testMcp(s.id);
+      setNote(r.ok ? `${s.name}：发现 ${r.tool_names.join(", ")}` : `${s.name}：${r.error}`);
+      await load();
+    } catch (e) { setNote(e.message); } finally { setBusy(false); }
+  }
+
+  async function toggle(s) {
+    await api.patchMcp(s.id, { enabled: s.enabled ? 0 : 1 });
+    await load();
+  }
+
+  async function del(s) {
+    if (!confirm(`删除 MCP Server「${s.name}」？已绑定的员工会同时解绑。`)) return;
+    await api.deleteMcp(s.id);
+    await load();
+  }
+
+  return (
+    <>
+      <div className="section-title">已接入的 MCP Server</div>
+      {servers.length === 0 && <div className="hint">还没有。下面填一个标准 HTTP MCP 地址即可接入。</div>}
+      {servers.map((s) => (
+        <div className={cls("mcp-card", !s.enabled && "off")} key={s.id}>
+          <div className="mcp-head">
+            <b>{s.name}</b>
+            <span className={cls("pill", s.last_status === "ok" ? "ok" : s.last_status === "error" ? "bad" : "warn")}>
+              {s.last_status === "ok" ? "已连通" : s.last_status === "error" ? "连接失败" : "未测试"}
+            </span>
+            <span className="spacer" />
+            <span className="hint">绑定 {s.bound_agents || 0} 名员工</span>
+          </div>
+          <div className="mono mcp-url">{s.url}</div>
+          <div className="exp-tags">
+            {(s.tools || []).map((t) => <span className="chip" key={t.name}>{t.name}</span>)}
+            {(!s.tools || s.tools.length === 0) && <span className="hint">尚未发现工具</span>}
+          </div>
+          {s.last_error && <div className="hint mcp-err">{s.last_error}</div>}
+          <div className="row">
+            <button className="btn" disabled={busy} onClick={() => test(s)}>测试连接</button>
+            <button className="btn ghost" onClick={() => toggle(s)}>{s.enabled ? "停用" : "启用"}</button>
+            <div className="spacer" />
+            <button className="btn danger" onClick={() => del(s)}>删除</button>
+          </div>
+        </div>
+      ))}
+
+      <div className="section-title">添加 MCP Server（HTTP）</div>
+      <div className="grid2">
+        <div className="field"><label>名称</label>
+          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                 placeholder="如：邮件网关" /></div>
+        <div className="field"><label>MCP Endpoint</label>
+          <input value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })}
+                 placeholder="http://127.0.0.1:8099/mcp" /></div>
+      </div>
+      <div className="field"><label>密钥（可选，按 Bearer 发送）</label>
+        <input value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+               placeholder="token…" /></div>
+      <div className="row">
+        <button className="btn primary" disabled={busy} onClick={add}>添加</button>
+        <button className="btn ghost" onClick={() => setForm({ name: "本地邮件网关", url: "http://127.0.0.1:8099/mcp", api_key: "dev-token" })}>
+          填入本地邮件网关
+        </button>
+      </div>
+      <div className="hint">
+        添加后点「测试连接」会走标准 MCP initialize + tools/list。员工侧在「组织架构 → 点员工 → 外部工具」里勾选绑定。
+      </div>
+      {note && <div className="hint mcp-note">{note}</div>}
+
+      <div className="section-title">SMTP 真实发件（本地邮件网关使用）</div>
+      <div className="hint">
+        配好后，「本地邮件网关」的 send_email 会走真实 SMTP；不配则只落 data/mail_outbox。
+        密码只存服务端，不会回显。
+      </div>
+      <div className="grid2">
+        <div className="field"><label>SMTP Host</label>
+          <input value={smtp.host || ""} onChange={(e) => setSmtp({ ...smtp, host: e.target.value })}
+                 placeholder="smtp.qq.com / smtp.163.com" /></div>
+        <div className="field"><label>端口</label>
+          <input type="number" value={smtp.port || 587}
+                 onChange={(e) => setSmtp({ ...smtp, port: Number(e.target.value) })} /></div>
+      </div>
+      <div className="grid2">
+        <div className="field"><label>账号</label>
+          <input value={smtp.user || ""} onChange={(e) => setSmtp({ ...smtp, user: e.target.value })}
+                 placeholder="your@qq.com" /></div>
+        <div className="field"><label>授权码 / 密码（留空不改）</label>
+          <input type="password" value={smtpPass} onChange={(e) => setSmtpPass(e.target.value)}
+                 placeholder={smtp.pass_set ? "已保存，留空不改" : "SMTP 授权码"} /></div>
+      </div>
+      <div className="grid2">
+        <div className="field"><label>发件人</label>
+          <input value={smtp.from_addr || ""} onChange={(e) => setSmtp({ ...smtp, from_addr: e.target.value })}
+                 placeholder="默认同账号" /></div>
+        <div className="field"><label>加密</label>
+          <label className="pick" style={{ padding: "9px 4px" }}>
+            <input type="checkbox" checked={!!smtp.secure}
+                   onChange={(e) => setSmtp({ ...smtp, secure: e.target.checked })} />
+            <span>SSL / 465（否则 STARTTLS 587）</span>
+          </label></div>
+      </div>
+      <div className="row">
+        <button className="btn primary" onClick={saveSmtp}>保存 SMTP</button>
+        <input style={{ flex: 1, minWidth: 180 }} value={smtpTo}
+               onChange={(e) => setSmtpTo(e.target.value)} placeholder="测试收件邮箱" />
+        <button className="btn" onClick={testSmtp}>发送测试邮件</button>
+      </div>
+      {smtpNote && <div className="hint mcp-note">{smtpNote}</div>}
+    </>
+  );
+}
+
 function SettingsModal({ onClose, theme, setTheme, onChanged }) {
   const [form, setForm] = useState({ default_model: "", default_api_base: "", theme });
   const [jobs, setJobs] = useState([]);
@@ -1617,6 +2022,7 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
   const [job, setJob] = useState({ chat_id: "", title: "每日任务报告", at_time: "09:00" });
   const [kb, setKb] = useState([]);
   const [note, setNote] = useState("");
+  const [pane, setPane] = useState("basic");
 
   useEffect(() => {
     (async () => {
@@ -1651,7 +2057,12 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
     <div className="mask" onClick={onClose}>
       <div className="modal wide" onClick={(e) => e.stopPropagation()}>
         <h3>设置</h3>
+        <div className="seg">
+          <button className={cls("seg-btn", pane === "basic" && "on")} onClick={() => setPane("basic")}>基础设置</button>
+          <button className={cls("seg-btn", pane === "tools" && "on")} onClick={() => setPane("tools")}>工具扩展</button>
+        </div>
 
+        {pane === "basic" && (<>
         <div className="section-title">模型全局配置</div>
         <div className="grid2">
           <div className="field"><label>默认模型</label>
@@ -1704,8 +2115,10 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
         </div>
 
         {note && <div className="hint">{note}</div>}
+        </>)}
+        {pane === "tools" && <McpSettings />}
         <div className="actions">
-          <button className="btn primary" onClick={save}>保存设置</button>
+          {pane === "basic" && <button className="btn primary" onClick={save}>保存设置</button>}
           <button className="btn ghost" onClick={onClose}>关闭</button>
         </div>
       </div>
@@ -1732,6 +2145,8 @@ function AccountModal({ me, onClose }) {
         <div className="row"><span>身份 ID</span><div className="spacer" /><span className="mono">{me.identity_id}</span></div>
         <div className="row"><span>角色</span><div className="spacer" /><span>{me.role}</span></div>
         <div className="row"><span>所属实体</span><div className="spacer" /><span>{me.entity_name}</span></div>
+        <div className="row"><span>租户</span><div className="spacer" />
+          <span>{me.tenant_name || "集团总部"} <span className="mono">{me.tenant_id || "TENANT-HQ"}</span></span></div>
         <div className="row"><span>已记住的偏好</span><div className="spacer" />
           <span className="mono">{JSON.stringify(acc?.preferences || {})}</span></div>
         <div className="section-title">修改密钥</div>
@@ -1776,7 +2191,7 @@ function AboutModal({ onClose }) {
     <div className="mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>关于 Agent OS</h3>
-        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "1.1.0"}</span></div>
+        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "3.2.0"}</span></div>
         <div className="row"><span>引擎</span><div className="spacer" /><span className="mono">{info?.engine || "DSH (ACP) + FastAPI"}</span></div>
         <div className="row"><span>外壳</span><div className="spacer" /><span className="mono">{info?.shell || "Tauri 2 / React 18"}</span></div>
         <div className="row"><span>冻结基线</span><div className="spacer" /><span className="mono">{info?.frozen_baseline || "v1.0.0"}</span></div>
@@ -1876,7 +2291,7 @@ function RunDetail({ chat, show, onToggle }) {
         <span className={cls("pill",
           state === "completed" ? "ok" : state === "rejected" || state === "failed" ? "bad"
           : state === "in_progress" || state === "pending_review" ? "run" : "warn")}>
-          {state}
+          {TASK_STATE[state] || state}
         </span>
         <span className="spacer" />
         <button className="icon-btn" title="收起详情" onClick={onToggle}><Icon name="close" /></button>
@@ -1933,7 +2348,7 @@ function RunDetail({ chat, show, onToggle }) {
                   <span><b>{trace.trace.total_tokens ||
                     raw.reduce((a, s) => a + (s.tokens || 0), 0)}</b> tokens</span>
                   <span className={cls("pill", trace.trace.state === "done" ? "ok" : "warn")}>
-                    {trace.trace.state}
+                    {trace.trace.state === "done" ? "已完成" : trace.trace.state === "running" ? "进行中" : trace.trace.state}
                   </span>
                   {waits.length > 0 && (
                     <button className="btn ghost wf-toggle" onClick={() => setCompress((v) => !v)}>
@@ -1994,7 +2409,7 @@ function RunDetail({ chat, show, onToggle }) {
 
       <h5>当前任务</h5>
       <div className="glass" style={{ padding: 10 }}>
-        <div className="kv"><span>{taskId || "暂无任务"}</span><b>{state}</b></div>
+        <div className="kv"><span>{taskId || "暂无任务"}</span><b>{TASK_STATE[state] || state}</b></div>
         <div className="bar"><i style={{ width: `${pct}%` }} /></div>
         <div className="kv"><span>判据通过</span><b>{passed}/{crit.length || 0}</b></div>
         <div className="kv"><span>Token</span><b>{(run?.usage_tokens || 0).toLocaleString()}</b></div>
@@ -2054,7 +2469,7 @@ function RunDetail({ chat, show, onToggle }) {
       )}
 
       <h5>权限与连接</h5>
-      <div className="kv"><span>执行环境</span><b>{isCordis ? "full-access ⚠️" : "sandboxed"}</b></div>
+      <div className="kv"><span>执行环境</span><b>{isCordis ? "全权限 ⚠️" : "沙箱内"}</b></div>
       <div className="kv"><span>工具策略</span><b>写入限任务目录</b></div>
       <div className="kv"><span>预算闸</span><b>按轮结算</b></div>
       </>
@@ -2100,6 +2515,12 @@ function App() {
     const onCtx = (e) => setCtx({ x: e.detail.x, y: e.detail.y, items: e.detail.items });
     window.addEventListener("oa-ctx", onCtx);
     return () => window.removeEventListener("oa-ctx", onCtx);
+  }, []);
+
+  useEffect(() => {
+    const onTab = (e) => setTab(e.detail || "chats");
+    window.addEventListener("oa-tab", onTab);
+    return () => window.removeEventListener("oa-tab", onTab);
   }, []);
 
   useEffect(() => {
@@ -2151,6 +2572,7 @@ function App() {
     try {
       const m = await api.me();
       setMe(m);
+      if (m.tenant_id) auth.setTenant(m.tenant_id);
       const [c, o, dp] = await Promise.all([api.chats(), api.org(), api.departments()]);
       setChats(c.chats); setOrg(o); setDepts(dp.departments);
       if (!active && c.chats.length) setActive(c.chats[0]);
@@ -2617,6 +3039,12 @@ const STAGE_LABEL = {
 function ProjectCard({ projectId }) {
   const [v, setV] = useState(null);
   const [showTl, setShowTl] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    const d = await api.project(projectId);
+    setV(d);
+  }, [projectId]);
 
   useEffect(() => {
     let alive = true;
@@ -2628,20 +3056,69 @@ function ProjectCard({ projectId }) {
 
   const done = v.stages.filter((s) => s.state === "done").length;
   const blocked = v.project.state === "blocked";
+  const blocking = v.gates.filter((g) => g.state === "vetoed");
+  const failedGates = v.gates.filter((g) => g.state === "failed");
+  const badStage = v.stages.find((s) => s.state === "blocked");
+  const remaining = v.stages.filter((s) => s.state !== "done").length;
+
+  async function approveGate(g) {
+    setBusy(true);
+    try { await api.approveGate(v.project.id, g.id); await reload(); }
+    finally { setBusy(false); }
+  }
+
+  async function retryProject() {
+    setBusy(true);
+    try { await api.retryProject(v.project.id); await reload(); }
+    finally { setBusy(false); }
+  }
 
   return (
     <div className={cls("card", "project-card", blocked && "blocked")}>
       <h4>项目 {v.project.id} · {v.project.name}</h4>
       <div className="hint">
         {done}/{v.stages.length} 阶段完成
-        {blocked ? " · ⛔ 已被否决停摆" : ""} · 闸门 {v.gates.filter((g) => g.state === "passed").length}/{v.gates.length} 通过
+        {blocked ? " · ⛔ 已挂起" : ""} · 闸门 {v.gates.filter((g) => g.state === "passed").length}/{v.gates.length} 通过
       </div>
+      {blocking.length > 0 && (
+        <div className="errbox">
+          <b>审批未通过：项目已挂起，等待您的决策。</b>
+          {blocking.map((g) => (
+            <div className="gate-row" key={g.id}>
+              <span>{(g.name === "实现任务全部成功" && g.state !== "passed")
+                ? "实现任务未全部成功" : g.name}
+                {g.note ? `｜${humanize(g.note).replace(/^(\d+) 个任务 \/ 失败 (\d+)$/, "共 $1 个任务，失败 $2 个")}` : ""}</span>
+              <button className="btn primary" disabled={busy} onClick={() => approveGate(g)}>
+                复核通过
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {failedGates.length > 0 && (
+        <div className="errbox">
+          <b>代码构建失败：请查看执行日志进行修复。</b>
+          {failedGates.map((g) => (
+            <div className="gate-row" key={g.id}>
+              <span>{(g.name === "实现任务全部成功" ? "实现任务未全部成功" : g.name)}
+                {g.note ? `｜${humanize(g.note).replace(/^(\d+) 个任务 \/ 失败 (\d+)$/, "共 $1 个任务，失败 $2 个")}` : ""}</span>
+              <button className="btn primary" disabled={busy} onClick={retryProject}>
+                ↻ 一键重试
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {!blocking.length && failedGates.length === 0 && remaining > 0 && (
+        <div className="actions"><button className="btn" disabled={busy}
+          onClick={retryProject}>↻ 一键重试剩余阶段</button></div>
+      )}
       <div className="stages">
         {v.stages.map((s) => (
           <div key={s.id} className={cls("stage", s.state)}>
             <span className="dot-s" />
             <span className="nm">{s.seq}. {STAGE_LABEL[s.key] || s.key}</span>
-            <span className="st">{s.state}</span>
+            <span className="st">{STAGE_STATE[s.state] || s.state}</span>
           </div>
         ))}
       </div>

@@ -1884,7 +1884,7 @@ dependencies = [
 
 [[package]]
 name = "oaagent-console"
-version = "2.4.0"
+version = "3.2.0"
 dependencies = [
  "serde",
  "serde_json",

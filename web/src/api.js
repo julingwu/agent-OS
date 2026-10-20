@@ -6,16 +6,42 @@ const ORIGIN = DESKTOP ? "http://127.0.0.1:8077" : "";
 const BASE = ORIGIN + "/ui";
 
 const TOKEN_KEY = "oa_token";
+const TENANT_KEY = "oa_tenant";
 export const auth = {
   get: () => localStorage.getItem(TOKEN_KEY) || "",
   set: (t) => localStorage.setItem(TOKEN_KEY, t),
-  clear: () => localStorage.removeItem(TOKEN_KEY),
+  tenant: () => localStorage.getItem(TENANT_KEY) || "",
+  setTenant: (t) => { if (t) localStorage.setItem(TENANT_KEY, t); },
+  clear: () => { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TENANT_KEY); },
+};
+
+const ERROR_TEXT = {
+  GateNotPassed: "审批未通过：项目已挂起，等待您的决策",
+  StageSkipped: "阶段顺序未满足：请先完成上一阶段",
+  NotRetryable: "当前状态不能重试",
+  TaskNotFound: "任务不存在或无权访问",
+  ProjectNotFound: "项目不存在或无权访问",
+  RunNotFound: "运行记录不存在或无权访问",
+  TenantMismatch: "租户上下文不匹配，请重新登录",
+  NotLoggedIn: "登录已失效，请重新登录",
+  BadCredentials: "身份 ID 或密钥不正确",
+  ApprovalNotFound: "审批单不存在或无权访问",
+  FileNotFound: "文件不存在或已被清理",
+  ChatNotFound: "会话不存在或无权访问",
+  McpServerNotFound: "MCP 工具不存在",
+  EmployeeNotFound: "员工不存在",
+  EvalRejected: "评测未启动：请检查预算或基准用例",
+  EmptyMessage: "消息不能为空",
+  UnknownAction: "这个操作暂不支持",
+  BadAction: "操作参数不正确",
 };
 
 async function req(path, opts = {}) {
   const headers = { "content-type": "application/json" };
   const token = auth.get();
   if (token) headers.authorization = `Bearer ${token}`;
+  const tenant = auth.tenant();
+  if (tenant) headers["x-tenant-id"] = tenant;
   const res = await fetch(BASE + path, {
     credentials: DESKTOP ? "omit" : "same-origin",
     ...opts,
@@ -28,7 +54,8 @@ async function req(path, opts = {}) {
   if (!res.ok) {
     let detail = {};
     try { detail = await res.json(); } catch { /* ignore */ }
-    throw new Error(detail?.detail?.code || `HTTP ${res.status}`);
+    const code = detail?.detail?.code;
+    throw new Error(ERROR_TEXT[code] || detail?.detail?.message || code || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -38,6 +65,7 @@ export const api = {
   login: async (identity_id, secret) => {
     const r = await req("/login", { method: "POST", body: JSON.stringify({ identity_id, secret }) });
     if (r.token) auth.set(r.token);
+    if (r.tenant_id) auth.setTenant(r.tenant_id);
     return r;
   },
   logout: async () => {
@@ -199,7 +227,41 @@ Object.assign(api, {
   evalRunOne: (setId, body) =>
     req(`/evals/${setId}/run`, { method: "POST", body: JSON.stringify(body || {}) }),
   evalBatch: (id) => req(`/evals/batches/${id}`),
-  experiences: (kind) => req(`/experiences${kind ? `?kind=${kind}` : ""}`),
+  experiences: (kind, state) => {
+    const p = new URLSearchParams();
+    if (kind) p.set("kind", kind);
+    if (state) p.set("state", state);
+    return req(`/experiences${p.toString() ? `?${p}` : ""}`);
+  },
   previewExperience: (text, entity) =>
     req("/experiences/preview", { method: "POST", body: JSON.stringify({ text, entity }) }),
+});
+
+// V3.0 经验审核 / MCP 工具扩展
+Object.assign(api, {
+  reviewExperience: (id, action, note) =>
+    req(`/experiences/${id}/review`, { method: "POST", body: JSON.stringify({ action, note }) }),
+  mcpServers: () => req("/mcp"),
+  addMcp: (body) => req("/mcp", { method: "POST", body: JSON.stringify(body) }),
+  patchMcp: (id, body) => req(`/mcp/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMcp: (id) => req(`/mcp/${id}`, { method: "DELETE" }),
+  testMcp: (id) => req(`/mcp/${id}/test`, { method: "POST", body: "{}" }),
+  mcpBindings: (agentId) => req(`/mcp/bindings/${agentId}`),
+  bindMcp: (agentId, server_ids) =>
+    req(`/mcp/bindings/${agentId}`, { method: "PUT", body: JSON.stringify({ server_ids }) }),
+});
+
+// V3.1 SMTP 真实发件 / 项目与任务重试
+Object.assign(api, {
+  smtp: () => req("/smtp"),
+  saveSmtp: (body) => req("/smtp", { method: "PUT", body: JSON.stringify(body) }),
+  testSmtp: (to) => req("/smtp/test", { method: "POST", body: JSON.stringify({ to }) }),
+  retryTask: (id) => req(`/tasks/${id}/retry`, { method: "POST", body: "{}" }),
+  retryProject: (id) => req(`/projects/${id}/retry`, { method: "POST", body: "{}" }),
+  approveGate: (pid, gid) => req(`/projects/${pid}/gates/${gid}/approve`,
+                                 { method: "POST", body: "{}" }),
+});
+
+Object.assign(api, {
+  createExperience: (body) => req("/experiences", { method: "POST", body: JSON.stringify(body) }),
 });

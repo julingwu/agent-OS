@@ -310,8 +310,9 @@ def finish(conn: sqlite3.Connection, *, run_id: str, task_id: str, entity: str, 
            usage_total: int | None = None, baseline: int = 0) -> dict:
     conn.execute(
         """UPDATE task_runs SET exit_code = ?, ended_at = CURRENT_TIMESTAMP, session_id = ?,
-             usage_tokens = ?, usage_baseline = ? WHERE id = ?""",
-        (exit_code, session_id, usage_total if usage_total is not None else used, baseline, run_id))
+             usage_tokens = ?, usage_baseline = ?, error = ? WHERE id = ?""",
+        (exit_code, session_id, usage_total if usage_total is not None else used, baseline,
+         (None if ok else reason[:500]), run_id))
     event = "run_succeeded" if ok else "run_failed"
     try:
         emitted = verbs.do_emit_event(conn, EmitEventIn(
@@ -382,6 +383,29 @@ def execute_run(conn: sqlite3.Connection, run_id: str, *, prompt: str | None = N
     task_id, entity = task["id"], run["legal_entity_id"]
     actor = (run["actor_identity"] if "actor_identity" in run.keys() else None) or "system"
     prompt = prompt or default_prompt(task)
+    # v3.2 角色对齐：在红线之前注入，保证模型先看到岗位边界。
+    try:
+        from .. import role_alignment
+        prompt = role_alignment.inject(conn, prompt, task["owner_employee_id"],
+                                       task_id=task_id, run_id=run_id)
+    except Exception:                        # noqa: BLE001
+        pass
+    # v3.1 公司红线：所有 Run（含重试/评测/WBS）都强制带上，不依赖标签召回。
+    try:
+        from .. import experience
+        reds = experience.red_lines(conn)
+        if reds and "【公司红线" not in prompt:
+            lines = chr(10).join(
+                f"- {r['title']}：{(r['content'] or '')[:240]}" for r in reds)
+            prompt = prompt + chr(10) * 2 + "【公司红线（必须遵守）】" + chr(10) + lines
+            write_audit(conn, legal_entity_id=task["legal_entity_id"], verb="memory_read",
+                        task_id=task_id, run_id=run_id, layer="system",
+                        action="red_lines_injected", target=run_id,
+                        payload={"ids": [r["id"] for r in reds]},
+                        response={"count": len(reds)})
+            conn.commit()
+    except Exception:                        # noqa: BLE001 - 记忆不可用不阻塞执行
+        pass
     runner = (runner or os.environ.get("RUNNER") or "mock").lower()
     try:
         conn.execute("UPDATE task_runs SET prompt_text=? WHERE id=?",

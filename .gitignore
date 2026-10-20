@@ -17,3 +17,14 @@ vendor/
 web/node_modules/
 web/src-tauri/target/
 web/src-tauri/gen/
+
+# 打包产物：47 MB 的 exe/安装包不入库，发版走 dist/ 目录或 Release
+dist/
+
+# 覆盖率与服务运行中间件
+.coverage
+.coverage.*
+
+# 真实凭据（文件保留在本地，永不入库）
+docs/_wecom_cb.txt
+docs/wecom_saved_config.png

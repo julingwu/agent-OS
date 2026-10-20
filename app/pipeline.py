@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS projects (
   name TEXT NOT NULL,
   requirement TEXT NOT NULL,
   legal_entity_id TEXT DEFAULT 'LE-GROUP-HQ',
+  tenant_id TEXT DEFAULT 'TENANT-HQ',
+  veto_note TEXT,                          -- 审计/法务一票否决的重写要求（v3.2）
   state TEXT DEFAULT 'active',              -- active | blocked | done
   use_llm_docs INTEGER DEFAULT 0,           -- 1=模型写文档（贵） 0=模板（省 token）
   current_seq INTEGER DEFAULT 0,
@@ -111,12 +113,7 @@ CREATE TABLE IF NOT EXISTS wbs_items (
 """
 
 TRIGGERS = """
-DROP TRIGGER IF EXISTS trg_stage_no_skip;
-DROP TRIGGER IF EXISTS trg_stage_gate_guard;
-DROP TRIGGER IF EXISTS trg_gate_veto_ins;
-DROP TRIGGER IF EXISTS trg_gate_veto_upd;
-
-CREATE TRIGGER trg_stage_no_skip
+CREATE TRIGGER IF NOT EXISTS trg_stage_no_skip
 BEFORE UPDATE OF state ON project_stages
 WHEN NEW.state = 'active' AND NEW.seq > 0
 BEGIN
@@ -127,7 +124,7 @@ BEGIN
 END;
 
 -- 阶段要 done：既要有通过记录，也不能有未通过/被否决的闸门
-CREATE TRIGGER trg_stage_gate_guard
+CREATE TRIGGER IF NOT EXISTS trg_stage_gate_guard
 BEFORE UPDATE OF state ON project_stages
 WHEN NEW.state = 'done'
 BEGIN
@@ -141,7 +138,7 @@ BEGIN
   ) THEN RAISE(ABORT, 'GateNotPassed') END;
 END;
 
-CREATE TRIGGER trg_gate_veto_ins
+CREATE TRIGGER IF NOT EXISTS trg_gate_veto_ins
 AFTER INSERT ON stage_gates
 WHEN NEW.state = 'vetoed'
 BEGIN
@@ -150,7 +147,7 @@ BEGIN
    WHERE project_id = NEW.project_id AND key = NEW.stage_key;
 END;
 
-CREATE TRIGGER trg_gate_veto_upd
+CREATE TRIGGER IF NOT EXISTS trg_gate_veto_upd
 AFTER UPDATE OF state ON stage_gates
 WHEN NEW.state = 'vetoed'
 BEGIN
@@ -180,12 +177,13 @@ def ensure(conn: sqlite3.Connection) -> None:
 
 
 def create_project(conn, *, name: str, requirement: str, entity: str = "LE-GROUP-HQ",
-                   owner: str | None = None, use_llm_docs: int = 0) -> dict:
+                   owner: str | None = None, use_llm_docs: int = 0,
+                   tenant_id: str = "TENANT-HQ") -> dict:
     ensure(conn)
     pid = _id("P")
     conn.execute("""INSERT INTO projects (id, name, requirement, legal_entity_id,
-                                           owner_identity, use_llm_docs)
-                    VALUES (?,?,?,?,?,?)""", (pid, name, requirement, entity, owner,
+                                           tenant_id, owner_identity, use_llm_docs)
+                    VALUES (?,?,?,?,?,?,?)""", (pid, name, requirement, entity, tenant_id, owner,
                                              1 if use_llm_docs else 0))
     for seq, (key, title) in enumerate(STAGES):
         conn.execute("""INSERT INTO project_stages (id, project_id, seq, key, title)
@@ -302,16 +300,34 @@ def run_workshop(conn, pid: str, requirement: str, llm_minutes: bool = False) ->
         statements.append({"role": role, "title": title, "question": q,
                            "risk": risk, "stance": stance})
 
-    say(3, "product", "产品经理", "revision",
-        "修订：接受上述质询与风险，补充回滚方案与验收口径。")
-    say(4, "product", "产品经理", "vote", "表决通过（附条件）")
+    vetoes = [s for s in statements
+              if s["role"] in ("audit", "legal") and "反对" in (s.get("stance") or "")]
+    veto_note = ""
+    if vetoes:
+        veto_note = "；".join(
+            f"{s['title']}一票否决：质询「{s['question']}」；风险「{s['risk']}」"
+            for s in vetoes) + "；必须按质疑意见重写，禁止强行推进。"
+        conn.execute("UPDATE projects SET veto_note=?, state='blocked' WHERE id=?",
+                     (veto_note, pid))
+        say(3, "product", "产品经理", "revision",
+            "【一票否决】方案已被审计/法务否决，撤回原提案。"
+            "必须按上述质疑与风险逐条重写，禁止强行推进、禁止‘先上线再补手续’。")
+        say(4, "product", "产品经理", "vote", "提案被否决，退回重写")
+    else:
+        say(3, "product", "产品经理", "revision",
+            "修订：接受上述质询与风险，补充回滚方案与验收口径。")
+        say(4, "product", "产品经理", "vote", "表决通过（附条件）")
     conn.commit()
 
     minutes = gen.minutes(pid, requirement, statements) if llm_minutes else None
     if not minutes:
         lines = ["# 研讨会纪要", "项目：" + pid, "议题：" + requirement, "", "## 风险与反对意见"]
         lines += ["- " + s["title"] + "：" + s["risk"] for s in statements]
-        lines += ["", "## 结论", "通过（附风险清单）"]
+        if veto_note:
+            lines += ["", "## 一票否决", veto_note, "",
+                      "## 结论", "否决：必须按质疑意见重写，禁止强行推进。"]
+        else:
+            lines += ["", "## 结论", "通过（附风险清单）"]
         minutes = "\n".join(lines)
     path = _write(conn, pid, "workshop", "minutes", "02_workshop_minutes.md", minutes)
     conn.execute("UPDATE workshops SET state='closed' WHERE id=?", (wid,))
@@ -326,6 +342,7 @@ def run_workshop(conn, pid: str, requirement: str, llm_minutes: bool = False) ->
     except Exception:                        # noqa: BLE001
         pass
     return {"workshop_id": wid, "turns": turns, "minutes": path,
+            "vetoes": [s["role"] for s in vetoes], "veto_note": veto_note,
             "llm": bool(llm_minutes)}
 
 
@@ -424,6 +441,8 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
         gate(conn, pid, key, "全员留下风险意见", note="architect/qa/audit")
         gate(conn, pid, key, "架构师否决权", kind="veto", role="architect", passed=True,
              note="未行使否决")
+        gate(conn, pid, key, "审计/法务一票否决", kind="veto", role="audit",
+             passed=not out.get("vetoes"), note=out.get("veto_note") or "未行使否决")
 
     elif key == "wbs":
         out.update(build_wbs(conn, pid, requirement, llm=llm_docs))
@@ -513,6 +532,8 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
     from .engine import dsh_adapter, task_generator
 
     entity = _task_entity(conn, pid)
+    proj = conn.execute("SELECT tenant_id FROM projects WHERE id=?", (pid,)).fetchone()
+    tenant_id = (proj["tenant_id"] if proj else None) or "TENANT-HQ"
     items = [r for r in conn.execute(
         "SELECT * FROM wbs_items WHERE project_id=? ORDER BY rowid", (pid,)).fetchall()]
     created = failed = 0
@@ -527,7 +548,7 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
         brief = (it["title"] + "：单文件 Python 命令行实现，≤200 行，不引入第三方依赖；"
                  "项目 " + pid + "，需求 " + requirement[:40])
         gen = task_generator.generate(conn, brief, legal_entity_id=entity,
-                                      pack_id=it["pack_id"])
+                                      pack_id=it["pack_id"], tenant_id=tenant_id)
         tid = gen["task_id"]
         conn.execute("UPDATE tasks SET project_id=?, stage='build' WHERE id=?", (pid, tid))
         conn.commit()
@@ -538,12 +559,12 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
             art.write_text("# stub for " + it["code"] + "\nprint('ok')\n", encoding="utf-8")
             stub_run = "RUN-STUB-" + _uuid.uuid4().hex[:8]
             conn.execute("INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id,"
-                         " state, runner, actor_identity)"
-                         " VALUES (?,?,1,?, 'succeeded', 'stub', 'ID-CEO-DISPATCHER')",
-                         (stub_run, tid, entity))
-            conn.execute("INSERT INTO artifacts (id, run_id, art_seq, file_path, checksum, bytes)"
-                         " VALUES (?,?,1,?,? ,?)",
-                         ("ART-" + _uuid.uuid4().hex[:10], stub_run, str(art),
+                         " tenant_id, state, runner, actor_identity)"
+                         " VALUES (?,?,1,?,?, 'succeeded', 'stub', 'ID-CEO-DISPATCHER')",
+                         (stub_run, tid, entity, tenant_id))
+            conn.execute("INSERT INTO artifacts (id, run_id, tenant_id, art_seq, file_path,"
+                         " checksum, bytes) VALUES (?,?,?,1,?,? ,?)",
+                         ("ART-" + _uuid.uuid4().hex[:10], stub_run, tenant_id, str(art),
                           "stub", art.stat().st_size))
             from . import state_machine as _sm
             try:
@@ -558,9 +579,9 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
 
         run_id = "RUN-" + _uuid.uuid4().hex[:16]
         conn.execute(
-            "INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state,"
-            " runner, actor_identity) VALUES (?,?,1,?, 'spawned', 'acp', 'ID-CEO-DISPATCHER')",
-            (run_id, tid, entity))
+            "INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, tenant_id, state,"
+            " runner, actor_identity) VALUES (?,?,1,?,?, 'spawned', 'acp', 'ID-CEO-DISPATCHER')",
+            (run_id, tid, entity, tenant_id))
         # 状态机：todo -> assigned（runner 只会从 assigned 推到 in_progress）
         from . import state_machine as _sm0
         try:
@@ -648,8 +669,13 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
     # 注入文本会随立项书/纪要落盘，审计留 experience_injected，可回溯是哪几条。
     try:
         from . import experience
-        proj = conn.execute("SELECT legal_entity_id FROM projects WHERE id=?", (pid,)).fetchone()
+        proj = conn.execute("SELECT legal_entity_id, veto_note FROM projects WHERE id=?",
+                            (pid,)).fetchone()
         entity = proj["legal_entity_id"] if proj else "LE-GROUP-HQ"
+        if proj and proj["veto_note"] and "【一票否决重写要求】" not in requirement:
+            requirement = (requirement + chr(10) * 2 + "【一票否决重写要求】" + chr(10)
+                           + proj["veto_note"] + chr(10)
+                           + "必须按质疑意见重写，禁止强行推进。")
         if "【组织经验（自动注入）】" not in requirement:
             ctx = experience.context_for(conn, requirement, entity=entity)
             if ctx["count"]:

@@ -94,6 +94,21 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
     cap = est_tokens                      # absolute ceiling, corrected after the session is known
     baseline = 0
     agent_id, chat_id = _agent_context(conn, task_id)
+    try:
+        from .. import role_alignment
+        prompt = role_alignment.inject(conn, prompt, agent_id,
+                                       task_id=task_id, run_id=run_id)
+    except Exception:                        # noqa: BLE001
+        pass
+    from .. import mcp as mcp_mod
+    mcp_cfg = mcp_mod.session_configs(conn, agent_id) if runner == "acp" else []
+    if mcp_cfg:
+        write_audit(conn, legal_entity_id=entity, verb="mcp", task_id=task_id,
+                    run_id=run_id, layer="system", action="mcp_attached",
+                    target=",".join(c["name"] for c in mcp_cfg),
+                    payload={"agent_id": agent_id, "servers": [c["name"] for c in mcp_cfg]},
+                    response={"count": len(mcp_cfg)})
+        conn.commit()
     rec = trace.Recorder(conn, run_id)
     st = {"used": 0, "cancelled": False, "checks": 0, "writes": [], "final": "",
           "resumed": bool(resume_session), "stop_reason": None, "error": None,
@@ -126,9 +141,9 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
             if resume_session:
                 sid = resume_session
             else:
-                sid = client.new_session()["sessionId"]
+                sid = client.new_session(mcp_servers=mcp_cfg)["sessionId"]
         else:
-            sid = client.new_session()["sessionId"]
+            sid = client.new_session(mcp_servers=mcp_cfg)["sessionId"]
         st["sid"] = sid
         baseline = base.session_baseline(conn, sid, run_id)
         cap = baseline + est_tokens      # usage_update is cumulative per session
