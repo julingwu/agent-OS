@@ -341,7 +341,8 @@ INSERT OR IGNORE INTO packs (id, name, template, description, default_budget) VA
  ('code-v1',    '代码交付包', 'code',    '脚本、工具、自动化', 30000),
  ('code-local-v1', '本地代码包', 'code', '不联网的脚本、工具', 25000),
  ('review-v1',  '质检评审包', 'review',  '对他人产出做评审', 45000),
- ('finance-v1', '财务审核包', 'finance', '费用审核、对账、报销复核', 30000);
+ ('finance-v1', '财务审核包', 'finance', '费用审核、对账、报销复核', 30000),
+ ('web-v1',     '前端页面包', 'web',     '网页、官网、落地页HTML', 35000);
 
 -- ============ M1: identities and replay protection ============
 CREATE TABLE IF NOT EXISTS identities (

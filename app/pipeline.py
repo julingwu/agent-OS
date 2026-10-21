@@ -273,6 +273,13 @@ def _write(conn, pid: str, stage_key: str, kind: str, name: str, text: str) -> s
                     VALUES (?,?,?,?,?,?)""",
                  (delivery_id, pid, stage_key, kind, str(path), path.stat().st_size))
     conn.commit()
+    try:
+        from . import flows
+        flows.blackboard_write(conn, pid=pid, stage_key=stage_key,
+                               role_tag=kind, title=name, content=text,
+                               kind="deliverable", file_path=str(path))
+    except Exception:
+        pass
     return str(path)
 
 
@@ -404,14 +411,34 @@ def build_wbs(conn, pid: str, requirement: str, llm: bool = False) -> dict:
     from . import pipeline_llm as gen
     from .ui.roles import tags_of
 
-    tags = set(tags_of(requirement))
-    items = [("T1", "开发最小可用版本", "dev", "code-local-v1", [])]
-    if "content" in tags or "growth" in tags:
-        items.append(("T2", "撰写发布文案与使用说明", "content", "content-v1", ["T1"]))
-    if "design" in tags:
-        items.append(("T2D", "出静态界面稿", "design", "web-v1", ["T1"]))
-    # 发布不是开发任务，交给阶段 7（release）；WBS 只放可交付的构建项
+    existing = conn.execute(
+        "SELECT code, title, role_tag, pack_id, depends_on FROM wbs_items WHERE project_id=? ORDER BY rowid",
+        (pid,)).fetchall()
+    if existing:
+        items = [(r["code"], r["title"], r["role_tag"], r["pack_id"],
+                  json.loads(r["depends_on"] or "[]")) for r in existing]
+    else:
+        tags = set(tags_of(requirement))
+        req_low = requirement.lower()
+        is_web = any(w in req_low for w in ("html", "网页", "官网", "落地页", "页面", "前端"))
+        is_api = any(w in req_low for w in ("接口", "api", "后端", "契约", "数据库", "架构"))
 
+        if is_web:
+            items = [("T1", "前端交互与页面开发（HTML/CSS/JS）", "dev", "web-v1", [])]
+        else:
+            items = [("T1", "开发最小可用版本", "dev", "code-local-v1", [])]
+
+        if is_api:
+            items.append(("T1B", "后端接口契约与数据处理", "architect", "content-v1", []))
+        if "content" in tags or "growth" in tags or any(w in req_low for w in ("文案", "文章", "说明")):
+            items.append(("T2", "撰写发布文案与使用说明", "content", "content-v1", ["T1"]))
+        if "design" in tags and not is_web:
+            items.append(("T2D", "出静态界面稿", "design", "web-v1", ["T1"]))
+        if "qa" in tags or any(w in req_low for w in ("测试", "质检", "联调")):
+            deps = ["T1"]
+            if is_api:
+                deps.append("T1B")
+            items.append(("T3Q", "功能联调与验收测试报告", "qa", "content-v1", deps))
 
     for code, title, role, pack, deps in items:
         if conn.execute("SELECT 1 FROM wbs_items WHERE project_id=? AND code=?",
@@ -607,6 +634,30 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
     return out
 
 
+def get_blackboard_context(conn, pid: str, max_chars: int = 1500) -> str:
+    """提取项目黑板中已有的上游阶段核心交付与共识，用于注入给下游任务。"""
+    try:
+        from . import flows
+        items = flows.blackboard(conn, pid)
+        if not items:
+            return ""
+        lines = ["【项目上游已交付结论与上下文】"]
+        for it in items:
+            if it.get("kind") == "summary":
+                continue
+            title = it.get("title") or it.get("stage_key")
+            role = it.get("role_tag") or "平台"
+            excerpt = (it.get("excerpt") or "").strip()
+            if excerpt:
+                lines.append(f"- [{it['stage_key']}] {role}·{title}: {excerpt[:240]}")
+        if len(lines) <= 1:
+            return ""
+        ctx = "\n".join(lines)
+        return ctx[:max_chars]
+    except Exception:
+        return ""
+
+
 def _flow_stage(conn, pid: str, key: str, requirement: str, llm_docs: bool) -> dict:
     """执行一个流程节点：能干的角色真跑一次 ACP，再落文档 → 过闸门 → 写黑板。"""
     import os
@@ -659,8 +710,16 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
         raise PermissionError("FlowEmployeeRequired")
     employee = people[0]
     actor_id = _execution_actor(conn, project["owner_identity"], entity, tenant_id)["id"]
-    brief = (f"{node['title']}（{node['key']}）：围绕「{requirement[:120]}」"
-             f"只交付本阶段需要的那一份内容，按验收口径「{node.get('gate') or '完成'}」写。")
+    bb_ctx = get_blackboard_context(conn, pid)
+    clean_req = requirement.split("【组织经验（自动注入）】")[0].strip()
+    brief_parts = [
+        f"{node['title']}（阶段 {node['key']}）",
+        f"项目原始需求：{clean_req}",
+        f"本阶段验收口径：{node.get('gate') or '按要求完成交付'}",
+    ]
+    if bb_ctx:
+        brief_parts.append(bb_ctx)
+    brief = "\n\n".join(brief_parts)
     gen = task_generator.generate(conn, brief, legal_entity_id=entity, tenant_id=tenant_id)
     tid = gen["task_id"]
     conn.execute("UPDATE tasks SET project_id=?,stage=?,owner_employee_id=? WHERE id=?",
@@ -864,8 +923,27 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
             if existing["state"] in {"todo", "assigned", "in_progress"}:
                 failed += 1
                 continue
-        brief = (it["title"] + "：单文件 Python 命令行实现，≤200 行，不引入第三方依赖；"
-                 "项目 " + pid + "，需求 " + requirement[:40])
+        bb_ctx = get_blackboard_context(conn, pid)
+        clean_req = requirement.split("【组织经验（自动注入）】")[0].strip()
+        role = it["role_tag"] or "dev"
+        pack = it["pack_id"] or "code-local-v1"
+
+        if pack == "web-v1":
+            spec = "实现完整的前端交互网页或落地页，包含清晰的样式与结构；"
+        elif pack == "content-v1":
+            spec = "撰写交付文案或说明文档，格式规范，严禁违规词；"
+        elif pack == "review-v1":
+            spec = "质量验收与测试评估报告，列明检查项与明确结论；"
+        elif role == "architect":
+            spec = "系统架构与接口契约设计，明确数据结构与规范；"
+        elif "命令行" in it["title"] or "脚本" in it["title"]:
+            spec = "Python 脚本实现，不引入不必要的第三方依赖；"
+        else:
+            spec = "高质量完成该模块交付物，确保独立可用；"
+
+        brief = f"{it['title']}：{spec}项目 {pid}，需求：{clean_req[:200]}"
+        if bb_ctx:
+            brief += f"\n\n{bb_ctx}"
         employee = None if stub else _build_employee(conn, it, entity=entity, tenant_id=tenant_id)
         if not stub:
             # Role selection may perform writes. Recheck the initiating identity

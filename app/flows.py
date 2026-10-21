@@ -431,6 +431,12 @@ def set_stage_budget(conn, value: int) -> int:
 def blackboard_write(conn, *, pid: str, stage_key: str, role_tag: str, title: str,
                      content: str, kind: str = "deliverable",
                      file_path: str | None = None) -> str:
+    if file_path:
+        existing = conn.execute(
+            "SELECT id FROM project_artifacts WHERE project_id=? AND file_path=?",
+            (pid, file_path)).fetchone()
+        if existing:
+            return existing["id"]
     proj = conn.execute("SELECT tenant_id, legal_entity_id FROM projects WHERE id=?",
                         (pid,)).fetchone()
     aid = "PA-" + uuid.uuid4().hex[:12]
