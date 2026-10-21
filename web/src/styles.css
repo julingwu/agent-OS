@@ -2652,3 +2652,4 @@ button .icon { flex-shrink: 0; }
 
 /* v4.3：阶段全景 + 预算条横跨整卡（原来被 grid 挤进一格） */
 .stages > .flow { grid-column: 1 / -1; }
+

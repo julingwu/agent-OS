@@ -5,6 +5,7 @@ import { api, auth, ping, scopeOf } from "./api.js";
 import Workspace from "./Workspace.jsx";
 import NewTaskModal from "./NewTaskModal.jsx";
 import ProjectFlow, { FailureDiagnosis } from "./ProjectFlow.jsx";
+import MissionControl from "./MissionControl.jsx";
 import DialogAccessibility from "./DialogAccessibility.jsx";
 import ExtensionsView from "./ExtensionsView.jsx";
 import GovernanceView, { ProjectRecovery } from "./GovernanceView.jsx";
@@ -113,6 +114,7 @@ const ICONS = {
   wallet: "M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2h2v6h-2v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM16 12h.01",
   flask: "M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3M7.5 15h9",
   brain: "M9 4a3 3 0 0 0-3 3v1a3 3 0 0 0 0 6v1a3 3 0 0 0 5 2.2M15 4a3 3 0 0 1 3 3v1a3 3 0 0 1 0 6v1a3 3 0 0 1-5 2.2M12 5v14",
+  flow: "M4 6h4M4 12h6M4 18h9M14 6h6M14 6l-3 3M20 18H11M20 18l-3-3",
 };
 
 function Icon({ name, size = "" }) {
@@ -2541,7 +2543,8 @@ function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
   useEffect(() => { localStorage.setItem("oa_detail", showDetail ? "1" : "0"); }, [showDetail]);
 
   const navItems = [
-    ["overview", "overview", "工作台"], ["tasks", "tasks", "任务中心"],
+    ["overview", "overview", "工作台"], ["projects", "flow", "总装流水线"],
+    ["tasks", "tasks", "任务中心"],
     ["chats", "chat", "协作会话"], ["files", "files", "工作产物"],
     ["approvals", "shield", "审批中心"], ["org", "org", "组织与团队"],
     ["roles", "role", "角色库"], ["finops", "wallet", "用量与费用"],
@@ -2603,6 +2606,7 @@ function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
         {bootError && <div className="hint" role="status">{bootError} <button className="btn ghost" onClick={boot}>重新加载</button></div>}
         {me.can_manage_deployment && <AlertBanner />}
         {tab === "overview" || tab === "tasks" ? <Workspace key={tab} chats={chats} pendingCount={pendingCount} Icon={Icon} onChat={openChat} onSelectTask={setFocusedTask} onNavigate={setTab} onNewTask={() => setTaskCreating(true)} tasksOnly={tab === "tasks"} />
+          : tab === "projects" ? <MissionControl Icon={Icon} onOpenChat={openChat} />
           : tab === "finops" ? <FinOpsView />
           : tab === "evals" ? <EvalsView />
           : tab === "experience" ? <GovernanceView me={me} />
