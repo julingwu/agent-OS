@@ -393,9 +393,9 @@
 .mc-rail-item {
   position: relative;
   flex: 1 1 0;
-  min-width: 84px;
+  min-width: 70px;
   scroll-snap-align: start;
-  padding: 0 3px;
+  padding: 0 2px;
 }
 /* 连接线：从本节点圆心连到下一节点圆心 */
 .mc-rail-item:not(:last-child)::after {
@@ -861,10 +861,18 @@
 .mc-release-box {
   margin-top: 24px;
   background: var(--panel);
-  border: 1px solid var(--accent-line, rgba(99, 102, 241, 0.25));
+  border: 1px solid var(--line);
   border-radius: 12px;
   padding: 16px 20px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+/* 交付包头：左侧标题 + 右侧按钮，不允许互相压字 */
+.mc-release-box > .mc-section-head {
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
 }
 
 .mc-release-head-title {

@@ -2395,7 +2395,7 @@ function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
   const [bootError, setBootError] = useState("");
   const [tab, setTab] = useState(() => {
     const selected = new URLSearchParams(location.search).get("tab");
-    return ["overview", "tasks", "chats", "files", "approvals", "org", "roles", "finops", "evals", "experience", "extensions"].includes(selected) ? selected : "overview";
+    return ["overview", "projects", "tasks", "chats", "files", "approvals", "org", "roles", "finops", "evals", "experience", "extensions"].includes(selected) ? selected : "overview";
   });
   const [chats, setChats] = useState([]);
   const [active, setActive] = useState(null);

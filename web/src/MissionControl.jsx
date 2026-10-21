@@ -134,6 +134,86 @@ function Empty({ title, hint, action }) {
   );
 }
 
+/* --------------------------------------------------- 出厂交付包 */
+
+const RELEASE_ICON = { ".html": "🌐", ".htm": "🌐", ".json": "⚙️", ".md": "📄", ".txt": "📄", ".py": "🐍" };
+
+function ReleaseCard({ pid, releaseData, onPreview }) {
+  const files = releaseData?.files || [];
+  if (!releaseData?.has_release || !files.length) return null;
+  const total = files.reduce((n, f) => n + (f.bytes || 0), 0);
+  return (
+    <div className="mc-section mc-release-box">
+      <div className="mc-section-head">
+        <div className="mc-release-head-title">
+          <span className="mc-release-icon" aria-hidden>📦</span>
+          <div>
+            <h4>出厂交付包</h4>
+            <span className="mc-hint">
+              {files.length} 个交付物 · 合计 {fmt(total)} 字节 · 已归档到 release/
+            </span>
+          </div>
+        </div>
+        <a className="mc-btn primary" href={api.releaseZipUrl(pid)} download={`${pid}_release.zip`}>
+          打包下载 (.zip)
+        </a>
+      </div>
+      <div className="mc-release-grid">
+        {files.map((f) => (
+          <div key={f.name} className="mc-release-item">
+            <span className="mc-file-icon" aria-hidden>{RELEASE_ICON[f.ext] || "📄"}</span>
+            <span className="mc-file-info">
+              <span className="mc-file-name" title={f.name}>{f.name}</span>
+              <span className="mc-file-meta">{fmt(f.bytes)} 字节 · {(f.ext || "").replace(".", "").toUpperCase() || "FILE"}</span>
+            </span>
+            <span className="mc-file-actions">
+              {f.is_previewable && (
+                <button className="mc-btn ghost" onClick={() => onPreview(f)}>预览</button>
+              )}
+              <a className="mc-btn ghost" href={api.releasePreviewUrl(pid, f.name)}
+                 target="_blank" rel="noreferrer" title="新标签页打开">↗</a>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PreviewModal({ pid, file, onClose }) {
+  useEffect(() => {
+    if (!file) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [file, onClose]);
+
+  if (!file) return null;
+  const isHtml = file.ext === ".html" || file.ext === ".htm";
+  const url = api.releasePreviewUrl(pid, file.name);
+  return (
+    <div className="mc-modal-overlay" onClick={onClose} role="dialog" aria-modal="true"
+         aria-label={`交付物预览 ${file.name}`}>
+      <div className="mc-modal-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="mc-modal-header">
+          <div className="mc-modal-title">
+            <span>{isHtml ? "🌐 页面实时渲染" : "📄 文件内容"}</span>
+            <span className="mc-modal-sub">{file.name} · {fmt(file.bytes)} B</span>
+          </div>
+          <div className="mc-modal-actions">
+            <a className="mc-btn ghost" href={url} target="_blank" rel="noreferrer">新窗口打开 ↗</a>
+            <button className="mc-modal-close" onClick={onClose} aria-label="关闭预览">✕</button>
+          </div>
+        </div>
+        <div className="mc-modal-body">
+          <iframe className={isHtml ? "mc-preview-frame" : "mc-preview-code-frame"}
+                  src={url} title={file.name} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------------------------------- 主视图 */
 
 export default function MissionControl({ Icon, onOpenChat }) {
@@ -595,6 +675,8 @@ export default function MissionControl({ Icon, onOpenChat }) {
                      onClose={() => setStageOpen("")}
                      onChanged={() => { loadDetail(activeId); loadList(true); }} />
       )}
+
+      <PreviewModal pid={activeId} file={previewFile} onClose={() => setPreviewFile(null)} />
     </section>
   );
 }
