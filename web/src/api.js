@@ -326,3 +326,11 @@ Object.assign(api, {
   testWecomRobot: () => req("/wecom/robot/test", { method: "POST" }),
   notifications: () => req("/notifications"),
 });
+
+
+// V4.4 出厂交付包与在线预览
+Object.assign(api, {
+  releaseFiles: (pid) => req(`/projects/${pid}/release/files`),
+  releaseZipUrl: (pid) => api.withToken(`/projects/${pid}/release/zip`),
+  releasePreviewUrl: (pid, file) => api.withToken(`/projects/${pid}/release/preview/${encodeURIComponent(file)}`),
+});

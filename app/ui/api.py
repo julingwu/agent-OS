@@ -623,9 +623,9 @@ def _run_turn(chat_id: str, employee_id: str | None, text: str, ident: str,
                     blocks = []
                     for a in reversed(atts):
                         body = (a["text"] or "")[:6000]
-                        blocks.append("【附件：" + a["name"] + "】\n" + body)
-                    prompt += ("\n\n以下是用户上传的附件内容，请据此回答：\n"
-                               + "\n\n".join(blocks))
+                        blocks.append("【附件：" + a["name"] + "】\r\n" + body)
+                    prompt += ("\r\n\r\n以下是用户上传的附件内容，请据此回答：\r\n"
+                               + "\r\n\r\n".join(blocks))
             except Exception:                  # noqa: BLE001
                 pass
             # 被打回过就带上失败清单，让模型这一轮照着改（而不是盲改）
@@ -634,7 +634,7 @@ def _run_turn(chat_id: str, employee_id: str | None, text: str, ident: str,
                    WHERE task_id=? AND state='failed' ORDER BY seq""", (task_id,)).fetchall()
             if failed:
                 lines = [f"- {f['criterion']}：{f['note'] or ''}" for f in failed]
-                prompt += "\n\n上次验收未通过，请逐条修正：\n" + "\n".join(lines)
+                prompt += "\r\n\r\n上次验收未通过，请逐条修正：\r\n" + "\r\n".join(lines)
             from .. import trace as _trace
             tr = _trace.start(conn, run_id=run_id, task_id=task_id,
                               agent_id=employee_id, project_id=None)
@@ -1288,7 +1288,7 @@ def retry_task(task_id: str, payload: TaskRetryIn | None = None,
         task = tenant.scoped_task(conn, task_id, _task_write_entities(conn, actor))
         prompt = payload.prompt
         if not prompt and (payload.note or "").strip():
-            prompt = _retry_prompt(conn, task_id) + "\n本次补充要求：" + payload.note.strip()
+            prompt = _retry_prompt(conn, task_id) + "\r\n本次补充要求：" + payload.note.strip()
         budget = payload.budget_tokens if payload.budget_tokens is not None else _budget_for(conn, task["legal_entity_id"])
         try:
             retry = prepare_retry(conn, task_id, RetryIn(prompt=prompt, runner=runner, budget_tokens=budget),
@@ -1656,6 +1656,98 @@ def project_stage_file(project_id: str, stage_key: str, delivery_id: str,
     return FileResponse(path, filename=path.name)
 
 
+# ---------------------------------------------------- V4.4 出厂交付包与在线预览
+@router.get("/projects/{project_id}/release/files")
+def project_release_files(project_id: str, oa_ui: str | None = Depends(_token)):
+    """获取最终出厂交付物目录文件列表。"""
+    _require(oa_ui)
+    with get_conn() as conn:
+        p = conn.execute("SELECT id, name FROM projects WHERE id=?", (project_id,)).fetchone()
+        if p is None:
+            raise HTTPException(404, detail={"code": "ProjectNotFound"})
+    from ..engine import dsh_adapter
+    rel_dir = dsh_adapter.workspace() / "projects" / project_id / "release"
+    if not rel_dir.exists():
+        return {"ok": True, "project_id": project_id, "files": [], "has_release": False}
+    files = []
+    for f in sorted(rel_dir.iterdir(), key=lambda x: x.name):
+        if f.is_file():
+            files.append({
+                "name": f.name,
+                "bytes": f.stat().st_size,
+                "modified": int(f.stat().st_mtime),
+                "ext": f.suffix.lower(),
+                "is_previewable": f.suffix.lower() in (".html", ".htm", ".json", ".md", ".txt", ".py")
+            })
+    return {"ok": True, "project_id": project_id, "files": files, "has_release": len(files) > 0}
+
+
+@router.get("/projects/{project_id}/release/zip")
+def download_release_zip(project_id: str, oa_ui: str | None = Depends(_token)):
+    """一键打包下载全部出厂交付物 (.zip)。"""
+    _require(oa_ui)
+    import io
+    import zipfile
+    from fastapi.responses import Response
+
+    with get_conn() as conn:
+        p = conn.execute("SELECT id, name FROM projects WHERE id=?", (project_id,)).fetchone()
+        if p is None:
+            raise HTTPException(404, detail={"code": "ProjectNotFound"})
+    from ..engine import dsh_adapter
+    rel_dir = dsh_adapter.workspace() / "projects" / project_id / "release"
+    if not rel_dir.exists():
+        raise HTTPException(404, detail={"code": "ReleaseNotFound"})
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in rel_dir.iterdir():
+            if f.is_file():
+                zf.write(f, arcname=f.name)
+    zip_buffer.seek(0)
+    filename = f"{project_id}_release.zip"
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
+@router.get("/projects/{project_id}/release/preview/{filename}")
+def preview_release_file(project_id: str, filename: str, oa_ui: str | None = Depends(_token)):
+    """在线预览/查看出厂交付物（HTML 网页渲染、JSON 契约查看等）。"""
+    _require(oa_ui)
+    from fastapi.responses import FileResponse
+    # 路径穿越防范
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, detail={"code": "InvalidFilename"})
+    with get_conn() as conn:
+        p = conn.execute("SELECT id FROM projects WHERE id=?", (project_id,)).fetchone()
+        if p is None:
+            raise HTTPException(404, detail={"code": "ProjectNotFound"})
+    from ..engine import dsh_adapter
+    file_path = dsh_adapter.workspace() / "projects" / project_id / "release" / filename
+    if not file_path.is_file():
+        raise HTTPException(404, detail={"code": "FileNotFound"})
+
+    sfx = file_path.suffix.lower()
+    media_type = "text/plain; charset=utf-8"
+    if sfx in (".html", ".htm"):
+        media_type = "text/html; charset=utf-8"
+    elif sfx == ".json":
+        media_type = "application/json; charset=utf-8"
+    elif sfx == ".md":
+        media_type = "text/markdown; charset=utf-8"
+    elif sfx == ".css":
+        media_type = "text/css; charset=utf-8"
+    elif sfx == ".js":
+        media_type = "application/javascript; charset=utf-8"
+
+    return FileResponse(file_path, media_type=media_type)
+
+
 @router.post("/projects/{project_id}/stages/{stage_key}/assign")
 def project_stage_assign(project_id: str, stage_key: str, payload: AssignIn,
                          oa_ui: str | None = Depends(_token)):
@@ -1801,14 +1893,14 @@ async def chat_stream(chat_id: str, after: int = 0, oa_ui: str | None = Depends(
 
     async def gen():
         last = after
-        yield "retry: 3000\n\n"
+        yield "retry: 3000\r\n\r\n"
         for _ in range(600):                  # 最多 10 分钟，前端断开即结束
             try:
                 with get_conn() as conn:
                     rows = store.messages(conn, chat_id, after_id=last)
                 for m in rows:
                     last = max(last, int(m["id"]))
-                    yield "data: " + json.dumps(m, ensure_ascii=False) + "\n\n"
+                    yield "data: " + json.dumps(m, ensure_ascii=False) + "\r\n\r\n"
             except Exception:                  # noqa: BLE001
                 pass
             await asyncio.sleep(1.0)
@@ -1850,7 +1942,7 @@ async def upload_attachment(chat_id: str, file: UploadFile = File(...),
         if suffix == ".pdf":
             from pypdf import PdfReader
             reader = PdfReader(str(target))
-            text = "\n".join((pg.extract_text() or "") for pg in reader.pages[:30])
+            text = "\r\n".join((pg.extract_text() or "") for pg in reader.pages[:30])
         elif suffix in (".txt", ".md", ".py", ".js", ".json", ".csv", ".html", ".yml", ".yaml"):
             text = target.read_text(encoding="utf-8", errors="replace")
         else:
@@ -1935,7 +2027,7 @@ async def run_live_stream(run_id: str, after: int = 0, oa_ui: str | None = Depen
     async def gen():
         last = int(after or 0)
         idle = 0
-        yield "retry: 3000\n\n"
+        yield "retry: 3000\r\n\r\n"
         for _ in range(900):                    # 上限 12 分钟，前端断开即结束
             rows, state = [], None
             try:
@@ -1964,19 +2056,19 @@ async def run_live_stream(run_id: str, after: int = 0, oa_ui: str | None = Depen
                 payload = {"kind": kind, "name": row["name"], "status": row["status"],
                            "start_ms": row["started_ms"], "end_ms": row["ended_ms"],
                            "tokens": row["tokens"], "detail": row["detail"] or ""}
-                yield "event: " + event + "\ndata: " + json.dumps(
-                    payload, ensure_ascii=False) + "\n\n"
+                yield "event: " + event + "\r\ndata: " + json.dumps(
+                    payload, ensure_ascii=False) + "\r\n\r\n"
                 if kind == "tool" and (row["detail"] or ""):
-                    yield "event: tool_result\ndata: " + json.dumps(
+                    yield "event: tool_result\r\ndata: " + json.dumps(
                         {"name": row["name"], "detail": row["detail"],
-                         "status": row["status"]}, ensure_ascii=False) + "\n\n"
+                         "status": row["status"]}, ensure_ascii=False) + "\r\n\r\n"
                 idle = 0
-            yield "event: status\ndata: " + json.dumps(
-                {"run_id": run_id, "state": state}, ensure_ascii=False) + "\n\n"
+            yield "event: status\r\ndata: " + json.dumps(
+                {"run_id": run_id, "state": state}, ensure_ascii=False) + "\r\n\r\n"
             if state in _TERMINAL_RUN:
                 idle += 1
                 if idle >= 2 and not rows:
-                    yield "event: done\ndata: {}\n\n"
+                    yield "event: done\r\ndata: {}\r\n\r\n"
                     return
             await asyncio.sleep(0.8)
 

@@ -149,6 +149,8 @@ export default function MissionControl({ Icon, onOpenChat }) {
   const [tab, setTab] = useState("gates");         // 右侧面板：gates | timeline | files
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
+  const [releaseData, setReleaseData] = useState(null);
+  const [previewFile, setPreviewFile] = useState(null);
   const alive = useRef(true);
 
   /* -- 项目列表 -- */
@@ -199,6 +201,11 @@ export default function MissionControl({ Icon, onOpenChat }) {
   }, []);
 
   useEffect(() => { if (activeId) loadDetail(activeId); }, [activeId, loadDetail]);
+
+  useEffect(() => {
+    if (!activeId) { setReleaseData(null); return; }
+    api.releaseFiles(activeId).then(setReleaseData).catch(() => setReleaseData(null));
+  }, [activeId, detail]);
 
   /* 进行中的项目每 6s 拉一次详情，保证轨道状态不落后 */
   useEffect(() => {
@@ -466,6 +473,9 @@ export default function MissionControl({ Icon, onOpenChat }) {
                   <p className="mc-hint">这个项目还没有任务分解（WBS）记录。</p>
                 )}
               </div>
+
+              {/* 出厂交付包（Release Bundle） */}
+              <ReleaseCard pid={activeId} releaseData={releaseData} onPreview={setPreviewFile} />
             </>
           )}
         </main>

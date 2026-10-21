@@ -855,3 +855,169 @@
 [data-theme="dark"] .mc-node-idx { background: var(--panel-2); }
 [data-theme="dark"] .mc-project.is-active { background: var(--purple-soft); }
 [data-theme="dark"] .mc-tl-mark { box-shadow: 0 0 0 2px var(--panel); }
+
+
+/* ------------------------------------------------------------ 出厂交付包与预览 */
+.mc-release-box {
+  margin-top: 24px;
+  background: var(--panel);
+  border: 1px solid var(--accent-line, rgba(99, 102, 241, 0.25));
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.mc-release-head-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mc-release-icon {
+  font-size: 24px;
+}
+
+.mc-release-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.mc-release-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  transition: all .15s ease;
+}
+
+.mc-release-item:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.mc-file-icon {
+  font-size: 22px;
+  flex: none;
+}
+
+.mc-file-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mc-file-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-file-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.mc-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* ------------------------------------------------------------ 预览模态框 */
+.mc-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(6px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.mc-modal-dialog {
+  width: 90vw;
+  max-width: 1200px;
+  height: 85vh;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
+.mc-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.mc-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.mc-modal-sub {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: monospace;
+}
+
+.mc-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mc-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.mc-modal-close:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mc-modal-body {
+  flex: 1;
+  min-height: 0;
+  background: #0b0d12;
+}
+
+.mc-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+}
+
+.mc-preview-code-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #0b0d12;
+}
