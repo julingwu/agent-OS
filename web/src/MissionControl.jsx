@@ -216,7 +216,7 @@ function PreviewModal({ pid, file, onClose }) {
 
 /* --------------------------------------------------- 主视图 */
 
-export default function MissionControl({ Icon, onOpenChat }) {
+export default function MissionControl({ Icon, onOpenChat, me }) {
   const [list, setList] = useState(null);          // {projects: [...]}
   const [listErr, setListErr] = useState("");
   const [q, setQ] = useState("");
@@ -231,6 +231,8 @@ export default function MissionControl({ Icon, onOpenChat }) {
   const [toast, setToast] = useState("");
   const [releaseData, setReleaseData] = useState(null);
   const [previewFile, setPreviewFile] = useState(null);
+  const [confirmDel, setConfirmDel] = useState(false);   // 删除项目的二次确认
+  const canDelete = ["ceo", "system"].includes(me?.role);
   const alive = useRef(true);
 
   /* -- 项目列表 -- */
@@ -345,6 +347,17 @@ export default function MissionControl({ Icon, onOpenChat }) {
       } else if (kind === "resume") {
         await api.resumeProject(pid);
         setToast("已提交恢复");
+      } else if (kind === "delete") {
+        const out = await api.deleteProject(pid);
+        setConfirmDel(false);
+        setDetail(null);
+        setReleaseData(null);
+        setActiveId("");
+        await loadList(false);
+        window.dispatchEvent(new Event("oa-tasks-changed"));
+        setToast(`已删除项目：清理 ${out.files_removed || 0} 个文件、`
+                 + `${out.dirs_removed || 0} 个目录、${Object.values(out.deleted || {}).reduce((a, b) => a + b, 0)} 行关联数据`);
+        return;
       }
       await loadDetail(pid);
       await loadList(true);
@@ -471,6 +484,20 @@ export default function MissionControl({ Icon, onOpenChat }) {
                       <Icon name="play" /> 恢复
                     </button>
                   )}
+                  {canDelete && (confirmDel ? (
+                    <>
+                      <button className="mc-btn danger" disabled={busy} onClick={() => act("delete")}
+                              title="删除后不可恢复：项目、阶段、闸门、任务、交付物文件、Run 轨迹一并清除">
+                        确认删除
+                      </button>
+                      <button className="mc-btn ghost" onClick={() => setConfirmDel(false)}>取消</button>
+                    </>
+                  ) : (
+                    <button className="mc-btn ghost" onClick={() => setConfirmDel(true)}
+                            title="彻底删除这个项目及其全部产物与缓存">
+                      删除项目
+                    </button>
+                  ))}
                 </div>
               </div>
 

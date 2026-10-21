@@ -359,6 +359,15 @@
 .mc-btn.primary:hover:not(:disabled) { background: var(--accent-2); border-color: var(--accent-2); }
 .mc-btn.ghost { background: transparent; }
 
+/* 危险操作（删除项目） */
+.mc-btn.danger {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: #fff;
+  font-weight: 600;
+}
+.mc-btn.danger:hover:not(:disabled) { filter: brightness(1.08); border-color: var(--bad); }
+
 /* ------------------------------------------------------------ 中：阶段轨道 */
 .mc-rail-wrap {
   border: 1px solid var(--line);

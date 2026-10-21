@@ -2606,7 +2606,7 @@ function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
         {bootError && <div className="hint" role="status">{bootError} <button className="btn ghost" onClick={boot}>重新加载</button></div>}
         {me.can_manage_deployment && <AlertBanner />}
         {tab === "overview" || tab === "tasks" ? <Workspace key={tab} chats={chats} pendingCount={pendingCount} Icon={Icon} onChat={openChat} onSelectTask={setFocusedTask} onNavigate={setTab} onNewTask={() => setTaskCreating(true)} tasksOnly={tab === "tasks"} />
-          : tab === "projects" ? <MissionControl Icon={Icon} onOpenChat={openChat} />
+          : tab === "projects" ? <MissionControl Icon={Icon} onOpenChat={openChat} me={me} />
           : tab === "finops" ? <FinOpsView />
           : tab === "evals" ? <EvalsView />
           : tab === "experience" ? <GovernanceView me={me} />

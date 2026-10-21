@@ -558,17 +558,58 @@ def delete_file(artifact_id: str, token: str | None = Auth):
             raise HTTPException(404, detail={"code": "FileNotFound"})
         task = tenant.scoped_task(conn, row["task_id"], _task_write_entities(conn, actor))
         key = path_key(row["file_path"])
-        aliases = [a["id"] for a in conn.execute(
+        same = [a for a in conn.execute(
             "SELECT a.id,a.file_path FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
             " WHERE r.task_id=? AND COALESCE(a.state,'active')='active'", (row["task_id"],))
-                   if path_key(a["file_path"]) == key]
+                if path_key(a["file_path"]) == key]
+        aliases = [a["id"] for a in same]
         conn.executemany("UPDATE artifacts SET state='deleted' WHERE id=?", [(a,) for a in aliases])
+        # 物理路径：同一份文件可能被多次登记；黑板与阶段交付物里也会各留一条
+        all_paths = {str(a["file_path"]) for a in same if a["file_path"]}
+        # 若别的任务（可能是别的租户）还在引用同一路径，这份物理文件与共享记录必须保留
+        shared_keys = {path_key(o["file_path"]) for o in conn.execute(
+            "SELECT a.file_path FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
+            " WHERE COALESCE(a.state,'active')='active' AND r.task_id<>?",
+            (row["task_id"],)).fetchall() if o["file_path"]}
+        kept_shared = {p for p in all_paths if path_key(p) in shared_keys}
+        victims = all_paths - kept_shared
+        purged = {"project_artifacts": 0, "stage_deliverables": 0}
+        for pth in victims:
+            for table in purged:
+                try:
+                    purged[table] += conn.execute(
+                        f"DELETE FROM {table} WHERE file_path=?", (pth,)).rowcount or 0
+                except sqlite3.OperationalError:
+                    pass
         write_audit(conn, legal_entity_id=task["legal_entity_id"], task_id=task["id"],
                     verb="admin", action="file_deleted", target=artifact_id, layer="system",
                     payload={"file_path": row["file_path"], "artifact_ids": aliases},
-                    response={"by": actor["id"], "deleted": len(aliases)})
+                    response={"by": actor["id"], "deleted": len(aliases),
+                              "kept_shared": len(kept_shared)})
         conn.commit()
-    return {"ok": True, "deleted": len(aliases)}
+
+    # 真正落盘删除：只允许删工作区 / data 目录内的文件，避免误伤系统文件
+    from ..engine import dsh_adapter
+    ws_root = pathlib.Path(dsh_adapter.workspace()).resolve()
+    data_root = (pathlib.Path(__file__).resolve().parents[2] / "data").resolve()
+    removed = 0
+    for pth in victims:
+        p = pathlib.Path(pth)
+        try:
+            p.resolve().relative_to(ws_root)
+        except ValueError:
+            try:
+                p.resolve().relative_to(data_root)
+            except ValueError:
+                continue          # 不在允许范围内，跳过
+        try:
+            if p.is_file():
+                p.unlink()
+                removed += 1
+        except OSError:
+            pass
+    return {"ok": True, "deleted": len(aliases), "files_removed": removed,
+            "purged": purged}
 
 
 # --------------------------------------------------------------- 知识库

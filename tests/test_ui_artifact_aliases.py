@@ -51,7 +51,9 @@ def test_retry_artifacts_dedupe_by_canonical_path_and_delete_all_task_aliases(co
     assert deleted.status_code == 200 and deleted.json()["deleted"] == 3, deleted.text
     assert [a["id"] for a in raw.get(f"/ui/tasks/{tid}").json()["artifacts"]] == [nested_id]
     assert [f["id"] for f in raw.get("/ui/files").json()["files"] if f["task_id"] == tid] == [nested_id]
-    assert path.exists() and nested.exists(), "soft deletion must preserve physical files"
+    # v4.5.3 契约变更：删除要真正落盘清理，不留残留；但绝不能误伤别的目录里的同名产物
+    assert not path.exists(), "hard deletion must remove the physical file"
+    assert nested.exists(), "same-named deliverable in another folder must survive"
     for alias in (old_id, new_id, "ART-canonical-alias"):
         assert raw.get(f"/ui/files/{alias}/preview").status_code == 404
         assert raw.get(f"/ui/files/{alias}/download").status_code == 404

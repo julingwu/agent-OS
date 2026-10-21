@@ -249,6 +249,8 @@ Object.assign(api, {
 // 项目级开关（v1.6.1）
 Object.assign(api, {
   patchProject: (id, body) => req(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  // v4.5.3 彻底删除项目（连带关联行 / 交付物 / Run 轨迹）
+  deleteProject: (id) => req(`/projects/${id}`, { method: "DELETE" }),
 });
 
 // V2.0

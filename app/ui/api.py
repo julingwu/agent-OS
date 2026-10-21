@@ -1473,6 +1473,182 @@ def patch_project(project_id: str, payload: ProjectPatch,
     return {"ok": True, "project": dict(p)}
 
 
+def _in_clause(col: str, ids: list) -> tuple[str, list]:
+    return f"{col} IN ({','.join('?' * len(ids))})", list(ids)
+
+
+def _under(path, root) -> bool:
+    """只允许清理工作区/数据区内的路径，绝不碰系统目录。"""
+    import pathlib
+    try:
+        pathlib.Path(path).resolve().relative_to(pathlib.Path(root).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str, oa_ui: str | None = Depends(_token)):
+    """彻底删除项目：数据库关联行 + 磁盘交付物 + Run 轨迹一次清干净。
+
+    不可恢复，只允许 ceo / system 执行；项目仍有 Run 在跑时直接拒绝。
+    """
+    import pathlib
+    import shutil
+
+    _require(oa_ui)
+    from ..engine import dsh_adapter
+    repo = pathlib.Path(__file__).resolve().parents[2]
+    root = pathlib.Path(dsh_adapter.workspace())
+
+    with get_conn() as conn:
+        from .. import pipeline
+        pipeline.ensure(conn)
+        actor = _task_actor(conn, oa_ui, "task:*")
+        if actor["role"] not in {"ceo", "system"}:
+            raise HTTPException(403, detail={"code": "Forbidden",
+                                             "message": "只有 CEO / 系统管理员可以删除项目"})
+        proj = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+        if proj is None:
+            raise HTTPException(404, detail={"code": "ProjectNotFound"})
+        tenant_where, tenant_args = tenant.clause(conn, actor, "p.legal_entity_id")
+        if conn.execute(
+                f"SELECT 1 FROM projects p WHERE p.id=? AND p.tenant_id=? AND {tenant_where}",
+                (project_id, actor["tenant_id"], *tenant_args)).fetchone() is None:
+            raise HTTPException(403, detail={"code": "Forbidden"})
+
+        running = conn.execute(
+            "SELECT COUNT(*) FROM task_runs r JOIN tasks t ON t.id=r.task_id"
+            " WHERE t.project_id=? AND r.state IN ('spawned','running','paused')",
+            (project_id,)).fetchone()[0]
+        if running:
+            raise HTTPException(409, detail={
+                "code": "ProjectRunning",
+                "message": f"该项目还有 {running} 个 Run 在执行，请先终止或等它结束再删除。"})
+
+        task_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM tasks WHERE project_id=?", (project_id,))]
+
+        def rows(sql: str, params=(list,)) -> list:
+            """老库可能还没有 v4.x 的某些表，缺失就当空表处理。"""
+            try:
+                return conn.execute(sql, params).fetchall()
+            except sqlite3.OperationalError:
+                return []
+
+        run_ids = []
+        if task_ids:
+            sql, params = _in_clause("task_id", task_ids)
+            run_ids = [r["id"] for r in rows(f"SELECT id FROM task_runs WHERE {sql}", params)]
+        trace_ids = [r["trace_id"] for r in rows(
+            "SELECT trace_id FROM agent_traces WHERE project_id=?", (project_id,))]
+
+        # 删库前先把磁盘路径收集齐
+        paths: set[str] = set()
+        if run_ids:
+            sql, params = _in_clause("run_id", run_ids)
+            for r in rows(f"SELECT file_path FROM artifacts WHERE {sql}", params):
+                if r["file_path"]:
+                    paths.add(r["file_path"])
+        for r in rows("SELECT file_path FROM stage_deliverables WHERE project_id=?", (project_id,)):
+            if r["file_path"]:
+                paths.add(r["file_path"])
+        for r in rows("SELECT file_path FROM project_artifacts WHERE project_id=?"
+                      " AND file_path IS NOT NULL", (project_id,)):
+            if r["file_path"]:
+                paths.add(r["file_path"])
+
+        counts: dict[str, int] = {}
+
+        def drop(table: str, sql: str, params) -> None:
+            try:
+                cur = conn.execute(sql, params)
+                if (cur.rowcount or 0) > 0:
+                    counts[table] = counts.get(table, 0) + cur.rowcount
+            except sqlite3.OperationalError:
+                pass          # 老库可能还没有这张表
+
+        if run_ids:
+            sql, params = _in_clause("run_id", run_ids)
+            for t in ("artifacts", "run_locks", "run_stream", "run_diagnoses",
+                      "redline_scans", "tool_approvals", "eval_results", "ai_audit_logs"):
+                drop(t, f"DELETE FROM {t} WHERE {sql}", params)
+
+        if task_ids:
+            sql, params = _in_clause("task_id", task_ids)
+            for t in ("acceptance_criteria", "budgets", "wbs_items", "agent_traces",
+                      "chat_messages", "decision_packages", "wecom_approvals",
+                      "eval_sets", "eval_results", "tool_approvals", "run_diagnoses",
+                      "redline_scans", "ai_audit_logs", "task_runs"):
+                drop(t, f"DELETE FROM {t} WHERE {sql}", params)
+
+        if trace_ids:
+            sql, params = _in_clause("trace_id", trace_ids)
+            drop("trace_spans", f"DELETE FROM trace_spans WHERE {sql}", params)
+
+        for t in ("project_stages", "stage_gates", "stage_deliverables",
+                  "project_artifacts", "wbs_items", "project_budgets",
+                  "stage_budgets", "budget_approvals", "budget_events",
+                  "eval_sets", "agent_traces", "flows"):
+            column = "id" if t == "flows" else "project_id"
+            drop(t, f"DELETE FROM {t} WHERE {column}=?", (project_id,))
+
+        ws_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM workshops WHERE project_id=?", (project_id,))]
+        if ws_ids:
+            sql, params = _in_clause("workshop_id", ws_ids)
+            drop("workshop_turns", f"DELETE FROM workshop_turns WHERE {sql}", params)
+        drop("workshops", "DELETE FROM workshops WHERE project_id=?", (project_id,))
+
+        drop("tasks", "DELETE FROM tasks WHERE project_id=?", (project_id,))
+        drop("projects", "DELETE FROM projects WHERE id=?", (project_id,))
+
+        write_audit(conn, legal_entity_id=proj["legal_entity_id"], verb="admin",
+                    actor=actor["id"], layer="system", action="project_deleted",
+                    target=project_id,
+                    payload={"project_id": project_id, "name": proj["name"],
+                             "task_ids": task_ids, "run_ids": run_ids},
+                    response={"deleted": counts})
+        conn.commit()
+
+    # 磁盘清理放在提交之后：库里已经删掉了，磁盘失败也不回滚
+    removed_files = removed_dirs = 0
+    file_targets = [pathlib.Path(raw) for raw in paths
+                    if (_under(raw, root) or _under(raw, repo / "data"))
+                    and pathlib.Path(raw).is_file()]
+    dirs = [root / "projects" / project_id]
+    for tid in task_ids:
+        dirs.extend(d for d in root.glob(f"*/{tid}") if d.is_dir())
+    for d in dirs:
+        if _under(d, root) and d.exists():
+            removed_files += sum(1 for f in d.rglob("*") if f.is_file())
+            shutil.rmtree(d, ignore_errors=True)
+            removed_dirs += 1
+
+    # 目录外的散落交付物（例如直接写在 data/ 下）单独删
+    for fp in file_targets:
+        if fp.exists():
+            try:
+                fp.unlink()
+                removed_files += 1
+            except OSError:
+                pass
+
+    runs_dir = repo / "docs" / "runs"
+    if runs_dir.is_dir():
+        for rid in run_ids:
+            for f in runs_dir.glob(f"{rid}*.jsonl"):
+                if _under(f, runs_dir):
+                    try:
+                        f.unlink()
+                        removed_files += 1
+                    except OSError:
+                        pass
+
+    return {"ok": True, "project_id": project_id, "deleted": counts,
+            "files_removed": removed_files, "dirs_removed": removed_dirs}
+
+
 @router.get("/projects/{project_id}")
 def project_detail(project_id: str, oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
