@@ -374,6 +374,36 @@ def review(conn, exp_id: str, action: str, *, reviewer: str, note: str | None = 
     return dict(conn.execute("SELECT * FROM org_experiences WHERE id=?", (exp_id,)).fetchone())
 
 
+def delete(conn, exp_id: str, *, actor: str | dict,
+           tenant_id: str | None = None, entity: str | None = None) -> dict:
+    """彻底删除一条组织经验，连同它的审阅历史。
+
+    为什么是硬删除而不是打标记：经验库的语义是「当前生效的规则」。
+    留一条看不见的僵尸记录既占检索空间，又会让 redline 判定产生歧义；
+    删除动作本身写进 ai_audit_logs，追责链仍然完整。
+    """
+    ensure(conn)
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    entity, tenant_id = _scope(conn, entity, tenant_id)
+    who = _reviewer(conn, actor, entity, tenant_id)
+    row = conn.execute("SELECT * FROM org_experiences WHERE id=? AND tenant_id=?"
+                       " AND legal_entity_id=?", (exp_id, tenant_id, entity)).fetchone()
+    if row is None:
+        raise KeyError(exp_id)
+    reviews = conn.execute("SELECT COUNT(*) FROM experience_reviews WHERE experience_id=?",
+                           (exp_id,)).fetchone()[0]
+    conn.execute("DELETE FROM experience_reviews WHERE experience_id=?", (exp_id,))
+    conn.execute("DELETE FROM org_experiences WHERE id=?", (exp_id,))
+    write_audit(conn, legal_entity_id=entity, verb="memory_write", actor=who["id"],
+                action="experience_deleted", target=exp_id,
+                payload={"title": row["title"], "kind": row["kind"], "state": row["state"],
+                         "version": row["version"], "reviews": reviews},
+                response={"deleted": True})
+    conn.commit()
+    return {"id": exp_id, "title": row["title"], "reviews_removed": reviews}
+
+
 def edit(conn, exp_id: str, changes: dict, *, actor: str,
          tenant_id: str | None = None, entity: str | None = None) -> dict:
     ensure(conn)

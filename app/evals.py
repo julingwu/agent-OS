@@ -340,3 +340,37 @@ def batch_detail(conn, batch_id: str) -> dict:
     for r in results:
         r["output_chars"] = len(r.pop("output", "") or "")
     return {"batch": dict(b), "results": results}
+
+
+def delete_set(conn, set_id: str) -> dict:
+    """删除一条评测样本（基准用例），连带它的所有评测结果。"""
+    ensure(conn)
+    row = conn.execute("SELECT * FROM eval_sets WHERE id=?", (set_id,)).fetchone()
+    if row is None:
+        raise KeyError(set_id)
+    results = conn.execute("DELETE FROM eval_results WHERE set_id=?", (set_id,)).rowcount or 0
+    conn.execute("DELETE FROM eval_sets WHERE id=?", (set_id,))
+    write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="eval", actor="ui",
+                action="eval_set_deleted", target=set_id,
+                payload={"name": row["name"], "results": results},
+                response={"deleted": True})
+    conn.commit()
+    return {"id": set_id, "name": row["name"], "results_removed": results}
+
+
+def delete_batch(conn, batch_id: str) -> dict:
+    """删除一次回归评测批次，连带它的全部结果。"""
+    ensure(conn)
+    row = conn.execute("SELECT * FROM eval_runs WHERE id=?", (batch_id,)).fetchone()
+    if row is None:
+        raise KeyError(batch_id)
+    results = conn.execute("DELETE FROM eval_results WHERE eval_run_id=?",
+                           (batch_id,)).rowcount or 0
+    conn.execute("DELETE FROM eval_runs WHERE id=?", (batch_id,))
+    write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="eval", actor="ui",
+                action="eval_batch_deleted", target=batch_id,
+                payload={"name": row["name"], "results": results},
+                response={"deleted": True})
+    conn.commit()
+    return {"id": batch_id, "name": row["name"], "results_removed": results}
+

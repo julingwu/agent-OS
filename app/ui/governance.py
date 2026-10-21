@@ -111,6 +111,18 @@ def review_experience(exp_id: str, payload: ReviewIn,
         return {"ok": True, "experience": row}
 
 
+@router.delete("/experiences/{exp_id}")
+def delete_experience(exp_id: str, oa_ui: str | None = Depends(_token)):
+    """彻底删除一条组织经验（含审阅历史）；强制规则删除后立刻不再生效。"""
+    with get_conn() as conn:
+        actor, scope = _actor(conn, oa_ui, admin=True)
+        try:
+            out = experience.delete(conn, exp_id, actor=actor, **scope)
+        except (KeyError, PermissionError, ValueError) as exc:
+            raise _error(exc) from exc
+        return {"ok": True, **out}
+
+
 @router.post("/experiences/preview")
 def preview_experiences(payload: QueryIn, oa_ui: str | None = Depends(_token)):
     with get_conn() as conn:

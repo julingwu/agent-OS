@@ -6,6 +6,7 @@ import Workspace from "./Workspace.jsx";
 import NewTaskModal from "./NewTaskModal.jsx";
 import ProjectFlow, { FailureDiagnosis } from "./ProjectFlow.jsx";
 import MissionControl from "./MissionControl.jsx";
+import MaintenanceView from "./MaintenanceView.jsx";
 import DialogAccessibility from "./DialogAccessibility.jsx";
 import ExtensionsView from "./ExtensionsView.jsx";
 import GovernanceView, { ProjectRecovery } from "./GovernanceView.jsx";
@@ -1614,6 +1615,7 @@ function EvalsView() {
   const [promptMode, setPromptMode] = useState("stored");
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState("");
+  const [pending, setPending] = useState("");   // 删除二次确认的 id
   const load = useCallback(async () => {
     try {
       const r = await api.evals();
@@ -1646,6 +1648,28 @@ function EvalsView() {
   }
   async function openBatch(b) {
     try { setDetail(await api.evalBatch(b.id)); } catch { setDetail(null); }
+  }
+  async function removeSet(s) {
+    if (pending !== s.id) { setPending(s.id); return; }
+    setBusy(s.id); setNote(""); setPending("");
+    try {
+      const r = await api.deleteEvalSet(s.id);
+      setNote(`已删除基准「${s.name}」及其 ${r.results_removed || 0} 条评测结果`);
+      if (detail?.results?.some((x) => x.set_id === s.id)) setDetail(null);
+      await load();
+    } catch (e) { setNote(e.message || "删除失败"); }
+    finally { setBusy(""); }
+  }
+  async function removeBatch(b) {
+    if (pending !== b.id) { setPending(b.id); return; }
+    setBusy(b.id); setNote(""); setPending("");
+    try {
+      const r = await api.deleteEvalBatch(b.id);
+      setNote(`已删除批次「${b.name}」及其 ${r.results_removed || 0} 条结果`);
+      if (detail?.batch?.id === b.id) setDetail(null);
+      await load();
+    } catch (e) { setNote(e.message || "删除失败"); }
+    finally { setBusy(""); }
   }
 
   const sets = data.sets || [];
@@ -1690,6 +1714,10 @@ function EvalsView() {
                           onClick={() => runOne(s)}>
                     {busy === s.id ? "启动中…" : "跑这条"}
                   </button>
+                  <button className={cls("btn", pending === s.id ? "danger" : "ghost")}
+                          disabled={busy === s.id} onClick={() => removeSet(s)}>
+                    {pending === s.id ? "确认删除" : "删除"}
+                  </button>
                 </div>
               ))}
             </div>
@@ -1708,6 +1736,11 @@ function EvalsView() {
                     {b.state}
                   </span>
                   <b className="money">{b.avg_score ? b.avg_score.toFixed(1) : "—"}</b>
+                  <button className={cls("btn", pending === b.id ? "danger" : "ghost")}
+                          disabled={busy === b.id}
+                          onClick={(e) => { e.stopPropagation(); removeBatch(b); }}>
+                    {pending === b.id ? "确认删除" : "删除"}
+                  </button>
                 </div>
               ))}
             </div>
@@ -2395,7 +2428,7 @@ function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
   const [bootError, setBootError] = useState("");
   const [tab, setTab] = useState(() => {
     const selected = new URLSearchParams(location.search).get("tab");
-    return ["overview", "projects", "tasks", "chats", "files", "approvals", "org", "roles", "finops", "evals", "experience", "extensions"].includes(selected) ? selected : "overview";
+    return ["overview", "projects", "tasks", "chats", "files", "approvals", "org", "roles", "finops", "evals", "experience", "extensions", "maintenance"].includes(selected) ? selected : "overview";
   });
   const [chats, setChats] = useState([]);
   const [active, setActive] = useState(null);
@@ -2550,7 +2583,9 @@ function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
     ["roles", "role", "角色库"], ["finops", "wallet", "用量与费用"],
     ["evals", "flask", "评测中心"], ["experience", "brain", "组织经验"],
     ["extensions", "gear", "工具与集成"],
-  ].filter(([key]) => key !== "extensions" || ["ceo", "system"].includes(me.role));
+    ["maintenance", "refresh", "系统维护"],
+  ].filter(([key]) => (key !== "extensions" && key !== "maintenance")
+                      || ["ceo", "system"].includes(me.role));
   const pageName = navItems.find(([key]) => key === tab)?.[2] || "工作台";
   const chatLayout = tab === "chats";
   const openChat = (chat) => { setActive(chat); setTab("chats"); };
@@ -2611,6 +2646,7 @@ function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
           : tab === "evals" ? <EvalsView />
           : tab === "experience" ? <GovernanceView me={me} />
           : tab === "extensions" ? (["ceo", "system"].includes(me.role) ? <ExtensionsView /> : <div className="empty" role="status">请由管理员配置工具连接。</div>)
+          : tab === "maintenance" ? (["ceo", "system"].includes(me.role) ? <MaintenanceView /> : <div className="empty" role="status">仅管理员可执行系统清理。</div>)
           : tab === "roles" ? <RolesView onChanged={boot} />
           : tab === "org" ? <><div className="org-actions"><span>组织与团队</span>{me.can_manage_deployment && <button className="btn" onClick={() => setDepting(true)}><Icon name="plus" /> 新建部门</button>}<button className="btn primary" onClick={() => setAdding(true)}><Icon name="plus" /> 添加员工</button></div><OrgView org={org} onPick={(emp) => setEmpPanel(emp)} departments={depts} onRenameDept={me.can_manage_deployment ? renameDept : undefined} onDeleteDept={me.can_manage_deployment ? removeDept : undefined} /></>
           : tab === "approvals" ? <ApprovalsView onChanged={refreshApprovals} />

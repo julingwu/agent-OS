@@ -1823,6 +1823,30 @@ def create_flow_template(payload: FlowTemplateIn, oa_ui: str | None = Depends(_t
     return {"ok": True, "flow_id": payload.id, "nodes": len(payload.nodes)}
 
 
+@router.delete("/flow-templates/{flow_id}")
+def delete_flow_template(flow_id: str, oa_ui: str | None = Depends(_token)):
+    """删除自定义流水线模板。内置模板（FLOW-SOFTWARE 等）不可删除。"""
+    _require(oa_ui)
+    with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:create")
+        if actor["role"] not in ("ceo", "system", "admin"):
+            raise HTTPException(403, detail={"code": "Forbidden"})
+        from .. import flows
+        flows.ensure(conn)
+        row = conn.execute("SELECT id, name FROM flow_templates WHERE id=?", (flow_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, detail={"code": "FlowNotFound"})
+        if flow_id in flows.PRESETS:
+            raise HTTPException(409, detail={"code": "BuiltinFlowUndeletable",
+                                             "message": "内置流程模板不可删除，只能停用自定义模板"})
+        conn.execute("DELETE FROM flow_templates WHERE id=?", (flow_id,))
+        write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="admin", actor=actor["id"],
+                    layer="system", action="flow_template_deleted", target=flow_id,
+                    payload={"name": row["name"]}, response={"deleted": True})
+        conn.commit()
+    return {"ok": True, "deleted": flow_id}
+
+
 @router.get("/projects/{project_id}/stages/{stage_key}")
 def project_stage(project_id: str, stage_key: str, oa_ui: str | None = Depends(_token)):
     """阶段详情：交付物 + 闸门 + 审计 + 历史 Run/Trace（点已完成阶段进来的页）。"""
@@ -2564,6 +2588,36 @@ def ui_eval_batch(batch_id: str, oa_ui: str | None = Depends(_token)):
     with get_conn() as conn:
         from .. import evals
         return evals.batch_detail(conn, batch_id)
+
+
+@router.delete("/evals/sets/{set_id}")
+def ui_eval_delete_set(set_id: str, oa_ui: str | None = Depends(_token)):
+    """删除一条评测样本（基准用例）及其全部结果。"""
+    _require(oa_ui)
+    with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:*")
+        if actor["role"] not in {"ceo", "system"}:
+            raise HTTPException(403, detail={"code": "Forbidden"})
+        from .. import evals
+        try:
+            return {"ok": True, **evals.delete_set(conn, set_id)}
+        except KeyError:
+            raise HTTPException(404, detail={"code": "EvalSetNotFound"}) from None
+
+
+@router.delete("/evals/batches/{batch_id}")
+def ui_eval_delete_batch(batch_id: str, oa_ui: str | None = Depends(_token)):
+    """删除一次回归评测批次及其全部结果。"""
+    _require(oa_ui)
+    with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:*")
+        if actor["role"] not in {"ceo", "system"}:
+            raise HTTPException(403, detail={"code": "Forbidden"})
+        from .. import evals
+        try:
+            return {"ok": True, **evals.delete_batch(conn, batch_id)}
+        except KeyError:
+            raise HTTPException(404, detail={"code": "EvalBatchNotFound"}) from None
 
 
 # ------------------------------------------------------- 组织经验（v2.4）

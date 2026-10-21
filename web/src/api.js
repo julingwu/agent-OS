@@ -336,3 +336,13 @@ Object.assign(api, {
   releaseZipUrl: (pid) => api.withToken(`/projects/${pid}/release/zip`),
   releasePreviewUrl: (pid, file) => api.withToken(`/projects/${pid}/release/preview/${encodeURIComponent(file)}`),
 });
+
+// V4.5.4 补齐删除能力 + 系统维护清理
+Object.assign(api, {
+  deleteExperience: (id) => req(`/experiences/${id}`, { method: "DELETE" }),
+  deleteEvalSet: (id) => req(`/evals/sets/${id}`, { method: "DELETE" }),
+  deleteEvalBatch: (id) => req(`/evals/batches/${id}`, { method: "DELETE" }),
+  deleteFlowTemplate: (id) => req(`/flow-templates/${id}`, { method: "DELETE" }),
+  maintenanceStats: () => req("/maintenance/stats"),
+  maintenancePurge: (body) => req("/maintenance/purge", { method: "POST", body: JSON.stringify(body) }),
+});

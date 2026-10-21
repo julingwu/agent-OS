@@ -16,6 +16,7 @@ export default function GovernanceView({ me }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [notes, setNotes] = useState({});
+  const [confirming, setConfirming] = useState("");   // 删除二次确认的经验 id
   const request = useRef(0);
   const load = useCallback(async () => {
     const current = ++request.current;
@@ -70,6 +71,16 @@ export default function GovernanceView({ me }) {
               <button className="btn primary" disabled={busy} onClick={() => perform(() => api.reviewExperience(item.id, "approve", notes[item.id] || "", item.version), "审核通过，经验已生效。")}>审核通过</button>
               <button className="btn danger" disabled={busy} onClick={() => perform(() => api.reviewExperience(item.id, "reject", notes[item.id] || "", item.version), "经验已驳回，不会用于新任务。")}>驳回</button></>}
               <button className="btn ghost" disabled={busy} onClick={() => { setEditing(item.id); setForm({ title: item.title, content: item.content, tags: item.tags || "", mandatory: Boolean(item.mandatory), redline_terms: Array.isArray(item.redline_terms) ? item.redline_terms.join(",") : item.redline_terms || "" }); }}>编辑经验</button>
+              <button className={confirming === item.id ? "btn danger" : "btn ghost"} disabled={busy}
+                      onClick={async () => {
+                        if (confirming !== item.id) { setConfirming(item.id); return; }
+                        const ok = await perform(() => api.deleteExperience(item.id), "经验已彻底删除，强制规则不再生效。");
+                        setConfirming("");
+                        if (ok && editing === item.id) { setEditing(null); setForm(empty); }
+                      }}>
+                {confirming === item.id ? "确认删除" : "删除"}
+              </button>
+              {confirming === item.id && <button className="btn ghost" disabled={busy} onClick={() => setConfirming("")}>取消</button>}
             </div>
           </div>}
         </article>)}

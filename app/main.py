@@ -24,6 +24,7 @@ from .ui import store as ui_store
 from .ui import access as ui_access
 from .ui import extensions as ui_extensions
 from .ui import governance as ui_governance
+from .ui import housekeeping as ui_housekeeping
 from .octo import runner as octo_runner
 from .wecom import api as wecom_api
 from .wecom import sign_page
@@ -102,6 +103,7 @@ app.include_router(ui_admin.router, dependencies=[Depends(ui_access.request_acce
 app.include_router(ui_ops.router, dependencies=[Depends(ui_access.request_access)])
 app.include_router(ui_extensions.router)
 app.include_router(ui_governance.router, dependencies=[Depends(ui_access.request_access)])
+app.include_router(ui_housekeeping.router, dependencies=[Depends(ui_access.request_access)])
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 _UI_DIST = pathlib.Path(__file__).resolve().parent.parent / "web" / "dist"
 if _UI_DIST.exists():
