@@ -25,3 +25,7 @@ web/src-tauri/gen/
 
 # v4.0: 本地发版产物（安装包/免安装 exe）不入库，避免公开仓带二进制与内嵌构建路径
 dist/
+
+# ��ʵƾ��
+docs/_wecom_cb.txt
+docs/wecom_saved_config.png
