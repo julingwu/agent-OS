@@ -611,6 +611,13 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
         out["file"] = _llm_doc(conn, pid, key, "release", "07_release_checklist.md",
                                (gen.release(pid, requirement, arts) if llm_docs else None), fb)
         gate(conn, pid, key, "发布清单全部勾选", note="checklist")
+        # 组装最终交付物归档目录 release/
+        import shutil as _shutil
+        rel_dir = _wdir(pid) / "release"
+        rel_dir.mkdir(parents=True, exist_ok=True)
+        for art_f in _wdir(pid).glob("*.*"):
+            if art_f.is_file() and art_f.suffix in (".html", ".htm", ".json", ".md", ".py"):
+                _shutil.copy2(art_f, rel_dir / art_f.name)
 
     elif key == "retro":
         facts = {
