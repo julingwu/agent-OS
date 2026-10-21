@@ -1607,12 +1607,44 @@ def project_resume(project_id: str, oa_ui: str | None = Depends(_token)):
 
 
 # ------------------------------------------- 阶段详情 / 流程模板（v4.1）
+class FlowTemplateIn(BaseModel):
+    id: str
+    name: str
+    kind: str = "custom"
+    description: str = ""
+    nodes: list[dict]
+
+
 @router.get("/flow-templates")
 def flow_templates(oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
         from .. import flows
         return {"templates": flows.templates(conn)}
+
+
+@router.post("/flow-templates")
+def create_flow_template(payload: FlowTemplateIn, oa_ui: str | None = Depends(_token)):
+    """动态注册/定制企业专属交付流水线模板。"""
+    _require(oa_ui)
+    with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:create")
+        if actor["role"] not in ("ceo", "system", "admin"):
+            raise HTTPException(403, detail={"code": "Forbidden"})
+        from .. import flows
+        flows.ensure(conn)
+        if not payload.id.startswith("FLOW-"):
+            raise HTTPException(400, detail={"code": "InvalidFlowId", "message": "flow id must start with FLOW-"})
+        if not payload.nodes:
+            raise HTTPException(400, detail={"code": "NodesRequired"})
+        conn.execute(
+            "INSERT OR REPLACE INTO flow_templates (id, name, kind, description, nodes, enabled)"
+            " VALUES (?, ?, ?, ?, ?, 1)",
+            (payload.id, payload.name, payload.kind, payload.description,
+             json.dumps(payload.nodes, ensure_ascii=False))
+        )
+        conn.commit()
+    return {"ok": True, "flow_id": payload.id, "nodes": len(payload.nodes)}
 
 
 @router.get("/projects/{project_id}/stages/{stage_key}")

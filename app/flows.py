@@ -313,6 +313,18 @@ def _compose_nodes(primary: str, secondary: str) -> tuple[list[dict], str]:
 def plan(conn, text: str, tags: list[str] | None = None) -> dict:
     """需求 → 流程规划。v4.2 起由 LLM 意图分类驱动（关键词只作离线后备）。"""
     ensure(conn)
+    # v4.5：优先匹配显式指定或定制商业交付模板
+    for cand_t in templates(conn):
+        if cand_t["id"] in text or f"【{cand_t['name']}】" in text or f"【{cand_t['id']}】" in text:
+            nodes = [dict(n) for n in cand_t["nodes"]]
+            roles_needed = []
+            for node in nodes:
+                if node.get("role") != PLATFORM and node.get("role") not in roles_needed:
+                    roles_needed.append(node["role"])
+            return {"flow_id": cand_t["id"], "name": cand_t["name"], "kind": cand_t["kind"],
+                    "nodes": nodes, "roles": roles_needed, "how": "explicit_template",
+                    "reason": f"命中定制商业交付模板：{cand_t['name']}", "task_type": cand_t["kind"],
+                    "secondary": "", "confidence": 1.0}
     cls = classify(text)
     low = (text or "").lower()
     urgent = any(w in low for w in URGENT_WORDS)
@@ -465,14 +477,14 @@ def pm_summary(conn, pid: str, *, llm_docs: bool = False) -> dict:
     lines = [f"# 项目汇总 {pid}", "",
              "| 阶段 | 角色 | 交付 |", "|---|---|---|"]
     lines += [f"| {i['stage_key']} | {i['role_tag'] or '平台'} | {i['title']} |" for i in items]
-    body = "\n".join(lines)
+    body = "\r\n".join(lines)
     source = "template"
     if llm_docs:
         try:
             from . import llm
             text = llm.complete(
-                "把下面这些阶段交付压成一页中文汇总，保留关键结论与未决风险，不要复述全文：\n\n"
-                + "\n\n".join(f"## {i['stage_key']} · {i['title']}\n{i['excerpt']}" for i in items),
+                "把下面这些阶段交付压成一页中文汇总，保留关键结论与未决风险，不要复述全文：\r\n\r\n"
+                + "\r\n\r\n".join(f"## {i['stage_key']} · {i['title']}\r\n{i['excerpt']}" for i in items),
                 system="你是项目经理，只写结论与风险。", max_tokens=800)
             if text and text.strip():
                 body, source = text.strip(), "llm"
@@ -591,7 +603,7 @@ def diagnose(conn, run_id: str, *, use_llm: bool = True) -> dict:
                                         for s in spans]}, ensure_ascii=False)
             raw = llm.complete(
                 "下面是一次失败的 AI 任务运行。给中文诊断，只输出 JSON："
-                '{"cause":"一句话根因","fixes":["最多3条可执行修复"]}\n\n' + ctx,
+                '{"cause":"一句话根因","fixes":["最多3条可执行修复"]}\r\n\r\n' + ctx,
                 system="你是故障诊断专家，不猜不存在的事实。", max_tokens=400)
             start, end = (raw or "").find("{"), (raw or "").rfind("}")
             if start >= 0 and end > start:
@@ -615,7 +627,7 @@ def diagnose(conn, run_id: str, *, use_llm: bool = True) -> dict:
 # ---------------------------------------------------------------- 段内文档
 def template_document(pid: str, requirement: str, node: dict) -> str:
     role = node.get("role") or PLATFORM
-    return "\n".join([
+    return "\r\n".join([
         f"# {node['title']}",
         "",
         f"- 项目：{pid}",
@@ -637,8 +649,8 @@ def stage_document(pid: str, requirement: str, node: dict) -> str | None:
     from . import llm
     try:
         text = llm.complete(
-            f"项目 {pid} 的「{node['title']}」阶段。\n"
-            f"验收口径：{node['gate']}\n\n原始需求：\n{(requirement or '')[:800]}\n\n"
+            f"项目 {pid} 的「{node['title']}」阶段。\r\n"
+            f"验收口径：{node['gate']}\r\n\r\n原始需求：\r\n{(requirement or '')[:800]}\r\n\r\n"
             "用中文写这一阶段的正式交付文档：结论先行，写清来源/口径/未决问题，"
             "不要复述需求。",
             system=f"你是{node['title']}负责人，只交付与本阶段有关的结论。",
