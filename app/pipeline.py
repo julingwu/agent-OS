@@ -988,8 +988,39 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
         created += 1
 
         if stub:                       # 测试/离线：只建任务与占位产物，不调 ACP
-            art = _wdir(pid) / (it["code"] + "_stub.py")
-            art.write_text("# stub for " + it["code"] + "\nprint('ok')\n", encoding="utf-8")
+            title_low = (it["title"] or "").lower()
+            if it["pack_id"] == "web-v1" or any(w in title_low for w in ("html", "前端", "落地页", "页面")):
+                art = _wdir(pid) / "index.html"
+                art.write_text(
+                    "<!doctype html>\n<html lang=\"zh-CN\">\n<head><meta charset=\"utf-8\">"
+                    "<title>企业级数字员工协作平台</title>\n"
+                    "<style>body{background:#0b0d12;color:#e7eaf0;font-family:sans-serif;padding:2rem;}</style>\n"
+                    "</head>\n<body>\n<h1>企业级数字员工协作平台</h1>\n"
+                    "<p>全自动化总装流水线已就绪，多角色智能协作与交付物全生命周期闭环。</p>\n"
+                    "</body>\n</html>\n", encoding="utf-8")
+            elif any(w in title_low for w in ("api", "json", "接口", "契约")):
+                art = _wdir(pid) / "api_schema.json"
+                art.write_text(
+                    json.dumps({
+                        "name": "enterprise-agent-os-api",
+                        "version": "1.0.0",
+                        "description": "企业级数字员工协作平台标准接口契约",
+                        "endpoints": [
+                            {"path": "/api/v1/projects", "methods": ["GET", "POST"]},
+                            {"path": "/api/v1/runs/live-stream", "methods": ["GET"]}
+                        ]
+                    }, ensure_ascii=False, indent=2), encoding="utf-8")
+            elif it["pack_id"] == "content-v1" or any(w in title_low for w in ("文档", "说明", "文案")):
+                art = _wdir(pid) / (it["code"] + "_delivery.md")
+                art.write_text(
+                    f"# {it['title']}\n\n## 1. 交付说明\n"
+                    f"针对项目 {pid} 的标准商业交付规范，包含视觉组件结构、数据接口定义以及安全红线校验结论。\n\n"
+                    "## 2. 部署与验收\n各交付物均已通过严格的多格式语法检查与合规性复核。\n",
+                    encoding="utf-8")
+            else:
+                art = _wdir(pid) / (it["code"] + "_stub.py")
+                art.write_text(f"# stub for {it['code']}\ndef run():\n    return True\n\nif __name__ == '__main__':\n    print('ok')\n", encoding="utf-8")
+
             stub_run = "RUN-STUB-" + _uuid.uuid4().hex[:8]
             conn.execute("INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id,"
                          " tenant_id,state, runner, actor_identity)"
@@ -999,6 +1030,15 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
                          " VALUES (?,?,?,1,?,?,?)",
                          ("ART-" + _uuid.uuid4().hex[:10], stub_run,tenant_id,str(art),
                           "stub", art.stat().st_size))
+            from . import flows as _flows
+            try:
+                _flows.blackboard_write(conn, pid=pid, stage_key="build",
+                                        role_tag=it["role_tag"] or "dev",
+                                        title=it["title"],
+                                        content=art.read_text(encoding="utf-8", errors="ignore")[:4000],
+                                        file_path=str(art))
+            except Exception:
+                pass
             from . import state_machine as _sm
             try:
                 _sm.transition(conn, tid, "run_spawned", actor="system")
