@@ -777,18 +777,36 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
 
 
 def _flow_verdict(conn, tid: str, run_id: str, node: dict) -> str:
-    """流程节点的验收：**有交付物即通过**，判据整体置 passed 并推进任务状态。
-
-    为什么不复用 acceptance_run：它的判据是「文案字数/关键词」那套，套在
-    「资料检索」这种节点上必然误判（本版实测过：run succeeded 但验收 rejected，
-    阶段被误标 failed）。流程节点的真正闸门是它自己的 gate + 黑板条目。
-    """
-    from . import state_machine as _sm
+    """流程节点的验收：红线校验强制拦截，常规交付物按阶段闸门放行。"""
+    from . import acceptance_run, state_machine as _sm
 
     arts = conn.execute("SELECT COUNT(*) n FROM artifacts WHERE run_id=?",
                         (run_id,)).fetchone()["n"]
     if not arts:
         raise RuntimeError(f"阶段 {node['key']} 运行结束但没有任何交付物")
+    # 强制 L0 企业红线与广告法复核：任何命中违禁词的交付物直接驳回，绝不放行
+    from .acceptance import l0_rules
+    trow = conn.execute("SELECT project_id, legal_entity_id FROM tasks WHERE id=?", (tid,)).fetchone()
+    if trow:
+        art_rows = conn.execute("SELECT file_path FROM artifacts WHERE run_id=?", (run_id,)).fetchall()
+        for arow in art_rows:
+            fp = arow["file_path"]
+            if fp and pathlib.Path(fp).exists():
+                raw = pathlib.Path(fp).read_text(encoding="utf-8", errors="ignore")
+                b_res = l0_rules.check_banned(raw, file_path=fp)
+                if not b_res["ok"]:
+                    hits_str = "、".join(b_res.get("hits", []))
+                    detail_str = f"命中企业红线与禁用词：{hits_str}"
+                    conn.execute("UPDATE acceptance_criteria SET state='failed', note=? WHERE task_id=?",
+                                 (detail_str, tid))
+                    conn.commit()
+                    raise PermissionError(f"阶段 {node['key']} 交付物命中企业红线：{detail_str}")
+        mandatory = acceptance_run.validate_mandatory(conn, tid, entity=trow["legal_entity_id"], commit=True)
+        if not mandatory["ok"]:
+            conn.execute("UPDATE acceptance_criteria SET state='failed', note=? WHERE task_id=? AND check_ref='redline'",
+                         (mandatory.get("detail") or "命中企业红线", tid))
+            conn.commit()
+            raise PermissionError(f"阶段 {node['key']} 交付物命中企业红线：{mandatory.get('detail')}")
     conn.execute("UPDATE acceptance_criteria SET state='passed', note='flow_stage_accept'"
                  " WHERE task_id=? AND is_blocking=1 AND state IN ('pending','failed')",
                  (tid,))
@@ -923,6 +941,13 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
             if existing["state"] in {"todo", "assigned", "in_progress"}:
                 failed += 1
                 continue
+        retry_hint = ""
+        if existing and existing["state"] in ("failed", "rejected"):
+            last_err = conn.execute(
+                "SELECT error FROM task_runs WHERE task_id=? ORDER BY run_seq DESC LIMIT 1",
+                (it["task_id"],)).fetchone()
+            if last_err and last_err["error"]:
+                retry_hint = f"\n\n【上一轮未通过诊断（必须针对性修复）】：{last_err['error']}"
         bb_ctx = get_blackboard_context(conn, pid)
         clean_req = requirement.split("【组织经验（自动注入）】")[0].strip()
         role = it["role_tag"] or "dev"
@@ -944,6 +969,8 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
         brief = f"{it['title']}：{spec}项目 {pid}，需求：{clean_req[:200]}"
         if bb_ctx:
             brief += f"\n\n{bb_ctx}"
+        if retry_hint:
+            brief += retry_hint
         employee = None if stub else _build_employee(conn, it, entity=entity, tenant_id=tenant_id)
         if not stub:
             # Role selection may perform writes. Recheck the initiating identity
@@ -1024,7 +1051,7 @@ def execute_test(conn, pid: str) -> dict:
     rows = conn.execute(
         "SELECT a.file_path,t.id AS task_id FROM artifacts a JOIN task_runs r ON r.id=a.run_id"
         " JOIN tasks t ON t.id=r.task_id"
-        " WHERE t.project_id=? AND a.file_path LIKE '%.py'"
+        " WHERE t.project_id=?"
         " AND (NOT EXISTS (SELECT 1 FROM wbs_items w WHERE w.project_id=t.project_id"
         " AND w.task_id IS NOT NULL) OR t.id IN (SELECT task_id FROM wbs_items"
         " WHERE project_id=t.project_id))"
@@ -1036,7 +1063,7 @@ def execute_test(conn, pid: str) -> dict:
     failures = set()
     if not rows:
         ok = False
-        log.append("未找到可测试的 .py 产物")
+        log.append("未找到可测试的交付物产物")
     for r in rows:
         path = pathlib.Path(r["file_path"])
         log.append("## " + path.name)
@@ -1045,35 +1072,73 @@ def execute_test(conn, pid: str) -> dict:
             failures.add(r["task_id"])
             log.append("- 文件不存在")
             continue
-        try:
-            comp = subprocess.run([_sys.executable, "-m", "py_compile", str(path)],
-                                  capture_output=True, text=True, timeout=60)
-        except subprocess.TimeoutExpired:
-            ok = False
-            failures.add(r["task_id"])
-            log.append("- 编译检查超时")
-            continue
-        log.append("- py_compile: " + ("通过" if comp.returncode == 0 else "失败"))
-        if comp.returncode != 0:
-            ok = False
-            failures.add(r["task_id"])
-            log.append("```\n" + (comp.stderr or "")[:800] + "\n```")
-            continue
-        try:
-            run = subprocess.run([_sys.executable, str(path)], capture_output=True,
-                                 text=True, timeout=15, cwd=str(path.parent),
-                                 input="\n" * 20)
-            log.append("- 运行退出码: " + str(run.returncode))
-            if run.returncode != 0:
+        sfx = path.suffix.lower()
+        if sfx == ".py":
+            try:
+                comp = subprocess.run([_sys.executable, "-m", "py_compile", str(path)],
+                                      capture_output=True, text=True, timeout=60)
+            except subprocess.TimeoutExpired:
                 ok = False
                 failures.add(r["task_id"])
-            out = (run.stdout or "")[:1200]
-            if out:
-                log.append("```\n" + out + "\n```")
-        except subprocess.TimeoutExpired:
-            ok = False
-            failures.add(r["task_id"])
-            log.append("- 运行超时，未通过")
+                log.append("- 编译检查超时")
+                continue
+            log.append("- py_compile: " + ("通过" if comp.returncode == 0 else "失败"))
+            if comp.returncode != 0:
+                ok = False
+                failures.add(r["task_id"])
+                log.append("```\n" + (comp.stderr or "")[:800] + "\n```")
+                continue
+            try:
+                run = subprocess.run([_sys.executable, str(path)], capture_output=True,
+                                     text=True, timeout=15, cwd=str(path.parent),
+                                     input="\n" * 20)
+                log.append("- 运行退出码: " + str(run.returncode))
+                if run.returncode != 0:
+                    ok = False
+                    failures.add(r["task_id"])
+                out = (run.stdout or "")[:1200]
+                if out:
+                    log.append("```\n" + out + "\n```")
+            except subprocess.TimeoutExpired:
+                ok = False
+                failures.add(r["task_id"])
+                log.append("- 运行超时，未通过")
+        elif sfx in (".html", ".htm"):
+            try:
+                raw = path.read_text(encoding="utf-8", errors="ignore")
+                has_html = any(t in raw.lower() for t in ("<html", "<!doctype"))
+                if not has_html or len(raw) < 100:
+                    ok = False
+                    failures.add(r["task_id"])
+                    log.append("- HTML 落地页检查: 结构不完整或文件过小")
+                else:
+                    log.append(f"- HTML 落地页检查通过: {len(raw)} 字节，包含完整 DOM 根节点")
+            except Exception as e:
+                ok = False
+                failures.add(r["task_id"])
+                log.append(f"- HTML 读取异常: {e}")
+        elif sfx == ".json":
+            try:
+                raw = path.read_text(encoding="utf-8", errors="ignore")
+                json.loads(raw)
+                log.append(f"- JSON 契约规范检查通过: {len(raw)} 字节")
+            except Exception as e:
+                ok = False
+                failures.add(r["task_id"])
+                log.append(f"- JSON 解析失败: {e}")
+        elif sfx in (".md", ".txt"):
+            try:
+                raw = path.read_text(encoding="utf-8", errors="ignore")
+                if len(raw.strip()) < 50:
+                    ok = False
+                    failures.add(r["task_id"])
+                    log.append("- 文档规范检查: 内容过短(<50字符)")
+                else:
+                    log.append(f"- 文档规范检查通过: {len(raw)} 字符")
+            except Exception as e:
+                ok = False
+                failures.add(r["task_id"])
+                log.append(f"- 文档读取失败: {e}")
     conn.execute("UPDATE wbs_items SET validation_error=NULL WHERE project_id=?", (pid,))
     for task_id in failures:
         conn.execute("UPDATE wbs_items SET validation_error='交付物执行检查失败'"

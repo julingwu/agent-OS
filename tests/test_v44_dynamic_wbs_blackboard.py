@@ -111,3 +111,51 @@ def test_execute_build_context_injection(conn):
     text = payload.get("text", "")
     assert "【项目上游已交付结论与上下文】" in text
     assert "主文件必须是 index.html" in text
+
+
+def test_execute_test_supports_html_deliverables(conn, tmp_path):
+    pid = "P-TEST-HTML"
+    conn.execute("INSERT OR IGNORE INTO projects (id, name, requirement) VALUES (?, 'HTML项目', '开发落地页')", (pid,))
+    pipeline.build_wbs(conn, pid, "做一个HTML落地页")
+
+    # Simulate an HTML deliverable
+    html_file = tmp_path / "index.html"
+    html_file.write_text("<!DOCTYPE html><html><head><title>Test</title><style>body{color:red;}</style></head><body><h1>Hello World</h1><p>Welcome to our platform</p></body></html>", encoding="utf-8")
+    
+    tid = "T-HTML-01"
+    conn.execute("INSERT INTO tasks (id, legal_entity_id, task_type, title, state, project_id, stage, pack_id) VALUES (?, 'LE-GROUP-HQ', 'web_write', '前端落地页', 'completed', ?, 'build', 'web-v1')", (tid, pid))
+    conn.execute("UPDATE wbs_items SET task_id=?, state='done' WHERE project_id=? AND code='T1'", (tid, pid))
+    
+    run_id = "RUN-HTML-01"
+    conn.execute("INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state, runner, actor_identity) VALUES (?, ?, 1, 'LE-GROUP-HQ', 'succeeded', 'stub', 'ID-7f3ed41c41ae45f9')", (run_id, tid))
+    conn.execute("INSERT INTO artifacts (id, run_id, art_seq, file_path, checksum, bytes) VALUES ('ART-HTML-01', ?, 1, ?, 'mock', ?)", (run_id, str(html_file), html_file.stat().st_size))
+    conn.commit()
+
+    # Execute test stage
+    res = pipeline.execute_test(conn, pid)
+    assert res["ok"] is True, f"HTML deliverable should pass test stage: {res}"
+    content = open(res["file"], encoding="utf-8").read()
+    assert "HTML 落地页检查通过" in content
+
+
+def test_flow_verdict_blocks_on_redline_failure(conn, tmp_path):
+    pid = "P-TEST-REDLINE"
+    conn.execute("INSERT OR IGNORE INTO projects (id, name, requirement) VALUES (?, '红线测试', '文案交付')", (pid,))
+    
+    # Create an artifact containing a banned redline term
+    art_file = tmp_path / "article.md"
+    art_file.write_text("# 产品介绍\n这是全国第一品牌，效果绝对最好，100%保证有效！", encoding="utf-8")
+    
+    tid = "T-REDLINE-01"
+    conn.execute("INSERT INTO tasks (id, legal_entity_id, task_type, title, state, project_id, stage, pack_id) VALUES (?, 'LE-GROUP-HQ', 'content_write', '违规文案', 'pending_review', ?, 'build', 'content-v1')", (tid, pid))
+    conn.execute("INSERT INTO acceptance_criteria (id, task_id, seq, criterion, check_type, check_ref, is_blocking, legal_entity_id) VALUES ('C-RL-01', ?, 1, '企业红线检查', 'rule_auto', 'redline', 1, 'LE-GROUP-HQ')", (tid,))
+    
+    run_id = "RUN-RL-01"
+    conn.execute("INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id, state, runner, actor_identity) VALUES (?, ?, 1, 'LE-GROUP-HQ', 'succeeded', 'stub', 'ID-7f3ed41c41ae45f9')", (run_id, tid))
+    conn.execute("INSERT INTO artifacts (id, run_id, art_seq, file_path, checksum, bytes) VALUES ('ART-RL-01', ?, 1, ?, 'mock', ?)", (run_id, str(art_file), art_file.stat().st_size))
+    conn.commit()
+
+    # _flow_verdict must detect the redline term and block with PermissionError instead of passing
+    with pytest.raises(PermissionError) as exc_info:
+        pipeline._flow_verdict(conn, tid, run_id, {"key": "build", "title": "实现阶段"})
+    assert "企业红线" in str(exc_info.value)
