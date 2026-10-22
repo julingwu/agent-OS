@@ -1887,8 +1887,9 @@ class AssignIn(BaseModel):
 
 @router.get("/projects/{project_id}/stages/{stage_key}/files/{delivery_id}")
 def project_stage_file(project_id: str, stage_key: str, delivery_id: str,
+                       preview: int = 0,
                        oa_ui: str | None = Depends(_token)):
-    """下载阶段交付物（阶段详情页里的「下载」）。"""
+    """下载或在线预览阶段交付物（阶段详情页里的「下载」或观测面板里的「预览」）。"""
     import pathlib as _pathlib
 
     from fastapi.responses import FileResponse
@@ -1903,6 +1904,22 @@ def project_stage_file(project_id: str, stage_key: str, delivery_id: str,
         path = _pathlib.Path(row["file_path"])
         if not path.is_file():
             raise HTTPException(404, detail={"code": "FileNotFound"})
+
+    if preview:
+        sfx = path.suffix.lower()
+        media_type = "text/plain; charset=utf-8"
+        if sfx in (".html", ".htm"):
+            media_type = "text/html; charset=utf-8"
+        elif sfx == ".json":
+            media_type = "application/json; charset=utf-8"
+        elif sfx == ".md":
+            media_type = "text/markdown; charset=utf-8"
+        elif sfx in (".py", ".js", ".ts", ".sh", ".sql", ".css", ".yaml", ".yml", ".ps1"):
+            media_type = "text/plain; charset=utf-8"
+        elif sfx in (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp"):
+            media_type = f"image/{sfx.lstrip('.')}"
+        return FileResponse(path, media_type=media_type)
+
     return FileResponse(path, filename=path.name)
 
 

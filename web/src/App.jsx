@@ -1275,6 +1275,7 @@ function ApprovalsView({ onChanged }) {
           <div className="sub">越权拦截 / 高危工具 · 待批 {data.pending.length} 条</div>
         </div>
         <div className="spacer" />
+        <button className="btn primary" onClick={exportCsv} title="导出当前周期内的用量与账单报表为 CSV 文件">导出 CSV 报表</button>
         <button className="btn ghost" onClick={load}>刷新</button>
       </div>
       <div className="stream">
@@ -1438,6 +1439,63 @@ function FinOpsView() {
   const [budgets, setBudgets] = useState([]);
   const [pending, setPending] = useState([]);
   const [busyBudget, setBusyBudget] = useState("");
+  const [expandedBudgetPid, setExpandedBudgetPid] = useState(null);
+  const [stageBudgets, setStageBudgets] = useState({});
+  const [loadingBudgetPid, setLoadingBudgetPid] = useState("");
+
+  async function toggleBudgetStages(pid) {
+    if (expandedBudgetPid === pid) {
+      setExpandedBudgetPid(null);
+      return;
+    }
+    setExpandedBudgetPid(pid);
+    if (!stageBudgets[pid]) {
+      setLoadingBudgetPid(pid);
+      try {
+        const res = await api.budget(pid);
+        setStageBudgets(prev => ({ ...prev, [pid]: res.stages || [] }));
+      } catch {
+        setStageBudgets(prev => ({ ...prev, [pid]: [] }));
+      } finally {
+        setLoadingBudgetPid("");
+      }
+    }
+  }
+
+  function exportCsv() {
+    if (!data) return;
+    const t = data.totals || {};
+    const lines = [
+      `\ufeff"财务总览 · FinOps 用量与费用报表 (近 ${days} 天)"`,
+      `"导出时间","${new Date().toLocaleString()}"`,
+      `"总支出 (元)","${t.cost || 0}","总 Token","${t.tokens || 0}","运行次数","${t.runs || 0}","单次均价 (元)","${t.avg_run_cost || 0}"`,
+      "",
+      `"【按部门消耗统计】"`,
+      `"部门名称","部门 ID","参与员工数","运行次数","消耗 Token","折算费用 (元)"`,
+      ...(data.by_dept || []).map(d => `"${d.dept_name}","${d.dept_id}","${d.agents}","${d.runs}","${d.tokens}","${d.cost}"`),
+      "",
+      `"【按模型消耗统计】"`,
+      `"模型名称","运行次数","消耗 Token","折算费用 (元)"`,
+      ...(data.by_model || []).map(m => `"${m.model}","${m.runs}","${m.tokens}","${m.cost}"`),
+      "",
+      `"【按员工消耗统计 (Top 50)】"`,
+      `"员工名称","所属部门","运行次数","消耗 Token","折算费用 (元)"`,
+      ...(data.by_agent || []).slice(0, 50).map(a => `"${a.agent_name}","${a.dept_name}","${a.runs}","${a.tokens}","${a.cost}"`),
+      "",
+      `"【每日支出明细】"`,
+      `"日期","消耗 Token","支出金额 (元)"`,
+      ...(data.series || []).map(s => `"${s.date}","${s.tokens}","${s.cost}"`)
+    ];
+    const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `finops_report_${days}d_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
   const load = useCallback(async () => {
     try { setData(await api.finops(days)); } catch (e) { setNote(e.message || "加载失败"); }
   }, [days]);
@@ -1476,6 +1534,7 @@ function FinOpsView() {
                     onClick={() => setDays(d)}>{d} 天</button>
           ))}
         </div>
+        <button className="btn primary" onClick={exportCsv} title="导出当前周期内的用量与账单报表为 CSV 文件">导出 CSV 报表</button>
         <button className="btn ghost" onClick={load}>刷新</button>
       </div>
       <div className="stream">
@@ -1497,17 +1556,72 @@ function FinOpsView() {
             <div className="fin-card">
               <h5>项目预算池（动态财务引擎）</h5>
               <table className="fin-table">
-                <thead><tr><th>项目</th><th>预算池</th><th>已花</th><th>剩余</th><th /></tr></thead>
+                <thead><tr><th>项目</th><th>预算池</th><th>已花</th><th>剩余</th><th>状态 / 阶段</th></tr></thead>
                 <tbody>
                   {(budgets || []).map((b) => (
-                    <tr key={b.project_id}>
-                      <td>{b.name}<span className="hint"> · {b.project_id}</span></td>
-                      <td className="mono">{b.pool.toLocaleString()}</td>
-                      <td className="mono">{b.spent.toLocaleString()}</td>
-                      <td className="mono money">{b.remaining.toLocaleString()}</td>
-                      <td className="hint">{b.state === "paused" ? "暂停待批"
-                        : b.state === "halted" ? "已停摆" : `${b.pct}%`}</td>
-                    </tr>
+                    <React.Fragment key={b.project_id}>
+                      <tr style={{ cursor: "pointer" }} onClick={() => toggleBudgetStages(b.project_id)}>
+                        <td>
+                          <b>{b.name}</b>
+                          <span className="hint"> · {b.project_id}</span>
+                          <span style={{ marginLeft: 8, fontSize: 11, color: "var(--accent)" }}>
+                            {expandedBudgetPid === b.project_id ? "▲ 收起" : "▼ 阶段明细"}
+                          </span>
+                        </td>
+                        <td className="mono">{b.pool.toLocaleString()}</td>
+                        <td className="mono">{b.spent.toLocaleString()}</td>
+                        <td className="mono money">{b.remaining.toLocaleString()}</td>
+                        <td className="hint">{b.state === "paused" ? "暂停待批"
+                          : b.state === "halted" ? "已停摆" : `${b.pct}%`}</td>
+                      </tr>
+                      {expandedBudgetPid === b.project_id && (
+                        <tr>
+                          <td colSpan="5" style={{ background: "var(--panel)", padding: "10px 14px" }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
+                              阶段预算分解（WBS 配额与花费）：
+                              {loadingBudgetPid === b.project_id && <span style={{ marginLeft: 8, color: "var(--muted)" }}>加载中…</span>}
+                            </div>
+                            {stageBudgets[b.project_id]?.length ? (
+                              <table className="fin-table" style={{ margin: 0, fontSize: 12 }}>
+                                <thead>
+                                  <tr>
+                                    <th>阶段名称</th>
+                                    <th>角色</th>
+                                    <th>基础预估</th>
+                                    <th>阶段配额 (tokens)</th>
+                                    <th>已花 (tokens)</th>
+                                    <th>使用率</th>
+                                    <th>状态</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {stageBudgets[b.project_id].map((st) => (
+                                    <tr key={st.key}>
+                                      <td>{st.title || st.key}</td>
+                                      <td><span className="pill">{st.role || "未分配"}</span></td>
+                                      <td className="mono">{(st.base_estimate || 0).toLocaleString()}</td>
+                                      <td className="mono">{(st.quota || 0).toLocaleString()}</td>
+                                      <td className="mono">{(st.spent || 0).toLocaleString()}</td>
+                                      <td>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                          <div style={{ width: 50, height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
+                                            <div style={{ width: `${Math.min(100, st.pct || 0)}%`, height: "100%", background: (st.pct || 0) >= 80 ? "var(--bad)" : "var(--accent)" }} />
+                                          </div>
+                                          <span className="mono">{st.pct || 0}%</span>
+                                        </div>
+                                      </td>
+                                      <td><span className={`pill ${st.state === "done" ? "ok" : st.state === "awaiting_budget" ? "bad" : ""}`}>{st.state}</span></td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            ) : (
+                              <p className="hint" style={{ margin: 0 }}>{loadingBudgetPid === b.project_id ? "正在读取阶段配额…" : "该项目暂无阶段预算拆分记录。"}</p>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                   {(budgets || []).length === 0 && <tr><td colSpan="5" className="hint">还没有项目预算池</td></tr>}
                 </tbody>
@@ -1781,6 +1895,7 @@ function EvalsView() {
 function FilesTab() {
   const [files, setFiles] = useState([]);
   const [q, setQ] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [preview, setPreview] = useState(null);
   const [selected, setSelected] = useState(new Set());
   const [showRbac, setShowRbac] = useState(false);
@@ -1853,7 +1968,16 @@ function FilesTab() {
     }
   }
 
-  const shown = files.filter((f) => !q || (f.name + f.title).toLowerCase().includes(q.toLowerCase()));
+  const shown = files.filter((f) => {
+    if (q && !(f.name + f.title).toLowerCase().includes(q.toLowerCase())) return false;
+    if (typeFilter === "all") return true;
+    const ext = "." + (f.name || "").split(".").pop().toLowerCase();
+    if (typeFilter === "code") return [".py", ".js", ".ts", ".sh", ".sql", ".ps1"].includes(ext);
+    if (typeFilter === "doc") return [".md", ".txt", ".pdf", ".docx"].includes(ext);
+    if (typeFilter === "web") return [".html", ".htm"].includes(ext);
+    if (typeFilter === "data") return [".json", ".csv", ".yaml", ".yml"].includes(ext);
+    return true;
+  });
 
   return (
     <div className="main">
@@ -1864,6 +1988,20 @@ function FilesTab() {
           <div className="sub">{files.length} 个产物 · 下载 / 预览 / 批量清理</div>
         </div>
         <div className="spacer" />
+        <div className="seg" style={{ margin: 0, width: "auto" }}>
+          {[
+            ["all", "全部"],
+            ["code", "💻 代码"],
+            ["doc", "📄 文档"],
+            ["web", "🌐 网页"],
+            ["data", "📊 数据配置"]
+          ].map(([key, label]) => (
+            <button key={key} type="button" className={cls("seg-btn", typeFilter === key && "on")}
+                    onClick={() => setTypeFilter(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
         <input className="search" placeholder="搜索文件名或任务…" value={q} onChange={(e) => setQ(e.target.value)} />
         <button className={cls("btn", showRbac && "primary")} onClick={() => setShowRbac(!showRbac)} title="展开/收起 RBAC 演练目录">
           {showRbac ? "隐藏 RBAC 目录" : "RBAC 演练目录"}

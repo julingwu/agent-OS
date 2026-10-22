@@ -24,6 +24,16 @@ export default function ExtensionsView() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [confirmDeleteServerId, setConfirmDeleteServerId] = useState("");
+  const [expandedServerTools, setExpandedServerTools] = useState(new Set());
+  const [testingServerId, setTestingServerId] = useState("");
+
+  function toggleServerTools(id) {
+    const next = new Set(expandedServerTools);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setExpandedServerTools(next);
+  }
   const load = useCallback(async () => {
     const [tools, staff, mail, robot, ledger] = await Promise.all([
       api.mcpServers(), api.employees(), api.smtp(), api.wecomRobot(), api.notifications()]);
@@ -99,12 +109,60 @@ export default function ExtensionsView() {
         <div className="integration-list">{servers.map(server => <article className="integration-item" key={server.id}>
           <div className="integration-heading"><strong>{server.name}</strong><span className={`pill ${server.enabled ? "ok" : ""}`}>{server.enabled ? "已启用" : "已停用"}</span></div>
           <p className="integration-url">{server.url}</p>
-          <div className="hint">{server.has_key ? "已设置访问凭据" : "未设置访问凭据"} · {server.tools?.length || 0} 个已发现工具</div>
+          <div className="hint" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+            <span>{server.has_key ? "已设置访问凭据" : "未设置访问凭据"} · {server.tools?.length || 0} 个已发现工具</span>
+            {Boolean(server.tools?.length) && (
+              <button type="button" className="btn ghost" style={{ height: "22px", padding: "1px 8px", fontSize: "11px" }}
+                      onClick={() => toggleServerTools(server.id)}>
+                {expandedServerTools.has(server.id) ? "收起工具清单" : `查看工具清单 (${server.tools.length})`}
+              </button>
+            )}
+          </div>
+          {expandedServerTools.has(server.id) && Boolean(server.tools?.length) && (
+            <div style={{ marginTop: "10px", padding: "10px", background: "var(--panel)", borderRadius: "8px", border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: "11px", fontWeight: "600", marginBottom: "6px", color: "var(--text)" }}>已发现工具能力清单：</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                {server.tools.map((t, idx) => (
+                  <div key={t.name || idx} style={{ padding: "6px 8px", background: "var(--bg)", borderRadius: "6px", border: "1px solid var(--border)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <code style={{ fontSize: "12px", fontWeight: "600", color: "var(--accent)" }}>{t.name}</code>
+                    </div>
+                    {t.description && <div style={{ fontSize: "11px", color: "var(--muted)", marginTop: "2px" }}>{t.description}</div>}
+                    {t.inputSchema?.properties && Object.keys(t.inputSchema.properties).length > 0 && (
+                      <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "4px", display: "flex", flexWrap: "wrap", gap: "4px", alignItems: "center" }}>
+                        <span>入参:</span>
+                        {Object.keys(t.inputSchema.properties).map(k => (
+                          <span key={k} className="pill" style={{ fontSize: "10px", padding: "1px 5px" }}>{k}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="actions">
-            <button className="btn ghost" disabled={busy} onClick={() => perform(() => api.testMcp(server.id), r => `连接成功，发现 ${r.tools?.length ?? r.tools ?? 0} 个工具。`)}>测试连接</button>
+            <button className="btn ghost" disabled={busy || testingServerId === server.id}
+                    onClick={async () => {
+                      setTestingServerId(server.id);
+                      await perform(() => api.testMcp(server.id), r => `连接成功，发现 ${r.tools?.length ?? r.tools ?? 0} 个工具。`);
+                      setTestingServerId("");
+                    }}>
+              {testingServerId === server.id ? "测试中…" : "测试连接"}
+            </button>
             <button className="btn ghost" disabled={busy} onClick={() => { setEditing(server.id); setForm({ name: server.name, url: server.url, api_key: "" }); }}>编辑</button>
             <button className="btn ghost" disabled={busy} onClick={() => perform(() => api.patchMcp(server.id, { enabled: !server.enabled }), server.enabled ? "连接已停用。" : "连接已启用。")}>{server.enabled ? "停用" : "启用"}</button>
-            <button className="btn danger" disabled={busy} onClick={() => perform(() => api.deleteMcp(server.id), "连接已移除。")}>移除</button>
+            {confirmDeleteServerId === server.id ? (
+              <>
+                <button className="btn danger" disabled={busy} onClick={async () => {
+                  setConfirmDeleteServerId("");
+                  await perform(() => api.deleteMcp(server.id), "连接已移除。");
+                }}>确认移除？</button>
+                <button className="btn ghost" disabled={busy} onClick={() => setConfirmDeleteServerId("")}>取消</button>
+              </>
+            ) : (
+              <button className="btn danger" disabled={busy} onClick={() => setConfirmDeleteServerId(server.id)}>移除</button>
+            )}
           </div>
         </article>)}</div>
         {!servers.length && <p className="hint">尚未添加工具。填写服务地址后，再选择使用它的员工。</p>}

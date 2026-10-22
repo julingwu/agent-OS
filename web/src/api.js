@@ -238,6 +238,7 @@ Object.assign(api, {
   },
   streamUrl: (path) => api.withToken(path),
   stageFileUrl: (pid, key, id) => api.withToken(`/projects/${pid}/stages/${key}/files/${id}`),
+  stageFilePreviewUrl: (pid, key, id) => api.withToken(`/projects/${pid}/stages/${key}/files/${id}?preview=1`),
 });
 
 // V4.3 动态财务预算引擎

@@ -190,7 +190,7 @@ function PreviewModal({ pid, file, onClose }) {
 
   if (!file) return null;
   const isHtml = file.ext === ".html" || file.ext === ".htm";
-  const url = api.releasePreviewUrl(pid, file.name);
+  const url = file.url || api.releasePreviewUrl(pid, file.name);
   return (
     <div className="mc-modal-overlay" onClick={onClose} role="dialog" aria-modal="true"
          aria-label={`交付物预览 ${file.name}`}>
@@ -714,16 +714,33 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
                   <>
                     {deliverables.length ? (
                       <ul className="mc-files">
-                        {deliverables.map((d) => (
-                          <li key={d.id}>
-                            <span className="mc-file-kind">{d.kind}</span>
-                            <span className="mc-file-name" title={d.file_path}>{basename(d.file_path)}</span>
-                            <span className="mc-file-size">{fmt(d.bytes)} B</span>
-                            <a className="mc-file-dl" href={api.stageFileUrl(detail.project.id, d.stage_key, d.id)}>
-                              下载
-                            </a>
-                          </li>
-                        ))}
+                        {deliverables.map((d) => {
+                          const ext = "." + (d.file_path || "").split(".").pop().toLowerCase();
+                          const canPreview = [".html", ".htm", ".md", ".txt", ".py", ".js", ".ts", ".json", ".csv", ".yaml", ".yml", ".sql", ".sh", ".ps1"].includes(ext);
+                          return (
+                            <li key={d.id}>
+                              <span className="mc-file-kind">{d.kind}</span>
+                              <span className="mc-file-name" title={d.file_path}>{basename(d.file_path)}</span>
+                              <span className="mc-file-size">{fmt(d.bytes)} B</span>
+                              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                                {canPreview && (
+                                  <button type="button" className="mc-btn ghost" style={{ padding: "2px 8px", fontSize: "11px", height: "24px", lineHeight: "22px" }}
+                                    onClick={() => setPreviewFile({
+                                      name: basename(d.file_path),
+                                      bytes: d.bytes,
+                                      ext,
+                                      url: api.stageFilePreviewUrl(detail.project.id, d.stage_key, d.id),
+                                    })}>
+                                    预览
+                                  </button>
+                                )}
+                                <a className="mc-file-dl" href={api.stageFileUrl(detail.project.id, d.stage_key, d.id)} download>
+                                  下载
+                                </a>
+                              </div>
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : <p className="mc-hint">还没有交付物。</p>}
                   </>
