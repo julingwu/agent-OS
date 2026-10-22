@@ -1262,6 +1262,23 @@ function ApprovalsView({ onChanged }) {
     finally { setBusy(""); }
   }
 
+  async function approveAll() {
+    if (!data.pending.length || busy) return;
+    if (!confirm(`确定一次性批准全部 ${data.pending.length} 项待批操作并断点续跑吗？`)) return;
+    setBusy("all"); setNote("");
+    let success = 0;
+    for (const ap of data.pending) {
+      try {
+        await api.decideApproval(ap.id, true);
+        success++;
+      } catch { /* continue */ }
+    }
+    setNote(`已批量批准 ${success} 项操作，正在断点续跑`);
+    setBusy("");
+    await load();
+    onChanged && onChanged();
+  }
+
   const pushed = (a) => a.pushed_at
     ? `已推送 ${a.push_channel === "wecom" ? "企微" : a.push_channel || "站内"}`
     : "推送中…";
@@ -1275,7 +1292,11 @@ function ApprovalsView({ onChanged }) {
           <div className="sub">越权拦截 / 高危工具 · 待批 {data.pending.length} 条</div>
         </div>
         <div className="spacer" />
-        <button className="btn primary" onClick={exportCsv} title="导出当前周期内的用量与账单报表为 CSV 文件">导出 CSV 报表</button>
+        {data.pending.length > 1 && (
+          <button className="btn primary" disabled={Boolean(busy)} onClick={approveAll}>
+            {busy === "all" ? "正在批量处理…" : `一键全部批准 (${data.pending.length})`}
+          </button>
+        )}
         <button className="btn ghost" onClick={load}>刷新</button>
       </div>
       <div className="stream">
@@ -3033,7 +3054,42 @@ function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
       </div>
       {chatLayout && active && showDetail && <><div className="drawer-mask detail-backdrop" onClick={() => setShowDetail(false)} /><RunDetail key={active.id} chat={active} show={showDetail} onApproval={openApprovals} onToggle={() => setShowDetail(false)} /></>}
       {taskCreating && <NewTaskModal chats={chats} Icon={Icon} onClose={() => setTaskCreating(false)} onCreated={(chat) => { if (!sessionCurrent()) return; setTaskCreating(false); openChat(chat); boot(); }} />}
-      {focusedTask && <div className="mask" onClick={() => setFocusedTask(null)}><section className="modal wide task-inspector" onClick={(e) => e.stopPropagation()}><div className="task-inspector-heading"><span className="eyebrow">TASK DETAILS</span><button className="icon-btn" aria-label="关闭任务详情" onClick={() => setFocusedTask(null)}><Icon name="close" /></button></div><h3>{focusedTask.title}</h3><p className="task-inspector-meta">{focusedTask.owner_name || "AI 团队"} · {focusedTask.id}</p><TaskCard compact taskId={focusedTask.id} meta={{}} onApproval={openApprovals} onAct={() => { window.dispatchEvent(new Event("oa-tasks-changed")); boot(); }} /><div className="actions"><button className="btn ghost" onClick={() => setFocusedTask(null)}>关闭</button>{chats.some((chat) => chat.id === focusedTask.chat_id) && <button className="btn" onClick={() => { openChat(chats.find((chat) => chat.id === focusedTask.chat_id)); setFocusedTask(null); }}><Icon name="chat" /> 打开协作会话</button>}</div></section></div>}
+      {focusedTask && (
+        <div className="mask" onClick={() => setFocusedTask(null)}>
+          <section className="modal wide task-inspector" onClick={(e) => e.stopPropagation()}>
+            <div className="task-inspector-heading">
+              <span className="eyebrow">TASK DETAILS</span>
+              <button className="icon-btn" aria-label="关闭任务详情" onClick={() => setFocusedTask(null)}>
+                <Icon name="close" />
+              </button>
+            </div>
+            <h3>{focusedTask.title}</h3>
+            <p className="task-inspector-meta">{focusedTask.owner_name || "AI 团队"} · {focusedTask.id}</p>
+            <TaskCard compact taskId={focusedTask.id} meta={{}} onApproval={openApprovals} onAct={() => { window.dispatchEvent(new Event("oa-tasks-changed")); boot(); }} />
+            <div className="actions">
+              <button className="btn danger" onClick={async () => {
+                if (!confirm(`确定彻底删除任务「${focusedTask.title || focusedTask.id}」吗？关联的产物和运行轨迹将一并清理。`)) return;
+                try {
+                  await api.deleteTask(focusedTask.id);
+                  setFocusedTask(null);
+                  window.dispatchEvent(new Event("oa-tasks-changed"));
+                  boot();
+                } catch (e) {
+                  alert(e.message || "删除任务失败");
+                }
+              }}>
+                删除任务
+              </button>
+              <button className="btn ghost" onClick={() => setFocusedTask(null)}>关闭</button>
+              {chats.some((chat) => chat.id === focusedTask.chat_id) && (
+                <button className="btn" onClick={() => { openChat(chats.find((chat) => chat.id === focusedTask.chat_id)); setFocusedTask(null); }}>
+                  <Icon name="chat" /> 打开协作会话
+                </button>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
       {adding && <AddMember org={org} onClose={() => setAdding(false)} onDone={boot} />}
       {grouping && (
         <NewGroup

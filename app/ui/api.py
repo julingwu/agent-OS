@@ -1322,6 +1322,84 @@ def live(run_id: str, after: int = 0, oa_ui: str | None = Depends(_token)):
     return {"run": dict(run) if run else None, "stream": ev}
 
 
+
+@router.delete("/tasks/{task_id}")
+def delete_task(task_id: str, oa_ui: str | None = Depends(_token)):
+    """彻底删除任务：级联清理 runs、stream、traces、spans、criteria、evidence、artifacts 及物理磁盘文件。"""
+    _require(oa_ui)
+    with get_conn() as conn:
+        actor = _task_actor(conn, oa_ui, "task:write")
+        task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if task is None:
+            raise HTTPException(404, detail={"code": "TaskNotFound"})
+
+        role = actor.get("role")
+        if role not in {"ceo", "system", "operator", "admin"} and not actor.get("can_manage_deployment"):
+            if task.get("creator_id") != actor["id"] and task.get("owner_employee_id") != actor["id"]:
+                raise HTTPException(403, detail={"code": "Forbidden"})
+
+        def drop_safe(sql: str, params=()):
+            try:
+                conn.execute(sql, params)
+            except sqlite3.OperationalError:
+                pass
+
+        runs = [r["id"] for r in conn.execute("SELECT id FROM task_runs WHERE task_id=?", (task_id,)).fetchall()]
+        files_removed = 0
+        if runs:
+            placeholders = ",".join("?" for _ in runs)
+            try:
+                artifacts = conn.execute(f"SELECT file_path FROM artifacts WHERE run_id IN ({placeholders})", runs).fetchall()
+                for art in artifacts:
+                    fp = art["file_path"]
+                    if fp and os.path.exists(fp):
+                        try:
+                            os.remove(fp)
+                            files_removed += 1
+                        except OSError:
+                            pass
+            except sqlite3.OperationalError:
+                pass
+
+            drop_safe(f"DELETE FROM artifacts WHERE run_id IN ({placeholders})", runs)
+            drop_safe(f"DELETE FROM run_stream WHERE run_id IN ({placeholders})", runs)
+            drop_safe(f"DELETE FROM run_diagnoses WHERE run_id IN ({placeholders})", runs)
+            drop_safe(f"DELETE FROM redline_scans WHERE run_id IN ({placeholders})", runs)
+            drop_safe(f"DELETE FROM tool_approvals WHERE run_id IN ({placeholders})", runs)
+            drop_safe(f"DELETE FROM eval_results WHERE run_id IN ({placeholders})", runs)
+            drop_safe(f"DELETE FROM task_runs WHERE task_id=?", (task_id,))
+
+        try:
+            traces = [t["trace_id"] for t in conn.execute("SELECT trace_id FROM agent_traces WHERE task_id=?", (task_id,)).fetchall()]
+            if traces:
+                tp = ",".join("?" for _ in traces)
+                drop_safe(f"DELETE FROM trace_spans WHERE trace_id IN ({tp})", traces)
+                drop_safe(f"DELETE FROM agent_traces WHERE trace_id IN ({tp})", traces)
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            crit_ids = [c["id"] for c in conn.execute("SELECT id FROM acceptance_criteria WHERE task_id=?", (task_id,)).fetchall()]
+            if crit_ids:
+                cp = ",".join("?" for _ in crit_ids)
+                drop_safe(f"DELETE FROM evidence_refs WHERE owner_type='criterion' AND owner_id IN ({cp})", crit_ids)
+                drop_safe("DELETE FROM acceptance_criteria WHERE task_id=?", (task_id,))
+        except sqlite3.OperationalError:
+            pass
+
+        for t in ("budgets", "wbs_items", "chat_messages", "decision_packages", "wecom_approvals"):
+            drop_safe(f"DELETE FROM {t} WHERE task_id=?", (task_id,))
+
+        conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+
+        from ..audit import write_audit
+        write_audit(conn, legal_entity_id=task["legal_entity_id"] or "LE-GROUP-HQ",
+                    verb="task:delete", actor=actor["id"], action="task_deleted",
+                    target=task_id, payload={"title": task["title"]},
+                    response={"ok": True, "files_removed": files_removed})
+        conn.commit()
+    return {"ok": True, "task_id": task_id, "files_removed": files_removed}
+
 # ------------------------------------------------------------------ 角色库（M15）
 class RoleIn(BaseModel):
     name: str
@@ -2086,6 +2164,26 @@ def patch_chat(chat_id: str, payload: ChatPatch, oa_ui: str | None = Depends(_to
         conn.commit()
     return {"ok": True}
 
+
+
+@router.delete("/chats/{chat_id}/messages")
+def clear_chat_messages(chat_id: str, oa_ui: str | None = Depends(_token)):
+    """清空指定会话的全部历史消息，重置上下文。"""
+    ident = _require(oa_ui)
+    with get_conn() as conn:
+        row = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, detail={"code": "ChatNotFound"})
+        count = conn.execute("SELECT COUNT(*) FROM chat_messages WHERE chat_id=?", (chat_id,)).fetchone()[0]
+        conn.execute("DELETE FROM chat_messages WHERE chat_id=?", (chat_id,))
+        conn.execute("UPDATE chats SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (chat_id,))
+        from ..audit import write_audit
+        write_audit(conn, legal_entity_id=row["entity_id"] or "LE-GROUP-HQ", verb="chat:clear",
+                    actor=ident["id"] if isinstance(ident, dict) else str(ident),
+                    action="chat_messages_cleared", target=chat_id,
+                    payload={"cleared_count": count}, response={"ok": True})
+        conn.commit()
+    return {"ok": True, "chat_id": chat_id, "cleared": count}
 
 @router.delete("/chats/{chat_id}")
 def delete_chat(chat_id: str, oa_ui: str | None = Depends(_token)):

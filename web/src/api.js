@@ -134,6 +134,7 @@ export const api = {
     req(`/chats/${chatId}/messages`, { method: "POST", body: JSON.stringify({ text }) }),
   task: (taskId) => req(`/tasks/${taskId}`),
   tasks: (limit = 50, options = {}) => req(`/tasks?${new URLSearchParams({ limit, ...options })}`),
+  deleteTask: (taskId) => req(`/tasks/${taskId}`, { method: "DELETE" }),
   action: (taskId, action, note) =>
     req(`/tasks/${taskId}/action`, { method: "POST", body: JSON.stringify({ action, note }) }),
   retryTask: (taskId, note = "") =>
@@ -263,6 +264,7 @@ Object.assign(api, {
 Object.assign(api, {
   patchChat: (id, body) => req(`/chats/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteChat: (id) => req(`/chats/${id}`, { method: "DELETE" }),
+  clearChatMessages: (chatId) => req(`/chats/${chatId}/messages`, { method: "DELETE" }),
   departments: () => req("/departments"),
   createDept: (name, entity_id = "LE-GROUP-HQ") =>
     req("/departments", { method: "POST", body: JSON.stringify({ name, entity_id }) }),

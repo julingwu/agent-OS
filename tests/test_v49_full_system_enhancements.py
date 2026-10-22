@@ -1,6 +1,8 @@
 """Tests for v4.9 system-wide functional enhancements:
 - Pipeline stage deliverable preview vs download disposition
 - FinOps stage-by-stage budget overview query
+- Task deletion cascades (runs, stream, criteria, evidence, artifacts, and disk file)
+- Chat messages clearing while preserving chat channel
 """
 
 import pytest
@@ -50,7 +52,6 @@ def test_stage_deliverable_preview_and_download(ctx):
     stage_key = "test_stage"
     fid = "DELIV-1"
 
-    # Create dummy file on disk
     dummy_file = ws / "test_calc.py"
     dummy_file.write_text("print('hello v4.9')", encoding="utf-8")
 
@@ -66,13 +67,11 @@ def test_stage_deliverable_preview_and_download(ctx):
     finally:
         conn.close()
 
-    # 1. Normal download (preview=0 default) should have attachment header
     res_dl = boss.get(f"/ui/projects/{pid}/stages/{stage_key}/files/{fid}")
     assert res_dl.status_code == 200
     assert "attachment" in res_dl.headers.get("content-disposition", "")
     assert res_dl.text == "print('hello v4.9')"
 
-    # 2. Preview mode (preview=1) should serve inline without attachment header
     res_pv = boss.get(f"/ui/projects/{pid}/stages/{stage_key}/files/{fid}?preview=1")
     assert res_pv.status_code == 200
     assert "attachment" not in res_pv.headers.get("content-disposition", "")
@@ -96,7 +95,6 @@ def test_finops_and_project_stage_budgets(ctx):
     finally:
         conn.close()
 
-    # Query project budget via API
     res = boss.get(f"/ui/projects/{pid}/budget")
     assert res.status_code == 200
     data = res.json()
@@ -106,3 +104,84 @@ def test_finops_and_project_stage_budgets(ctx):
     stage_keys = [s["key"] for s in data["stages"]]
     assert "stg_research" in stage_keys
     assert "stg_dev" in stage_keys
+
+
+def test_task_deletion_cascades(ctx):
+    conn = connect(ctx["db_path"])
+    boss = ctx["boss"]
+    ws = ctx["ws"]
+
+    task_id = "T-STANDALONE-DELETE"
+    run_id = "RUN-T-DEL"
+    art_id = "ART-T-DEL"
+    crit_id = "CRIT-T-DEL"
+
+    art_file = ws / "task_artifact_to_delete.txt"
+    art_file.write_text("temporary task deliverable", encoding="utf-8")
+    assert art_file.exists()
+
+    try:
+        conn.execute("INSERT INTO tasks (id,title,state,legal_entity_id) VALUES (?,?,?,?)",
+                     (task_id, "Test Standalone Task", "failed", "LE-GROUP-HQ"))
+        conn.execute("INSERT INTO task_runs (id,task_id,run_seq,legal_entity_id,tenant_id,state)"
+                     " VALUES (?,?,1,'LE-GROUP-HQ','TENANT-HQ','failed')",
+                     (run_id, task_id))
+        conn.execute("INSERT INTO acceptance_criteria (id,legal_entity_id,task_id,criterion,check_type,state)"
+                     " VALUES (?,'LE-GROUP-HQ',?,?,'manual','failed')", (crit_id, task_id, "Criteria 1"))
+        conn.execute("INSERT INTO evidence_refs (id,owner_type,owner_id,content_snippet)"
+                     " VALUES ('EV-DEL','criterion',?,'sample snippet')", (crit_id,))
+        conn.execute("INSERT INTO artifacts (id,run_id,art_seq,file_path,checksum,bytes)"
+                     " VALUES (?,?,1,?,'chk123',26)",
+                     (art_id, run_id, str(art_file)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    res = boss.delete(f"/ui/tasks/{task_id}")
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert out.get("ok") is True
+    assert out.get("task_id") == task_id
+    assert out.get("files_removed") == 1
+
+    assert not art_file.exists()
+
+    conn2 = connect(ctx["db_path"])
+    try:
+        assert conn2.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone() is None
+        assert conn2.execute("SELECT 1 FROM task_runs WHERE task_id=?", (task_id,)).fetchone() is None
+        assert conn2.execute("SELECT 1 FROM acceptance_criteria WHERE task_id=?", (task_id,)).fetchone() is None
+        assert conn2.execute("SELECT 1 FROM evidence_refs WHERE owner_id=?", (crit_id,)).fetchone() is None
+        assert conn2.execute("SELECT 1 FROM artifacts WHERE id=?", (art_id,)).fetchone() is None
+    finally:
+        conn2.close()
+
+
+def test_chat_messages_clear(ctx):
+    conn = connect(ctx["db_path"])
+    boss = ctx["boss"]
+
+    chat_id = "CHAT-CLEAR-TEST"
+    try:
+        conn.execute("INSERT INTO chats (id,title,kind,entity_id) VALUES (?,?,'dm','LE-GROUP-HQ')",
+                     (chat_id, "Test DM Chat"))
+        conn.execute("INSERT INTO chat_messages (chat_id,role,author,kind,content) VALUES (?,?,?,?,?)",
+                     (chat_id, "user", "Boss", "text", "Message 1"))
+        conn.execute("INSERT INTO chat_messages (chat_id,role,author,kind,content) VALUES (?,?,?,?,?)",
+                     (chat_id, "agent", "Assistant", "text", "Message 2"))
+        conn.commit()
+    finally:
+        conn.close()
+
+    res = boss.delete(f"/ui/chats/{chat_id}/messages")
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["ok"] is True
+    assert data["cleared"] == 2
+
+    conn2 = connect(ctx["db_path"])
+    try:
+        assert conn2.execute("SELECT 1 FROM chats WHERE id=?", (chat_id,)).fetchone() is not None
+        assert conn2.execute("SELECT COUNT(*) FROM chat_messages WHERE chat_id=?", (chat_id,)).fetchone()[0] == 0
+    finally:
+        conn2.close()
