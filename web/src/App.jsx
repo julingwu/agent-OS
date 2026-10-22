@@ -1142,7 +1142,7 @@ function ConfirmCard({ taskId, meta, onAct }) {
 }
 
 /* --------------------------------------------------------- 产物预览（v1.2） */
-const PREVIEWABLE = [".html", ".htm", ".svg", ".png", ".jpg", ".jpeg", ".md", ".txt", ".json"];
+const PREVIEWABLE = [".html", ".htm", ".svg", ".png", ".jpg", ".jpeg", ".md", ".markdown", ".txt", ".json", ".py", ".js", ".jsx", ".ts", ".tsx", ".css", ".sh", ".bat", ".sql", ".yaml", ".yml", ".xml", ".csv", ".log", ".env"];
 
 function PreviewModal({ file, onClose }) {
   const frame = useRef(null);
@@ -1782,14 +1782,75 @@ function FilesTab() {
   const [files, setFiles] = useState([]);
   const [q, setQ] = useState("");
   const [preview, setPreview] = useState(null);
+  const [selected, setSelected] = useState(new Set());
+  const [showRbac, setShowRbac] = useState(false);
+  const [busyAction, setBusyAction] = useState("");
+  const [toast, setToast] = useState("");
+
   const load = useCallback(async () => {
-    try { const r = await api.files(); setFiles(r.files); } catch { /* ignore */ }
+    try {
+      const r = await api.files();
+      setFiles(r.files || []);
+      setSelected(new Set());
+    } catch { /* ignore */ }
   }, []);
+
   useEffect(() => { load(); }, [load]);
 
   async function del(id) {
     if (!confirm("删除这个文件？只做软删除，审计里仍可查。")) return;
-    await api.deleteFile(id); load();
+    try {
+      await api.deleteFile(id);
+      load();
+    } catch (e) {
+      alert(e.message || "删除失败");
+    }
+  }
+
+  async function batchDelete() {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    if (!confirm(`确定彻底删除选中的 ${ids.length} 个产物文件？`)) return;
+    setBusyAction("batchDel");
+    try {
+      const res = await api.batchDeleteFiles(ids);
+      setToast(`已批量清理 ${res.deleted || 0} 个产物文件`);
+      load();
+    } catch (e) {
+      setToast(e.message || "批量删除失败");
+    } finally {
+      setBusyAction("");
+      setTimeout(() => setToast(""), 4000);
+    }
+  }
+
+  async function purgeMissing() {
+    setBusyAction("purge");
+    try {
+      const res = await api.purgeMissingFiles();
+      setToast(`已清理 ${res.purged || 0} 个磁盘缺失的无效产物记录`);
+      load();
+    } catch (e) {
+      setToast(e.message || "清理失败");
+    } finally {
+      setBusyAction("");
+      setTimeout(() => setToast(""), 4000);
+    }
+  }
+
+  function toggleSelect(id) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  }
+
+  function toggleAll() {
+    if (selected.size === shown.length && shown.length > 0) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(shown.map((f) => f.id)));
+    }
   }
 
   const shown = files.filter((f) => !q || (f.name + f.title).toLowerCase().includes(q.toLowerCase()));
@@ -1800,31 +1861,83 @@ function FilesTab() {
         <div className="avatar">文</div>
         <div>
           <div className="who">文件库</div>
-          <div className="sub">{files.length} 个产物 · 下载 / 删除</div>
+          <div className="sub">{files.length} 个产物 · 下载 / 预览 / 批量清理</div>
         </div>
         <div className="spacer" />
         <input className="search" placeholder="搜索文件名或任务…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className={cls("btn", showRbac && "primary")} onClick={() => setShowRbac(!showRbac)} title="展开/收起 RBAC 演练目录">
+          {showRbac ? "隐藏 RBAC 目录" : "RBAC 演练目录"}
+        </button>
+        <button className="btn ghost" disabled={busyAction === "purge"} onClick={purgeMissing} title="清理数据库中登记但磁盘文件已被删除的孤儿记录">
+          {busyAction === "purge" ? "清理中…" : "清理缺失文件"}
+        </button>
         <button className="btn ghost" onClick={load}>刷新</button>
       </div>
+
+      {toast && <div className="note-bar" style={{ margin: "10px 24px 0" }}>{toast}</div>}
+
       <div className="stream">
         <div className="stream-inner">
-          <ResourceSection />
-          {shown.length === 0 && <div className="empty">还没有产物。让某个 Agent 干点活试试。</div>}
-          {shown.map((f) => (
-            <div className="file-row" key={f.id}>
-              <span className="ico">{f.name.endsWith(".html") ? "🌐" : f.name.endsWith(".py") ? "🐍" : "📄"}</span>
-              <div>
-                <div>{f.name} <span className="tag">{f.size ? `${f.size} B` : "文件缺失"}</span></div>
-                <div className="role">{f.title} · {f.task_id} · {f.created_at}</div>
-              </div>
-              <div className="spacer" />
-              {PREVIEWABLE.includes(("." + f.name.split(".").pop()).toLowerCase()) && (
-                <button className="btn" onClick={() => setPreview(f)}>预览</button>
-              )}
-              <a className="btn ghost" href={api.fileUrl(f.id)} target="_blank" rel="noreferrer">下载</a>
-              <button className="btn danger" onClick={() => del(f.id)}>删除</button>
+          {showRbac && (
+            <div style={{ marginBottom: 16, padding: 12, background: "var(--panel)", borderRadius: 10, border: "1px solid var(--border)" }}>
+              <ResourceSection />
             </div>
-          ))}
+          )}
+
+          {/* 批量操作工具条 */}
+          {shown.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 12px", background: "var(--panel-2)", borderRadius: 8, marginBottom: 10, fontSize: 13 }}>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={shown.length > 0 && selected.size === shown.length}
+                  onChange={toggleAll}
+                />
+                <span>全选当前 ({selected.size}/{shown.length})</span>
+              </label>
+              {selected.size > 0 && (
+                <>
+                  <div className="spacer" />
+                  <button className="btn danger" disabled={busyAction === "batchDel"} onClick={batchDelete}>
+                    {busyAction === "batchDel" ? "删除中…" : `批量删除选中项 (${selected.size})`}
+                  </button>
+                  <button className="btn ghost" onClick={() => setSelected(new Set())}>取消选择</button>
+                </>
+              )}
+            </div>
+          )}
+
+          {shown.length === 0 && <div className="empty">还没有产物。让某个 Agent 干点活试试。</div>}
+          {shown.map((f) => {
+            const ext = ("." + f.name.split(".").pop()).toLowerCase();
+            const canPreview = PREVIEWABLE.includes(ext);
+            return (
+              <div className="file-row" key={f.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(f.id)}
+                  onChange={() => toggleSelect(f.id)}
+                  style={{ cursor: "pointer" }}
+                />
+                <span className="ico">
+                  {ext === ".html" ? "🌐" : ext === ".py" ? "🐍" : [".json", ".yaml", ".yml"].includes(ext) ? "⚙" : [".png", ".jpg", ".jpeg", ".svg"].includes(ext) ? "🖼" : "📄"}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <b>{f.name}</b>
+                    <span className={cls("tag", !f.size && "bad")}>{f.size ? `${f.size} B` : "文件缺失"}</span>
+                  </div>
+                  <div className="role">{f.title} · {f.task_id} · {f.created_at}</div>
+                </div>
+                <div className="spacer" />
+                {canPreview && (
+                  <button className="btn" onClick={() => setPreview(f)}>预览</button>
+                )}
+                <a className="btn ghost" href={api.fileUrl(f.id)} target="_blank" rel="noreferrer">下载</a>
+                <button className="btn danger" onClick={() => del(f.id)}>删除</button>
+              </div>
+            );
+          })}
         </div>
       </div>
       {preview && <PreviewModal file={preview} onClose={() => setPreview(null)} />}
@@ -1857,10 +1970,15 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
   }, []);
 
   async function save() {
-    await api.saveSettings(form);
-    setTheme(form.theme);
-    setNote("设置已保存");
-    onChanged && onChanged();
+    setNote("");
+    try {
+      await api.saveSettings(form);
+      setTheme(form.theme);
+      setNote("设置已保存");
+      onChanged && onChanged();
+    } catch (err) {
+      setNote(err.message || "保存失败，请检查输入参数");
+    }
   }
 
   async function addJob() {
@@ -1897,7 +2015,7 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
                    onChange={(e) => setForm({ ...form, budget_elastic: Number(e.target.value) })} />
           </div>
           <div className="field"><label>项目全局最高预算（tokens）</label>
-            <input type="number" min="50000" max="50000000" step="50000"
+            <input type="number" min="50000" max="100000000000" step="50000"
                    value={form.project_budget_cap ?? 1000000}
                    onChange={(e) => setForm({ ...form, project_budget_cap: Number(e.target.value) })} />
           </div>
@@ -1963,8 +2081,19 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
 function AccountModal({ me, onClose }) {
   const [secret, setSecret] = useState("");
   const [note, setNote] = useState("");
+  const [prefNote, setPrefNote] = useState("");
   const [acc, setAcc] = useState(null);
-  useEffect(() => { api.account().then(setAcc).catch(() => {}); }, []);
+  const [prefs, setPrefs] = useState({});
+  const [newKey, setNewKey] = useState("");
+  const [newVal, setNewVal] = useState("");
+  const [savingPrefs, setSavingPrefs] = useState(false);
+
+  useEffect(() => {
+    api.account().then((res) => {
+      setAcc(res);
+      setPrefs(res?.preferences || {});
+    }).catch(() => {});
+  }, []);
 
   async function change() {
     if (secret.length < 16) { setNote("至少 16 位"); return; }
@@ -1972,15 +2101,124 @@ function AccountModal({ me, onClose }) {
     setSecret(""); setNote("密钥已更新，请重新登录");
   }
 
+  async function savePrefs(nextPrefs) {
+    const toSave = nextPrefs || prefs;
+    setSavingPrefs(true);
+    setPrefNote("");
+    try {
+      const res = await api.updatePreferences(toSave);
+      setPrefs(res.preferences || toSave);
+      setPrefNote("偏好已更新");
+    } catch (e) {
+      setPrefNote(e.message || "更新失败");
+    } finally {
+      setSavingPrefs(false);
+      setTimeout(() => setPrefNote(""), 3500);
+    }
+  }
+
+  function setPrefItem(k, v) {
+    const next = { ...prefs };
+    if (!v || !v.trim()) {
+      delete next[k];
+    } else {
+      next[k] = v.trim();
+    }
+    setPrefs(next);
+  }
+
+  function removePrefItem(k) {
+    const next = { ...prefs };
+    delete next[k];
+    setPrefs(next);
+    savePrefs(next);
+  }
+
+  function addCustomPref() {
+    if (!newKey.trim() || !newVal.trim()) return;
+    const next = { ...prefs, [newKey.trim()]: newVal.trim() };
+    setPrefs(next);
+    setNewKey("");
+    setNewVal("");
+    savePrefs(next);
+  }
+
   return (
     <div className="mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>账号</h3>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+        <h3>账号与个性化偏好</h3>
         <div className="row"><span>身份 ID</span><div className="spacer" /><span className="mono">{me.identity_id}</span></div>
         <div className="row"><span>角色</span><div className="spacer" /><span>{me.role}</span></div>
         <div className="row"><span>所属实体</span><div className="spacer" /><span>{me.entity_name}</span></div>
-        <div className="row"><span>已记住的偏好</span><div className="spacer" />
-          <span className="mono">{JSON.stringify(acc?.preferences || {})}</span></div>
+
+        <div className="section-title">AI 已记住的偏好（全链路交互遵循）</div>
+        <p className="hint" style={{ marginTop: -4 }}>
+          AI 团队在各阶段任务拆解、回复提示词中均会自动注入此偏好；日常会话中直接说「以后叫我老板」也会自动同步。
+        </p>
+
+        <div className="grid2" style={{ marginTop: 8 }}>
+          <div className="field">
+            <label>尊称 / 称谓偏好 (boss_title)</label>
+            <input
+              placeholder="例如：老板、总、队长、老师"
+              value={prefs.boss_title || ""}
+              onChange={(e) => setPrefItem("boss_title", e.target.value)}
+            />
+          </div>
+          <div className="field">
+            <label>交互风格偏好 (response_style)</label>
+            <select
+              value={prefs.response_style || ""}
+              onChange={(e) => setPrefItem("response_style", e.target.value)}
+            >
+              <option value="">默认（严谨务实）</option>
+              <option value="简洁专业">简洁专业（直出核心结论，少寒暄）</option>
+              <option value="详尽深入">详尽深入（包含上下文及推演步骤）</option>
+              <option value="商业实战">商业实战（强调商业收益与交付规格）</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="field" style={{ marginTop: 8 }}>
+          <label>当前偏好项清单</label>
+          <div className="chips-wrap" style={{ display: "flex", flexWrap: "wrap", gap: 6, minHeight: 36, padding: "8px 10px", background: "var(--panel)", borderRadius: 8, border: "1px solid var(--border)" }}>
+            {Object.keys(prefs).length === 0 && (
+              <span className="hint">暂无记录（可直接在上方设置，或在下方添加自定义偏好键值）</span>
+            )}
+            {Object.entries(prefs).map(([k, v]) => (
+              <span className="chip" key={k} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <b>{k}:</b> {v}
+                <button
+                  type="button"
+                  style={{ border: "none", background: "transparent", cursor: "pointer", color: "inherit", opacity: 0.7, padding: "0 4px", fontSize: 13 }}
+                  onClick={() => removePrefItem(k)}
+                  title="删除此项偏好"
+                >×</button>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="row" style={{ marginTop: 8, gap: 8 }}>
+          <input
+            style={{ width: 140 }}
+            placeholder="自定义偏好键 (key)"
+            value={newKey}
+            onChange={(e) => setNewKey(e.target.value)}
+          />
+          <input
+            style={{ flex: 1 }}
+            placeholder="偏好内容 (value)"
+            value={newVal}
+            onChange={(e) => setNewVal(e.target.value)}
+          />
+          <button className="btn ghost" disabled={!newKey.trim() || !newVal.trim()} onClick={addCustomPref}>添加项</button>
+          <button className="btn primary" disabled={savingPrefs} onClick={() => savePrefs()}>
+            {savingPrefs ? "保存中…" : "保存偏好"}
+          </button>
+        </div>
+        {prefNote && <div className={cls("hint", prefNote.includes("失败") ? "err" : "ok")} style={{ marginTop: 4 }}>{prefNote}</div>}
+
         <div className="section-title">修改密钥</div>
         <div className="field">
           <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="新的 HMAC secret（≥16 位）" />

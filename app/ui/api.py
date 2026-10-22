@@ -1504,10 +1504,11 @@ def delete_project(project_id: str, oa_ui: str | None = Depends(_token)):
     with get_conn() as conn:
         from .. import pipeline
         pipeline.ensure(conn)
+        from .access import is_deployment_admin
         actor = _task_actor(conn, oa_ui, "task:*")
-        if actor["role"] not in {"ceo", "system"}:
+        if actor["role"] not in {"ceo", "system", "operator", "admin"} and not is_deployment_admin(actor):
             raise HTTPException(403, detail={"code": "Forbidden",
-                                             "message": "只有 CEO / 系统管理员可以删除项目"})
+                                             "message": "只有管理员可以删除项目"})
         proj = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
         if proj is None:
             raise HTTPException(404, detail={"code": "ProjectNotFound"})
@@ -1647,6 +1648,23 @@ def delete_project(project_id: str, oa_ui: str | None = Depends(_token)):
 
     return {"ok": True, "project_id": project_id, "deleted": counts,
             "files_removed": removed_files, "dirs_removed": removed_dirs}
+
+class BatchProjectsDeleteIn(BaseModel):
+    project_ids: list[str]
+
+
+@router.post("/projects/batch-delete")
+def batch_delete_projects(payload: BatchProjectsDeleteIn, oa_ui: str | None = Depends(_token)):
+    _require(oa_ui)
+    results = []
+    errors = []
+    for pid in payload.project_ids:
+        try:
+            delete_project(pid, oa_ui=oa_ui)
+            results.append(pid)
+        except Exception as e:
+            errors.append(f"{pid}: {str(e)}")
+    return {"ok": True, "deleted": results, "errors": errors}
 
 
 @router.get("/projects/{project_id}")

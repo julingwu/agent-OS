@@ -137,7 +137,7 @@ def config(conn: sqlite3.Connection) -> dict:
 
     elastic = _f("budget_elastic", "M0_BUDGET_ELASTIC", ELASTIC_DEFAULT, 1.0, 5.0)
     cap = int(_f("project_budget_cap", "M0_PROJECT_BUDGET_CAP", CAP_DEFAULT,
-                 50_000, 50_000_000))
+                 50_000, 100_000_000_000))
     pause_ratio = _f("budget_pause_ratio", "M0_BUDGET_PAUSE_RATIO",
                      PAUSE_RATIO_DEFAULT, 0.5, 1.0)
     return {"elastic": elastic, "cap": cap, "pause_ratio": pause_ratio,
@@ -153,7 +153,7 @@ def set_config(conn: sqlite3.Connection, *, elastic: float | None = None,
             continue
         if key == "budget_elastic" and not 1.0 <= float(val) <= 5.0:
             raise ValueError("InvalidElastic")
-        if key == "project_budget_cap" and not 50_000 <= int(val) <= 50_000_000:
+        if key == "project_budget_cap" and not 50_000 <= int(val) <= 100_000_000_000:
             raise ValueError("InvalidProjectCap")
         if key == "budget_pause_ratio" and not 0.5 <= float(val) <= 1.0:
             raise ValueError("InvalidPauseRatio")

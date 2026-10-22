@@ -147,12 +147,16 @@ Object.assign(api, {
   about: () => req("/about"),
   account: () => req("/account"),
   changeSecret: (secret) => req("/account/secret", { method: "POST", body: JSON.stringify({ secret }) }),
+  updatePreferences: (preferences) => req("/account/preferences", { method: "PUT", body: JSON.stringify({ preferences }) }),
+  deletePreference: (key) => req(`/account/preferences/${encodeURIComponent(key)}`, { method: "DELETE" }),
   settings: () => req("/settings"),
   saveSettings: (payload) => req("/settings", { method: "PUT", body: JSON.stringify(payload) }),
   alerts: () => req("/alerts?unacked=1"),
   ackAlert: (id) => req(`/alerts/${id}/ack`, { method: "POST" }),
   files: () => req("/files"),
   deleteFile: (id) => req(`/files/${id}`, { method: "DELETE" }),
+  batchDeleteFiles: (ids) => req("/files/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+  purgeMissingFiles: () => req("/files/purge-missing", { method: "POST" }),
   fileUrl: (id) => `${ORIGIN}/ui/files/${id}/download${DESKTOP && auth.get() ? `?t=${encodeURIComponent(auth.get())}` : ""}`,
   kb: (entity) => req(`/kb${entity ? `?entity=${entity}` : ""}`),
   uploadKb: (entity, file) => {
@@ -251,6 +255,7 @@ Object.assign(api, {
   patchProject: (id, body) => req(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   // v4.5.3 彻底删除项目（连带关联行 / 交付物 / Run 轨迹）
   deleteProject: (id) => req(`/projects/${id}`, { method: "DELETE" }),
+  batchDeleteProjects: (project_ids) => req("/projects/batch-delete", { method: "POST", body: JSON.stringify({ project_ids }) }),
 });
 
 // V2.0

@@ -60,6 +60,16 @@ def save_preference(conn: sqlite3.Connection, identity_id: str, key: str, value:
     conn.commit()
 
 
+def delete_preference(conn: sqlite3.Connection, identity_id: str, key: str) -> None:
+    conn.execute("DELETE FROM user_preferences WHERE identity_id=? AND key=?", (identity_id, key))
+    conn.commit()
+
+
+def clear_preferences(conn: sqlite3.Connection, identity_id: str) -> None:
+    conn.execute("DELETE FROM user_preferences WHERE identity_id=?", (identity_id,))
+    conn.commit()
+
+
 def preferences(conn: sqlite3.Connection, identity_id: str | None) -> dict[str, str]:
     if not identity_id:
         return {}

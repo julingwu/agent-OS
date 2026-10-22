@@ -239,10 +239,63 @@
 }
 .mc-project-foot {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 1px;
+}
+.mc-project-foot-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.mc-project-date {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mc-project-del-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  transition: all .15s ease;
+  cursor: pointer;
+  opacity: 0.2;
+}
+.mc-project:hover .mc-project-del-btn {
+  opacity: 0.9;
+}
+.mc-project-del-btn:hover {
+  opacity: 1;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+}
+.mc-btn-clean-blocked {
+  margin-left: auto;
+  border: none;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all .15s ease;
+}
+.mc-btn-clean-blocked:hover {
+  background: #ef4444;
+  color: #fff;
 }
 .mc-project-none {
   padding: 18px 12px;

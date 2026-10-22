@@ -337,6 +337,30 @@ def account(token: str | None = Auth):
         prefs = intel.preferences(conn, who)
     return {**dict(row), "preferences": prefs}
 
+class PreferencesIn(BaseModel):
+    preferences: dict[str, str]
+
+
+@router.put("/account/preferences")
+def update_preferences(payload: PreferencesIn, token: str | None = Auth):
+    who = _require(token)
+    with get_conn() as conn:
+        intel.clear_preferences(conn, who)
+        for k, v in payload.preferences.items():
+            if k and v and str(v).strip():
+                intel.save_preference(conn, who, k.strip(), str(v).strip())
+        prefs = intel.preferences(conn, who)
+    return {"ok": True, "preferences": prefs}
+
+
+@router.delete("/account/preferences/{key}")
+def delete_preference(key: str, token: str | None = Auth):
+    who = _require(token)
+    with get_conn() as conn:
+        intel.delete_preference(conn, who, key)
+        prefs = intel.preferences(conn, who)
+    return {"ok": True, "preferences": prefs}
+
 
 # --------------------------------------------------------------- 文件库
 
@@ -771,3 +795,46 @@ def delete_department(dept_id: str, token: str | None = Auth):
                     payload={"moved_employees": moved}, response={"by": ident})
         conn.commit()
     return {"ok": True, "moved": moved}
+
+
+class BatchFilesDeleteIn(BaseModel):
+    ids: list[str]
+
+
+@router.post("/files/batch-delete")
+def batch_delete_files(payload: BatchFilesDeleteIn, token: str | None = Auth):
+    _require(token)
+    deleted_count = 0
+    errors = []
+    for aid in payload.ids:
+        try:
+            delete_file(aid, token=token)
+            deleted_count += 1
+        except Exception as e:
+            errors.append(f"{aid}: {str(e)}")
+    return {"ok": True, "deleted": deleted_count, "errors": errors}
+
+
+@router.post("/files/purge-missing")
+def purge_missing_files(token: str | None = Auth):
+    who = _require(token)
+    import pathlib
+    purged_ids = []
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute("SELECT id, file_path FROM artifacts WHERE COALESCE(state,'active')='active'").fetchall()
+        for r in rows:
+            p = pathlib.Path(r["file_path"])
+            if not p.exists():
+                conn.execute("UPDATE artifacts SET state='deleted' WHERE id=?", (r["id"],))
+                try:
+                    conn.execute("DELETE FROM project_artifacts WHERE file_path=?", (r["file_path"],))
+                    conn.execute("DELETE FROM stage_deliverables WHERE file_path=?", (r["file_path"],))
+                except Exception:
+                    pass
+                purged_ids.append(r["id"])
+        write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="admin", action="files_purged_missing",
+                    target="artifacts", layer="system", payload={"count": len(purged_ids)},
+                    response={"by": who, "purged": len(purged_ids)})
+        conn.commit()
+    return {"ok": True, "purged": len(purged_ids), "purged_ids": purged_ids}

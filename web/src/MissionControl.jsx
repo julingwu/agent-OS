@@ -232,7 +232,8 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
   const [releaseData, setReleaseData] = useState(null);
   const [previewFile, setPreviewFile] = useState(null);
   const [confirmDel, setConfirmDel] = useState(false);   // 删除项目的二次确认
-  const canDelete = ["ceo", "system"].includes(me?.role);
+  const [quickDelId, setQuickDelId] = useState("");      // 侧边栏快捷删除项 ID
+  const canDelete = ["ceo", "system", "operator", "admin"].includes(me?.role) || Boolean(me?.can_manage_deployment);
   const alive = useRef(true);
 
   /* -- 项目列表 -- */
@@ -333,6 +334,50 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
   const passedGates = gates.filter((g) => g.state === "passed" && !g.superseded).length;
   const blockedGates = gates.filter((g) => g.state !== "passed" && !g.superseded).length;
 
+  async function deleteProjectDirect(pid) {
+    if (!pid || busy) return;
+    setBusy(true);
+    try {
+      const out = await api.deleteProject(pid);
+      if (activeId === pid) {
+        setDetail(null);
+        setReleaseData(null);
+        setActiveId("");
+      }
+      await loadList(false);
+      window.dispatchEvent(new Event("oa-tasks-changed"));
+      setToast(`已清理项目 ${pid}`);
+    } catch (e) {
+      setToast(e.message || "删除失败");
+    } finally {
+      setBusy(false);
+      setQuickDelId("");
+      setTimeout(() => setToast(""), 3500);
+    }
+  }
+
+  async function cleanAllBlocked() {
+    const blocked = (list?.projects || []).filter((p) => p.state === "blocked").map((p) => p.id);
+    if (!blocked.length) return;
+    if (!confirm(`确定彻底清理 ${blocked.length} 个已阻塞/失败的项目吗？关联任务与产物将一并清除。`)) return;
+    setBusy(true);
+    try {
+      const out = await api.batchDeleteProjects(blocked);
+      if (blocked.includes(activeId)) {
+        setDetail(null);
+        setActiveId("");
+      }
+      await loadList(false);
+      window.dispatchEvent(new Event("oa-tasks-changed"));
+      setToast(`已批量清理 ${out.deleted?.length || blocked.length} 个阻塞项目`);
+    } catch (e) {
+      setToast(e.message || "清理失败");
+    } finally {
+      setBusy(false);
+      setTimeout(() => setToast(""), 4000);
+    }
+  }
+
   async function act(kind) {
     if (!detail || busy) return;
     const pid = detail.project.id;
@@ -415,6 +460,11 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
                 {label}
               </button>
             ))}
+            {canDelete && (list?.projects || []).some((p) => p.state === "blocked") && (
+              <button className="mc-btn-clean-blocked" title="一键清理所有失败或阻塞项目" onClick={cleanAllBlocked} disabled={busy}>
+                清理阻塞
+              </button>
+            )}
           </div>
 
           {listErr && <div className="mc-alert" role="alert">{listErr}</div>}
@@ -443,7 +493,28 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
                     </span>
                     <span className="mc-project-foot">
                       <span>{p.done_stages || 0}/9 阶段</span>
-                      <span>{when(p.created_at)}</span>
+                      <span className="mc-project-foot-right">
+                        <span className="mc-project-date">{when(p.created_at)}</span>
+                        {canDelete && (
+                          <span
+                            className="mc-project-del-btn"
+                            role="button"
+                            tabIndex={0}
+                            title="快速删除此项目"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (quickDelId === p.id) {
+                                deleteProjectDirect(p.id);
+                              } else {
+                                setQuickDelId(p.id);
+                                setTimeout(() => setQuickDelId((cur) => cur === p.id ? "" : cur), 3500);
+                              }
+                            }}
+                          >
+                            {quickDelId === p.id ? "确认？" : "🗑"}
+                          </span>
+                        )}
+                      </span>
                     </span>
                   </button>
                 </li>
@@ -457,7 +528,16 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
 
         {/* ---------- 中：流水线画布 ---------- */}
         <main className="mc-col mc-canvas" aria-label="流水线画布">
-          {detailErr && <div className="mc-alert" role="alert">{detailErr}</div>}
+          {detailErr && (
+            <div className="mc-alert" role="alert" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>{detailErr}</span>
+              {canDelete && activeId && (
+                <button className="mc-btn danger" disabled={busy} onClick={() => deleteProjectDirect(activeId)}>
+                  删除此异常项目
+                </button>
+              )}
+            </div>
+          )}
           {!detail && !detailErr && <div className="mc-skel-canvas" aria-hidden />}
           {detail && (
             <>
