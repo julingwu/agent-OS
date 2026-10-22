@@ -8,6 +8,7 @@ export default function GovernanceView({ me }) {
   const canReview = ["ceo", "system"].includes(me?.role);
   const [data, setData] = useState({ experiences: [], stats: {} });
   const [filter, setFilter] = useState("");
+  const [search, setSearch] = useState("");
   const [form, setForm] = useState(empty);
   const [editing, setEditing] = useState(null);
   const [query, setQuery] = useState("");
@@ -58,9 +59,25 @@ export default function GovernanceView({ me }) {
         </form>
       </section>}
       <section className="fin-card"><div className="integration-heading"><h3>经验库</h3>
-        <label>审核状态 <select aria-label="筛选审核状态" value={filter} onChange={e => setFilter(e.target.value)}><option value="">全部</option>{Object.entries(states).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="text"
+            placeholder="🔍 搜索经验标题、内容或标签..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, width: 220, border: "1px solid var(--line, rgba(255,255,255,0.15))", background: "rgba(0,0,0,0.15)", color: "inherit" }}
+          />
+          <label>审核状态 <select aria-label="筛选审核状态" value={filter} onChange={e => setFilter(e.target.value)}><option value="">全部</option>{Object.entries(states).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        </div></div>
         {!data.experiences.length && <p className="hint">暂无符合条件的经验。任务驳回和项目复盘也会生成待审核记录。</p>}
-        {data.experiences.map(item => <article className="exp-row" key={item.id}>
+        {data.experiences.filter(item => {
+          if (!search.trim()) return true;
+          const q = search.toLowerCase();
+          return (item.title || "").toLowerCase().includes(q) ||
+                 (item.content || "").toLowerCase().includes(q) ||
+                 (item.tags || "").toLowerCase().includes(q) ||
+                 (item.redline_terms || "").toLowerCase().includes(q);
+        }).map(item => <article className="exp-row" key={item.id}>
           <div className="exp-head"><span className={`pill ${item.state === "approved" ? "ok" : item.state === "rejected" ? "bad" : "warn"}`}>{states[item.state] || item.state}</span><strong>{item.title}</strong>{Boolean(item.mandatory) && <span className="chip">强制规则</span>}</div>
           <p className="exp-content">{item.content}</p>
           <div className="hint">版本 {item.version || 1} · {item.source_type === "manual" ? "手动整理" : "任务沉淀"} · 使用 {item.uses || 0} 次</div>

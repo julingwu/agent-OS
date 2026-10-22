@@ -216,6 +216,136 @@ function PreviewModal({ pid, file, onClose }) {
 
 /* --------------------------------------------------- 主视图 */
 
+
+function NewProjectModal({ onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [requirement, setRequirement] = useState("");
+  const [flow, setFlow] = useState("FLOW-SOFTWARE");
+  const [useLlmDocs, setUseLlmDocs] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const templates = [
+    { id: "FLOW-SOFTWARE", title: "🛠️ 软件研发全流", desc: "9阶段经典流水线：接需求 → 立项 → 研讨 → 拆解 → 实现 → 测试 → 验收 → 发布 → 复盘", stages: 9 },
+    { id: "FLOW-ANALYSIS", title: "📊 业务数据分析流", desc: "数据分析专项流：需求接单 → 数据建模分析 → 洞察与报表交付", stages: 3 },
+    { id: "FLOW-RESEARCH", title: "🔍 行业竞品调研流", desc: "商业调研专项流：调研需求 → 竞品对标检索 → 深度分析报告", stages: 3 },
+    { id: "FLOW-HOTFIX", title: "⚡ 紧急排障抢修流", desc: "快速应急流：故障定级定位 → 补丁编写与单测 → 极速发布上线", stages: 4 },
+  ];
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!name.trim() || !requirement.trim() || busy) return;
+    setBusy(true); setErr("");
+    try {
+      const res = await api.createProject({
+        name: name.trim(),
+        requirement: requirement.trim(),
+        flow,
+        use_llm_docs: useLlmDocs,
+      });
+      onCreated && onCreated(res);
+      onClose();
+    } catch (e2) {
+      setErr(e2.message || "创建流水线项目失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mask" onClick={onClose}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 660 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 18 }}>发起流水线新项目</h3>
+            <p className="hint" style={{ margin: "4px 0 0" }}>选择工程流水线模板，多智能体协同将按轨道阶段自动推进与总装</p>
+          </div>
+          <button className="icon-btn" onClick={onClose} aria-label="关闭">✕</button>
+        </div>
+
+        {err && <div className="err" style={{ marginBottom: 12 }}>{err}</div>}
+
+        <form onSubmit={submit}>
+          <div className="field">
+            <label>项目名称</label>
+            <input
+              required
+              placeholder="例如：电商营销自动化分析系统、核心支付网关排障"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+            />
+          </div>
+
+          <div className="field" style={{ marginTop: 12 }}>
+            <label>选择流水线工程模板</label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 6 }}>
+              {templates.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => setFlow(t.id)}
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                    border: flow === t.id ? "2px solid #6366f1" : "1px solid rgba(255,255,255,0.1)",
+                    background: flow === t.id ? "rgba(99, 102, 241, 0.15)" : "rgba(255,255,255,0.03)",
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{t.title}</div>
+                  <div className="hint" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.4 }}>{t.desc}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="field" style={{ marginTop: 12 }}>
+            <label>需求描述与核心交付目标</label>
+            <textarea
+              required
+              rows={4}
+              placeholder="请详细描述该项目的业务背景、核心功能点、技术约束及预期交付物清单……"
+              value={requirement}
+              onChange={(e) => setRequirement(e.target.value)}
+            />
+          </div>
+
+          <div className="row" style={{ marginTop: 12, padding: "8px 0" }}>
+            <div>
+              <div style={{ fontWeight: 500, fontSize: 13 }}>文档与方案生成模式</div>
+              <div className="hint" style={{ fontSize: 11 }}>智能模型生成将耗费更多 token，但方案更贴合业务细节</div>
+            </div>
+            <div className="spacer" />
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                className={`btn ${useLlmDocs === 1 ? "primary" : "ghost"}`}
+                onClick={() => setUseLlmDocs(1)}
+              >
+                智能模型生成
+              </button>
+              <button
+                type="button"
+                className={`btn ${useLlmDocs === 0 ? "primary" : "ghost"}`}
+                onClick={() => setUseLlmDocs(0)}
+              >
+                模板快速生成
+              </button>
+            </div>
+          </div>
+
+          <div className="actions" style={{ marginTop: 20, display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button type="button" className="btn ghost" onClick={onClose}>取消</button>
+            <button type="submit" className="btn primary" disabled={busy || !name.trim() || !requirement.trim()}>
+              {busy ? "正在启动流水线…" : "🚀 启动流水线项目"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function MissionControl({ Icon, onOpenChat, me }) {
   const [list, setList] = useState(null);          // {projects: [...]}
   const [listErr, setListErr] = useState("");
@@ -232,7 +362,8 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
   const [releaseData, setReleaseData] = useState(null);
   const [previewFile, setPreviewFile] = useState(null);
   const [confirmDel, setConfirmDel] = useState(false);   // 删除项目的二次确认
-  const [quickDelId, setQuickDelId] = useState("");      // 侧边栏快捷删除项 ID
+  const [quickDelId, setQuickDelId] = useState("");
+  const [creatingProject, setCreatingProject] = useState(false);      // 侧边栏快捷删除项 ID
   const canDelete = ["ceo", "system", "operator", "admin"].includes(me?.role) || Boolean(me?.can_manage_deployment);
   const alive = useRef(true);
 
@@ -427,6 +558,11 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
             {projects.filter((p) => p.state === "active").length} 个正在跑 ·{" "}
             {projects.filter((p) => p.state === "blocked").length} 个卡住
           </p>
+        </div>
+        <div className="mc-hero-actions" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button className="btn primary" onClick={() => setCreatingProject(true)} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600, padding: "8px 16px", borderRadius: 8, boxShadow: "0 2px 8px rgba(99,102,241,0.3)" }}>
+            <span style={{ fontSize: 16 }}>+</span> 发起流水线项目
+          </button>
         </div>
         <div className="mc-hero-stats">
           <div className="mc-stat">
@@ -801,6 +937,17 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
       )}
 
       <PreviewModal pid={activeId} file={previewFile} onClose={() => setPreviewFile(null)} />
+      {creatingProject && (
+        <NewProjectModal
+          onClose={() => setCreatingProject(false)}
+          onCreated={async (res) => {
+            await loadList(false);
+            if (res?.project_id) setActiveId(res.project_id);
+            setToast("流水线项目已成功启动！");
+            window.dispatchEvent(new Event("oa-tasks-changed"));
+          }}
+        />
+      )}
     </section>
   );
 }

@@ -1506,6 +1506,61 @@ def decide_role_request(chat_id: str, message_id: int, payload: RoleDecisionIn,
 
 
 # ------------------------------------------------------------------ 项目（v1.5）
+class ProjectCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    requirement: str = Field(..., min_length=1)
+    flow: str | None = "FLOW-SOFTWARE"
+    use_llm_docs: int = 1
+
+
+@router.post("/projects")
+def create_project_route(payload: ProjectCreate, oa_ui: str | None = Depends(_token)):
+    """主动创建流水线项目：支持指定模板（FLOW-SOFTWARE/FLOW-ANALYSIS 等）与立项预算初始化"""
+    who = _require(oa_ui)
+    with get_conn() as conn:
+        from .. import pipeline, flows, finance
+        pipeline.ensure(conn)
+        actor = _task_actor(conn, oa_ui, "task:write")
+        entity_id = actor.get("legal_entity_id") or "LE-GROUP-HQ"
+        tenant_id = actor.get("tenant_id") or "TENANT-HQ"
+
+        flow_id = payload.flow or "FLOW-SOFTWARE"
+        created = pipeline.create_project(
+            conn,
+            name=payload.name.strip(),
+            requirement=payload.requirement.strip(),
+            entity=entity_id,
+            owner=actor["id"],
+            use_llm_docs=payload.use_llm_docs,
+            tenant_id=tenant_id,
+            flow=flow_id,
+        )
+        pid = created["project_id"]
+
+        try:
+            tmpl = flows.template(conn, flow_id) if flow_id else None
+            nodes = tmpl.get("nodes") if tmpl else None
+            if not nodes:
+                nodes = [{"key": k, "kind": k, "role": "engineer", "title": t} for k, t in pipeline.STAGES]
+            finance.open_project(conn, pid, nodes, requirement=payload.requirement,
+                                 flow_id=flow_id or "", tenant_id=tenant_id)
+        except Exception:
+            pass
+
+        from ..audit import write_audit
+        write_audit(conn, legal_entity_id=entity_id, verb="project", task_id=None,
+                    actor=actor["id"], layer="system", action="project_created_ui",
+                    target=pid, payload={"name": payload.name, "flow": flow_id},
+                    response={"ok": True, "project_id": pid})
+        conn.commit()
+
+        proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+        stages = conn.execute("SELECT * FROM project_stages WHERE project_id=? ORDER BY seq ASC", (pid,)).fetchall()
+
+    return {"ok": True, "project_id": pid, "project": dict(proj) if proj else None,
+            "stages_count": len(stages), "flow_id": flow_id}
+
+
 @router.get("/projects")
 def list_projects(oa_ui: str | None = Depends(_token), limit: int = 50):
     _require(oa_ui)

@@ -227,6 +227,7 @@ Object.assign(api, {
 Object.assign(api, {
   projects: () => req("/projects"),
   project: (id) => req(`/projects/${id}`),
+  createProject: (body) => req("/projects", { method: "POST", body: JSON.stringify(body) }),
   flowTemplates: () => req("/flow-templates"),
   stageDetail: (pid, key) => req(`/projects/${pid}/stages/${key}`),
   assignStage: (pid, key, employee_id) =>

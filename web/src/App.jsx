@@ -1007,7 +1007,7 @@ function EmployeePanel({ emp, onClose, onChanged, onOpenChat }) {
         name: form.name, soul: form.soul, model: form.model,
         api_key: form.api_key || undefined, api_base: form.api_base || undefined,
       });
-      setNote("已保存");
+      setNote(`已成功保存！当前项目预算上限：${formatTokensCN(form.project_budget_cap)}`);
       onChanged && onChanged();
     } catch (e) { setNote(e.message); } finally { setBusy(false); }
   }
@@ -2105,6 +2105,20 @@ function FilesTab() {
 }
 
 /* ------------------------------------------------------------- 设置/账号 */
+
+function formatTokensCN(n) {
+  const num = Number(n || 0);
+  if (num >= 100_000_000) {
+    const yi = num / 100_000_000;
+    return `${yi % 1 === 0 ? yi : yi.toFixed(2)} 亿 tokens`;
+  }
+  if (num >= 10_000) {
+    const wan = num / 10_000;
+    return `${wan % 1 === 0 ? wan : wan.toFixed(1)} 万 tokens`;
+  }
+  return `${num.toLocaleString()} tokens`;
+}
+
 function SettingsModal({ onClose, theme, setTheme, onChanged }) {
   const [form, setForm] = useState({ default_model: "", default_api_base: "", theme,
                                      flow_stage_budget: 20000, budget_elastic: 1.5,
@@ -2173,10 +2187,37 @@ function SettingsModal({ onClose, theme, setTheme, onChanged }) {
                    value={form.budget_elastic ?? 1.5}
                    onChange={(e) => setForm({ ...form, budget_elastic: Number(e.target.value) })} />
           </div>
-          <div className="field"><label>项目全局最高预算（tokens）</label>
+          <div className="field">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <label style={{ margin: 0 }}>项目全局最高预算</label>
+              <span className="pill ok" style={{ fontSize: 11, fontWeight: 600 }}>
+                {formatTokensCN(form.project_budget_cap)}
+              </span>
+            </div>
             <input type="number" min="50000" max="100000000000" step="50000"
                    value={form.project_budget_cap ?? 1000000}
                    onChange={(e) => setForm({ ...form, project_budget_cap: Number(e.target.value) })} />
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+              {[
+                [1_000_000, "100万"],
+                [10_000_000, "1000万"],
+                [50_000_000, "5000万"],
+                [100_000_000, "1亿"],
+                [1_000_000_000, "10亿"],
+                [10_000_000_000, "100亿"],
+                [100_000_000_000, "1000亿"],
+              ].map(([val, label]) => (
+                <button
+                  type="button"
+                  key={val}
+                  className={`btn ghost ${form.project_budget_cap === val ? "primary" : ""}`}
+                  style={{ padding: "2px 8px", fontSize: 11, height: "auto" }}
+                  onClick={() => setForm({ ...form, project_budget_cap: val })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <p className="hint" style={{ marginTop: -4 }}>
@@ -3232,6 +3273,24 @@ function RolesView({ onChanged }) {
               <span className="pill">{TAG_LABEL[r.tag] || r.tag}</span>
               <span className="spacer" />
               <span className="hint">{r.headcount || 0} 人</span>
+              <button
+                className="icon-btn"
+                title="删除角色"
+                style={{ width: 22, height: 22, padding: 0, opacity: 0.6, marginLeft: 6 }}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  if (!window.confirm(`确定删除角色「${r.name}」？已实例化的员工会保留。`)) return;
+                  try {
+                    await api.deleteRole(r.id);
+                    await load();
+                    onChanged && onChanged();
+                  } catch (err) {
+                    alert(err.message || "删除失败");
+                  }
+                }}
+              >
+                ✕
+              </button>
             </div>
             <div className="role-prompt">{r.prompt || "（未设置提示词）"}</div>
             <div className="role-foot">
@@ -3296,9 +3355,21 @@ function RoleDrawer({ role, onClose, onSaved }) {
         <div className="field"><label>默认交付物</label>
           <input value={form.deliverable}
                  onChange={(e) => setForm({ ...form, deliverable: e.target.value })} /></div>
-        <div className="actions">
-          <button className="btn primary" disabled={busy} onClick={save}>保存（即改即生效）</button>
-          <button className="btn ghost" onClick={onClose}>取消</button>
+        <div className="actions" style={{ display: "flex", justifyContent: "space-between" }}>
+          <button className="btn danger" disabled={busy} onClick={async () => {
+            if (!window.confirm(`确定删除角色「${role.name}」？已实例化的员工会保留。`)) return;
+            try {
+              await api.deleteRole(role.id);
+              onClose();
+              await onSaved();
+            } catch (err) {
+              alert(err.message || "删除角色失败");
+            }
+          }}>删除角色</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn ghost" onClick={onClose}>取消</button>
+            <button className="btn primary" disabled={busy} onClick={save}>保存（即改即生效）</button>
+          </div>
         </div>
       </div>
     </>
