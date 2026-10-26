@@ -1,0 +1,575 @@
+==============================================================================
+Agent OS 生产库健康快照  (TASK-6.3 / v5.4)
+生成时间: 2026-10-26T02:43:00
+数据库: C:\oaagent-m0\data\oa.db
+大小: 32022528 bytes
+==============================================================================
+
+## 1. 备份与安全网
+备份文件: C:\oaagent-m0\data\oa.db.bak_v5.3_20261026_0220
+  备份 sha256: 1452135f0ec829baa739c178d545fd2fcd4dadd41a69fed4736243cf2f5a6966
+  备份大小: 30621696 bytes
+  源库迁移前 sha256: c06794c6f8570118f43ba5be5cebb59452f2a24a81fcbe941b6efdb26b95b184
+  -wal 留证: copied -> C:\oaagent-m0\data\oa.db.bak_v5.3_20261026_0220-wal (0 bytes)
+  -shm 留证: copied -> C:\oaagent-m0\data\oa.db.bak_v5.3_20261026_0220-shm (32768 bytes)
+  三校结果: sha256 已记录 / 表数量 71==71 / tasks 597==597 & org_experiences 465==465 / quick_check ok
+  现有 -wal/-shm: True True
+
+## 2. 迁移结果（幂等 DDL）
+新增列: {"eval_results": ["tenant_id"], "eval_runs": ["tenant_id"], "eval_sets": ["tenant_id"]}
+第二遍列变更: NONE（幂等）
+journal_mode: wal  quick_check: ok
+迁移未改动行数: True
+
+## 3. 噪音经验清洗
+reason: v5.4_purge_self_ref_noise  reviewer: ID-7f3ed41c41ae45f9
+清洗条数: 431  (UPDATE state -> rejected，无 DELETE)
+状态分布 before: {'approved': 12, 'pending': 452, 'rejected': 1}
+状态分布 after : {'approved': 12, 'pending': 21, 'rejected': 432}
+汇总审计 id: AL-9529d8031c184c8a
+
+## 4. 表行数 Top 20
+表总数: 71  总行数: 27479
+  ai_audit_logs                       11892
+  acceptance_criteria                  4406
+  artifacts                            1866
+  evidence_refs                        1289
+  run_stream                           1203
+  trace_spans                          1092
+  task_runs                             621
+  tasks                                 597
+  budgets                               548
+  org_experiences                       465
+  agent_traces                          459
+  redline_scans                         456
+  notifications                         442
+  experience_reviews                    431
+  auth_nonces                           327
+  chat_messages                         269
+  stage_gates                           162
+  project_artifacts                     151
+  stage_deliverables                    148
+  workshop_turns                         90
+
+## 5. org_experiences 状态分布
+  rejected        432
+  pending          21
+  approved         12
+  按 kind: {'consensus': 18, 'decision': 5, 'rejection': 442}
+  保留未清洗的 pending 共 21 条（全部交人工判断，本次一条未动）:
+    分档去向: 研讨共识(workshop) 15 条 / 无失败判据无产物 4 条 / 证据不足 2 条
+    EXP-79c611a0a59b46c6 [workshop/consensus] 2026-10-20 05:57:44 共识：企业官网落地页外单
+    EXP-0bc1f6dc5000446b [workshop/consensus] 2026-10-20 06:02:58 共识：企业官网落地页外单
+    EXP-170ada2632f847d0 [task/rejection] 2026-10-20 06:08:52 驳回：营销文案红线自检
+    EXP-8455f64d01d04108 [workshop/consensus] 2026-10-20 14:34:37 共识：帮我看一下今天伦敦黄金当前的价格和后续的走势进行
+    EXP-5b39ea8baa054cf3 [workshop/consensus] 2026-10-20 14:39:46 共识：失败的原因是什么
+    EXP-4966276e40b64ec7 [task/rejection] 2026-10-20 14:46:34 驳回：开发最小可用版本：单文件 Python 命令行实现，≤200 行，不引入第三方依赖；项目 P-dd0bbd302b
+    EXP-74909f460df04a63 [task/rejection] 2026-10-20 16:34:14 驳回：资料检索（retrieve）：围绕「帮我搜集一下今年前三个季度，国内关于低空经济（无人机、飞行汽车）的核心政策文件
+    EXP-d59f9adb7fb547eb [workshop/consensus] 2026-10-21 15:28:56 共识：企业级数字员工协作平台商业交付
+    EXP-3526c9a0fa254ceb [workshop/consensus] 2026-10-21 15:30:35 共识：企业级数字员工协作平台商业交付
+    EXP-a99e4b077bbe4959 [workshop/consensus] 2026-10-21 15:31:34 共识：企业级数字员工协作平台商业交付
+    EXP-ac901a722bec4cb8 [workshop/consensus] 2026-10-21 15:32:18 共识：企业级数字员工协作平台商业交付
+    EXP-1b5d03f35e4f4dcc [workshop/consensus] 2026-10-21 15:37:08 共识：企业级数字员工协作平台商业交付
+    EXP-c6f241434a3145d6 [task/rejection] 2026-10-21 16:02:15 驳回：写一个 Python 命令行计算器脚本 calc.py，支持加减乘除四则运算，并编写简要使用文档 README.m
+    EXP-1945d09cbeb2432a [task/rejection] 2026-10-21 16:06:43 驳回：写一个 Python 命令行计算器脚本 calc.py，支持加减乘除四则运算，并编写简要使用文档 README.m
+    EXP-0d4c5ab380b64580 [task/rejection] 2026-10-24 12:21:35 驳回：前端交互与页面开发（HTML/CSS/JS）：实现完整的前端交互网页或落地页，包含清晰的样式与结构；项目 P-c7
+    EXP-e9ed20df683c4263 [workshop/consensus] 2026-10-24 13:54:24 共识：赛博元公司 FinOps 算力成本与ROI计算器
+    EXP-6abf29a461ce4aed [workshop/consensus] 2026-10-24 14:13:38 共识：赛博元公司 FinOps 算力成本与ROI计算器
+    EXP-1a1ede0271ce4ab4 [workshop/consensus] 2026-10-24 14:18:15 共识：赛博元公司 FinOps 算力成本与ROI计算器
+    EXP-40832c5c48774cd3 [workshop/consensus] 2026-10-24 14:21:10 共识：赛博元公司 FinOps 算力成本与ROI计算器
+    EXP-725941622470464d [workshop/consensus] 2026-10-24 15:33:03 共识：赛博元公司 FinOps 算力成本与ROI计算器
+    EXP-fa04f61324ad489d [workshop/consensus] 2026-10-24 16:01:56 共识：赛博元公司 FinOps 算力成本与ROI计算器
+
+## 6. projects 状态分布
+  blocked           3
+  active            2
+  done              2
+
+## 7. tasks 状态分布
+  rejected          459
+  failed             82
+  completed          30
+  pending_review     10
+  todo                7
+  assigned            5
+  in_progress         4
+
+## 8. packs
+  packs 行数: 7
+    code-local-v1          template=code       state=active   本地代码包
+    code-v1                template=code       state=active   代码交付包
+    content-v1             template=content    state=active   内容营销包
+    content-v2-imported    template=general    state=active   内容营销进阶包
+    finance-v1             template=finance    state=active   财务审核包
+    review-v1              template=review     state=active   质检评审包
+    web-v1                 template=web        state=active   落地页交付包
+
+## 9. 触发器清单（应恒为 5 个，绝不重建）
+  trg_gate_veto_ins          sql_sha256=d28a3180ce334c0c
+  trg_gate_veto_upd          sql_sha256=d33b85a59c83886b
+  trg_stage_gate_guard       sql_sha256=e03da921cf932f5e
+  trg_stage_no_skip          sql_sha256=e15b056ab88c5a6e
+  trg_tasks_state_guard      sql_sha256=fcd816fdebf72204
+  数量: 5
+
+## 10. SQLite 运行状态
+  journal_mode: wal
+  quick_check: ok
+  foreign_keys pragma: 0 (本连接未开；app.db.connect 每次连接都会 PRAGMA foreign_keys=ON)
+  page_count: 7818
+  integrity_check: ok
+
+## 11. 租户列回填抽查（本次迁移新增的三列）
+  eval_sets     rows=2 empty_tenant=0
+  eval_runs     rows=4 empty_tenant=0
+  eval_results  rows=5 empty_tenant=0
+  值分布:
+    eval_sets: {'TENANT-HQ': 2}
+    eval_runs: {'TENANT-HQ': 4}
+    eval_results: {'TENANT-HQ': 5}
+
+## 12. 审计留痕（本任务写入）
+  experience_reviewed: 432
+  experience_reviews 行数: 431
+  ai_audit_logs 总行数: 11892
+
+==============================================================================
+报告结束。回滚方式：停止服务后，把 data/oa.db 替换为上面的备份文件即可
+（备份是 sqlite3 在线备份 API 产物，逻辑一致；-wal/-shm 副本一并保留）。
+==============================================================================
+
+==============================================================================
+附录 A：本次清洗的 431 条 org_experiences（完整 id 列表，可用于回滚核对）
+格式: id	task_id	created_at	state_before -> state_after
+EXP-0017f08705d44c0b	T-f64c713a09ed4f0f	2026-10-24 15:37:19	pending -> rejected
+EXP-00f63f1e8d364af7	T-19627030c4584f5f	2026-10-24 15:33:49	pending -> rejected
+EXP-01ac253f0ec240e3	T-e312fe636cb54bf1	2026-10-24 15:36:12	pending -> rejected
+EXP-022801931f70478d	T-ba394e95aed94522	2026-10-24 15:37:46	pending -> rejected
+EXP-02a67c5d7390441b	T-fc36d808ee764b22	2026-10-24 15:36:10	pending -> rejected
+EXP-04a1f5c4f29144da	T-6c1bdba3a319487a	2026-10-24 15:36:13	pending -> rejected
+EXP-04f399bf49044c38	T-27a43347fc814616	2026-10-24 15:34:57	pending -> rejected
+EXP-052423a23c7e4e73	T-0caad45036bc448d	2026-10-24 15:38:38	pending -> rejected
+EXP-059a881e92de45ba	T-8456a2a121174fee	2026-10-24 15:35:29	pending -> rejected
+EXP-05cacb768d09459f	T-df18576ff2fd4777	2026-10-24 15:36:36	pending -> rejected
+EXP-05e74635dff04334	T-8e4c6ccbcd8f42cd	2026-10-24 15:36:17	pending -> rejected
+EXP-06f731b086b743d2	T-03aa9f088ee6416b	2026-10-24 15:37:59	pending -> rejected
+EXP-07b4a0842162438c	T-f67fcf87a20f4a45	2026-10-24 15:36:53	pending -> rejected
+EXP-0847f01025f64ee6	T-81eb1cee60a74d47	2026-10-24 15:35:57	pending -> rejected
+EXP-08a19dc2ec174f9a	T-24ab9bc8e5c940f7	2026-10-24 15:36:46	pending -> rejected
+EXP-099cff14f7f543c0	T-1bd3ed6446b14878	2026-10-24 15:37:40	pending -> rejected
+EXP-0a63269b2b084981	T-b484c65d04364368	2026-10-24 15:37:49	pending -> rejected
+EXP-0c559f71f37545b4	T-1df4fd7609ad4c57	2026-10-24 15:35:00	pending -> rejected
+EXP-0d3e5b9fb335469f	T-c9cd9ceb92ff4d7b	2026-10-24 15:34:41	pending -> rejected
+EXP-0e7b3036c79d442b	T-76b2a17908b848b0	2026-10-24 15:35:53	pending -> rejected
+EXP-0f13718ba08345f1	T-4cdd7c7b641f4b43	2026-10-24 15:36:30	pending -> rejected
+EXP-0fb896854e4a4e2a	T-9352da1bc6204681	2026-10-24 15:35:49	pending -> rejected
+EXP-109e957fd1d94d51	T-8de888fea5f44ee3	2026-10-24 15:37:48	pending -> rejected
+EXP-11019e4f623e44dd	T-f715d6ad53164a81	2026-10-24 15:38:01	pending -> rejected
+EXP-1234b795203241de	T-c381c88604ef4ee8	2026-10-24 15:37:06	pending -> rejected
+EXP-12ff5afeca5c4d8f	T-bb742cf8853c4823	2026-10-24 15:34:35	pending -> rejected
+EXP-140b7bac31184f8f	T-a8b65962a3bd41cf	2026-10-24 15:34:49	pending -> rejected
+EXP-153138ab4145435e	T-d52ef6aeeb194880	2026-10-24 15:34:12	pending -> rejected
+EXP-15457aef9e224027	T-61b3ae6469a04fb5	2026-10-24 15:38:26	pending -> rejected
+EXP-1570bcf640ee42bb	T-55fdd4385e104670	2026-10-24 15:37:33	pending -> rejected
+EXP-158ea297ff354042	T-8aa23de4f9f64810	2026-10-24 15:37:41	pending -> rejected
+EXP-15c25c5d1b14483b	T-d5dd82f91edd4347	2026-10-24 15:38:06	pending -> rejected
+EXP-15e008f94fef438b	T-427938a41bb84a25	2026-10-24 15:33:16	pending -> rejected
+EXP-1653fc71bacd4944	T-1412f44c1a814ee2	2026-10-24 15:35:58	pending -> rejected
+EXP-1718c2c70d9541da	T-797c5f8bb0d94d60	2026-10-24 15:36:33	pending -> rejected
+EXP-1844d3ed7f514928	T-746934226d004320	2026-10-24 15:33:37	pending -> rejected
+EXP-186fd05a99034bba	T-6308a8a1a9e6426a	2026-10-24 15:37:14	pending -> rejected
+EXP-18ce264fced0496e	T-6a526ddaf927491c	2026-10-24 15:38:08	pending -> rejected
+EXP-18d579209f6542b6	T-735d022c429f497e	2026-10-24 15:35:25	pending -> rejected
+EXP-19505274237d431a	T-146bce0ef5974ca2	2026-10-24 15:38:17	pending -> rejected
+EXP-19fc9d3adb254afd	T-9645de586fdb43c4	2026-10-24 15:35:56	pending -> rejected
+EXP-1a6947f7868f4137	T-4b71844e5c424f48	2026-10-24 15:36:43	pending -> rejected
+EXP-1a93d52e39794855	T-46c427fc19c4454e	2026-10-24 15:35:32	pending -> rejected
+EXP-1ac5063fe1364175	T-46de11cebcb94fba	2026-10-24 15:33:31	pending -> rejected
+EXP-1aeb583c86ed4558	T-a0136dcd2f374178	2026-10-24 15:35:23	pending -> rejected
+EXP-1afb8d9f7a8c4673	T-3d86536a80d947d5	2026-10-24 15:37:43	pending -> rejected
+EXP-1bd6813e70dc4f82	T-a7a34dc4aaa741fa	2026-10-24 15:37:36	pending -> rejected
+EXP-1cd878c305184b28	T-a07cab898274431e	2026-10-24 15:35:44	pending -> rejected
+EXP-1d3eef4a404a4dc0	T-1e6b954efa6b48e4	2026-10-24 15:35:46	pending -> rejected
+EXP-1d65437b530a42fb	T-79deb1f2699440c6	2026-10-24 15:38:31	pending -> rejected
+EXP-1dbf2ff21c8a4c59	T-8b8fa942398a477a	2026-10-24 15:38:40	pending -> rejected
+EXP-1e0041ff87a24bfc	T-c0faedbccf204cfd	2026-10-24 15:38:28	pending -> rejected
+EXP-1e8573b6c2f647d2	T-78cb786eeb5b4d2b	2026-10-24 15:34:43	pending -> rejected
+EXP-1e9d444cb1884a24	T-25673e82c8f4422d	2026-10-24 15:35:28	pending -> rejected
+EXP-1ed98a08f56e468b	T-62ec069d8e554026	2026-10-24 15:36:21	pending -> rejected
+EXP-1f4182d9a6ad489b	T-450be6baf4104582	2026-10-24 15:34:07	pending -> rejected
+EXP-20192a9e616d445d	T-e03ae2cbaca54454	2026-10-24 15:34:21	pending -> rejected
+EXP-20a93a3a5f4c496f	T-ca997b36a67f4af3	2026-10-24 15:37:21	pending -> rejected
+EXP-20dac8d9ae9940cb	T-3334999a9c5d4cba	2026-10-24 15:36:54	pending -> rejected
+EXP-2177da53b2234373	T-e4017e8806aa46af	2026-10-24 15:37:52	pending -> rejected
+EXP-222a24793ec146f6	T-0898bba69dc54b8b	2026-10-24 15:34:11	pending -> rejected
+EXP-2271ce3b21544186	T-bff9f2cad3564e46	2026-10-24 15:34:20	pending -> rejected
+EXP-22a20116554a4fb7	T-9984cb9f25a14559	2026-10-24 15:35:16	pending -> rejected
+EXP-22d4737a257148a9	T-ccfb5bfc231f4e73	2026-10-24 15:35:48	pending -> rejected
+EXP-231536b2ab5f44fb	T-f048c13abffc427d	2026-10-24 15:33:34	pending -> rejected
+EXP-233c7bf8359d4ef3	T-507dde48a5734a47	2026-10-24 15:33:38	pending -> rejected
+EXP-23cae50d36854b4a	T-ad7bc932f457401e	2026-10-24 15:34:24	pending -> rejected
+EXP-23ec494cc8304d7b	T-8c35ae03ec5b4d3f	2026-10-24 15:34:06	pending -> rejected
+EXP-2588c1bf461c46b4	T-2268344737694d0e	2026-10-24 15:37:31	pending -> rejected
+EXP-2688041489594950	T-30f897379a144906	2026-10-24 15:37:12	pending -> rejected
+EXP-270f6791f50041eb	T-ee3447456216492b	2026-10-24 15:37:19	pending -> rejected
+EXP-286539004e63439f	T-ca5f6ba5943940fd	2026-10-24 15:38:05	pending -> rejected
+EXP-28993450eb264b89	T-97bf80a1f1d64a26	2026-10-24 15:38:26	pending -> rejected
+EXP-299245a65ca647d9	T-c2291c77e3984172	2026-10-24 15:35:41	pending -> rejected
+EXP-29af7879661e4ce6	T-b58ea01d45034f41	2026-10-24 15:38:36	pending -> rejected
+EXP-2c351d79ecf74bc4	T-0d403c77584a419f	2026-10-24 15:34:23	pending -> rejected
+EXP-2c7e2ca8d5e4416b	T-c6d2276d0b844c27	2026-10-24 15:34:45	pending -> rejected
+EXP-2d3e247e837545d1	T-7054f40eb65842c6	2026-10-24 15:35:30	pending -> rejected
+EXP-2d988f0fcd1b49e9	T-b6d54ba19e894bc3	2026-10-24 15:37:08	pending -> rejected
+EXP-2e7c0a8930924849	T-6bcd6dd706f64b83	2026-10-24 15:34:09	pending -> rejected
+EXP-2ff64e94962342f7	T-c2bb08cb98b74feb	2026-10-24 15:36:20	pending -> rejected
+EXP-30437500e8ea4320	T-d9f2e42eb7564470	2026-10-24 15:35:56	pending -> rejected
+EXP-3185824b128a4650	T-523817130aa74045	2026-10-24 15:35:22	pending -> rejected
+EXP-31aaf93fed294ed7	T-4cbf798e2b3a4902	2026-10-24 15:35:16	pending -> rejected
+EXP-3250e5e931894d1d	T-6f34828a3dc845bb	2026-10-24 15:38:01	pending -> rejected
+EXP-32b87f4158eb4430	T-1f11361d609144e4	2026-10-24 15:33:38	pending -> rejected
+EXP-334789458e87461c	T-ff9737ab9dc842d7	2026-10-24 15:35:36	pending -> rejected
+EXP-33dd96be9bd542c7	T-d860ca4ac8f94110	2026-10-24 15:37:25	pending -> rejected
+EXP-3628b1927edc458d	T-374bbac8684d4042	2026-10-24 15:35:33	pending -> rejected
+EXP-37dab44249294a15	T-3c3a39b7864f46bd	2026-10-24 15:36:31	pending -> rejected
+EXP-3889c756f68045ba	T-7e56725c40cb43cb	2026-10-24 15:34:52	pending -> rejected
+EXP-38d184397e0a445c	T-843c68b42e144f83	2026-10-24 15:37:06	pending -> rejected
+EXP-3912c54be1f14751	T-79a56c1a422b4a9b	2026-10-24 15:36:23	pending -> rejected
+EXP-3ad90cc19f3848f3	T-ec4e7f9070654ac8	2026-10-24 15:33:48	pending -> rejected
+EXP-3b968aae1e6347ef	T-937aa00688db4f94	2026-10-24 15:37:10	pending -> rejected
+EXP-3bbd9c8d41d44f22	T-ca90908783d34e6a	2026-10-24 15:36:15	pending -> rejected
+EXP-3bc21afaffe54a23	T-e761b0886c124470	2026-10-24 15:38:33	pending -> rejected
+EXP-3dc12df99916415a	T-b377bcbd143947ff	2026-10-24 15:36:20	pending -> rejected
+EXP-3e1ef21431d2499e	T-cd26d6a289b84af5	2026-10-24 15:33:54	pending -> rejected
+EXP-3e294092918c4c49	T-1b7e8102b8bc4a1b	2026-10-24 15:36:44	pending -> rejected
+EXP-3e928d7bf8f04f33	T-556d04e70f21445a	2026-10-24 15:37:02	pending -> rejected
+EXP-3ec6a03fddad4648	T-c47553de16714907	2026-10-24 15:34:00	pending -> rejected
+EXP-3ef04d06dfe844a1	T-46174e5307464896	2026-10-24 15:36:37	pending -> rejected
+EXP-3f79e7fd57c54ebe	T-953ed6bb19694d90	2026-10-24 15:37:51	pending -> rejected
+EXP-3fe70cb085864bf9	T-d83eb2836c604210	2026-10-24 15:34:42	pending -> rejected
+EXP-409557ba80fd4a93	T-4dac8a5d3b8d4288	2026-10-24 15:37:34	pending -> rejected
+EXP-4157bcd04dd74956	T-6533b7359ac6453b	2026-10-24 15:37:47	pending -> rejected
+EXP-416db05f51af48af	T-cbe48699859244d8	2026-10-24 15:34:17	pending -> rejected
+EXP-4189ce1816f44b11	T-d310f99fe1f8413b	2026-10-24 15:38:23	pending -> rejected
+EXP-438854251fc04ce3	T-c2beca122a834322	2026-10-24 15:38:14	pending -> rejected
+EXP-438b7ae5ce1d4c56	T-9a168981ecc4403f	2026-10-24 15:34:44	pending -> rejected
+EXP-43b556742b254c99	T-2624c3bfcc564f66	2026-10-24 15:38:27	pending -> rejected
+EXP-44184664484740f1	T-51fb905b405344a7	2026-10-24 15:38:44	pending -> rejected
+EXP-442e3d31e1fe46dd	T-100aee3f31d64811	2026-10-24 15:35:09	pending -> rejected
+EXP-4486c4b152e24c7a	T-bd9e6584957f4b0a	2026-10-24 15:33:42	pending -> rejected
+EXP-4603bec879a74f99	T-9985df3ba24a4e52	2026-10-24 15:33:51	pending -> rejected
+EXP-4687a54acccb4132	T-323b076a93844555	2026-10-24 15:34:39	pending -> rejected
+EXP-46bd91af9339478c	T-fa59498b969940a6	2026-10-24 15:34:28	pending -> rejected
+EXP-4742e242fb8e488e	T-1f5578a57e184970	2026-10-24 15:36:39	pending -> rejected
+EXP-47bdd9907566474f	T-f18e4179cbe04099	2026-10-24 15:34:11	pending -> rejected
+EXP-49295daaa01e472d	T-fb849ef5429040e0	2026-10-24 15:36:47	pending -> rejected
+EXP-49645e626b144d40	T-74ee358f775441ea	2026-10-24 15:33:27	pending -> rejected
+EXP-49867b0ea00448ba	T-c046233cc13d4a39	2026-10-24 15:34:20	pending -> rejected
+EXP-49a17b2fc1ef435c	T-f12afeb52cee43ab	2026-10-24 15:36:06	pending -> rejected
+EXP-49c1e239427a4074	T-73e10c89c1164a4f	2026-10-24 15:34:51	pending -> rejected
+EXP-4abd1c693f7546cd	T-4ee67b0f0e354611	2026-10-24 15:36:50	pending -> rejected
+EXP-4b0ac6a1a81f4bc4	T-43f666c7cbee4c2f	2026-10-24 15:35:15	pending -> rejected
+EXP-4b0d529122dd4134	T-b773f79c7ad54f5c	2026-10-24 15:34:53	pending -> rejected
+EXP-4bc5e07735a742e3	T-bc81064a76a14d45	2026-10-24 15:33:22	pending -> rejected
+EXP-4bd6c150f7854568	T-db9bcaaa11b64672	2026-10-24 15:36:18	pending -> rejected
+EXP-4de3dbfa3b9f49c8	T-e8e14a87fbee484e	2026-10-24 15:34:05	pending -> rejected
+EXP-4e97c35af03d499d	T-0c0a2952d4eb4f11	2026-10-24 15:36:00	pending -> rejected
+EXP-4ebe2275b34849df	T-df33d64cc7b444a4	2026-10-24 15:35:42	pending -> rejected
+EXP-4f8fb445ba5e4810	T-93f71e126db84f1b	2026-10-24 15:35:59	pending -> rejected
+EXP-4fc1f9889a7f415b	T-b4f0ff66322741d2	2026-10-24 15:35:05	pending -> rejected
+EXP-4ff6ba44a84342d1	T-ef0e2c8a5f534eac	2026-10-24 15:36:28	pending -> rejected
+EXP-50989f33fe8048a4	T-b923191a28a44663	2026-10-24 15:38:32	pending -> rejected
+EXP-51c989300ba44fe1	T-638d464c23504230	2026-10-24 15:34:53	pending -> rejected
+EXP-51f17a9c3de945b6	T-2ff05419fc344303	2026-10-24 15:37:37	pending -> rejected
+EXP-5235dd45913046f6	T-a9a51678391f4f65	2026-10-24 15:34:40	pending -> rejected
+EXP-5249d1f65a5d4982	T-a51826a4a83f4915	2026-10-24 15:38:02	pending -> rejected
+EXP-5582752c9ccb4e30	T-7453300397ea4dc8	2026-10-24 15:34:58	pending -> rejected
+EXP-57e7389d749a4d11	T-cc2eaadcc79d41e3	2026-10-24 15:34:37	pending -> rejected
+EXP-58dd442df91945ec	T-032c0dac1d484db3	2026-10-24 15:37:29	pending -> rejected
+EXP-5a91479420574bb8	T-f8897c1b1761488c	2026-10-24 15:38:35	pending -> rejected
+EXP-5a93839ab447484d	T-2fd8a2c05f464892	2026-10-24 15:34:29	pending -> rejected
+EXP-5bb26400dc8941b3	T-dbee11af5e914564	2026-10-24 15:36:13	pending -> rejected
+EXP-5bccc808a13f4b3f	T-07bba96ac2ca4bdf	2026-10-24 15:34:54	pending -> rejected
+EXP-5d0b6f2ef1b84138	T-5400e995e5424074	2026-10-24 15:33:14	pending -> rejected
+EXP-5d34ff3ff3104acd	T-98f543d6ab804794	2026-10-24 15:37:23	pending -> rejected
+EXP-5d8a9ae773404596	T-1a7ab9f019a34eda	2026-10-24 15:35:40	pending -> rejected
+EXP-5de2c0eebc244243	T-7af53422e6c84fa5	2026-10-24 15:35:51	pending -> rejected
+EXP-5df2fd21d76744d1	T-995c594bbc0f4e57	2026-10-24 15:37:31	pending -> rejected
+EXP-5e8d28404bab44c0	T-724d2b5815cf46f7	2026-10-24 15:38:07	pending -> rejected
+EXP-5eb0824f68bd4c8c	T-929f4a8279d845ad	2026-10-24 15:35:03	pending -> rejected
+EXP-5f393e3e52254e40	T-68f97a365016464a	2026-10-24 15:35:52	pending -> rejected
+EXP-5fae9ea9c4a74581	T-e9761c08fd9a4460	2026-10-24 15:36:07	pending -> rejected
+EXP-5fb7638dd56d4930	T-dfc4ff58dc53438f	2026-10-24 15:37:35	pending -> rejected
+EXP-5ff5a4f7f8c0414f	T-368698ba631e405a	2026-10-24 15:36:55	pending -> rejected
+EXP-60650b417a6b4301	T-ab5cdf576e9742ba	2026-10-24 15:33:18	pending -> rejected
+EXP-610a2496a1114b87	T-4a35fdd18a5740bf	2026-10-24 15:34:46	pending -> rejected
+EXP-6126b56c61354fe5	T-d47145bb3b984407	2026-10-24 15:34:27	pending -> rejected
+EXP-6147ec48426e4703	T-ad271ec6b6bf4950	2026-10-24 15:35:07	pending -> rejected
+EXP-617654c7a83840cc	T-534854059b464b32	2026-10-24 15:37:37	pending -> rejected
+EXP-61dc80236f4f47af	T-6a1bb161e8394402	2026-10-24 15:34:04	pending -> rejected
+EXP-629c1dd9082648a8	T-3cf0c2f9c56e4f30	2026-10-24 15:36:58	pending -> rejected
+EXP-636e9675c9a64170	T-e332938eed784e93	2026-10-24 15:35:55	pending -> rejected
+EXP-63744d523ea24983	T-93b4eac1e2414a40	2026-10-24 15:36:59	pending -> rejected
+EXP-6385977f248f4fe8	T-add756d4da7f4725	2026-10-24 15:35:18	pending -> rejected
+EXP-63ed9384e52443c5	T-d9f4cb29c3534461	2026-10-24 15:36:11	pending -> rejected
+EXP-6421f466f575408e	T-cb71c921c8b94bc6	2026-10-24 15:36:29	pending -> rejected
+EXP-64502af364ef4f42	T-b4abbb75a3194e69	2026-10-24 15:36:17	pending -> rejected
+EXP-64d6ef98acf7491a	T-7d101a1029be438a	2026-10-24 15:36:51	pending -> rejected
+EXP-64db41aecf1c4667	T-06354c6c6643492e	2026-10-24 15:35:03	pending -> rejected
+EXP-650a610326264a93	T-5400788ea93547e8	2026-10-24 15:35:19	pending -> rejected
+EXP-660d579e88d84f94	T-3314b4aa80a04106	2026-10-24 15:34:16	pending -> rejected
+EXP-665da79894cf4968	T-045446e9f05d4947	2026-10-24 15:36:03	pending -> rejected
+EXP-66ee5f3bc7994d36	T-1da915a71f4e4d3c	2026-10-24 15:37:04	pending -> rejected
+EXP-6872e5fd4e5940a5	T-45a1ac43d0e24e85	2026-10-24 15:33:24	pending -> rejected
+EXP-68cbbcc0b6f74218	T-64a2508645774c1c	2026-10-24 15:37:38	pending -> rejected
+EXP-68cc0526180f4c9b	T-b86bc78f40294390	2026-10-24 15:33:56	pending -> rejected
+EXP-68d68f0339a64ffc	T-e010b602123341fa	2026-10-24 15:35:17	pending -> rejected
+EXP-68f3a9f312f34ff8	T-e63cde034eb44af4	2026-10-24 15:34:25	pending -> rejected
+EXP-691621ac81934100	T-cad578b4f0604883	2026-10-24 15:38:16	pending -> rejected
+EXP-69250d0edf714d43	T-0c97b36f47ab4885	2026-10-24 15:38:19	pending -> rejected
+EXP-69f457abb527413a	T-a25e69320fee4c5f	2026-10-24 15:33:29	pending -> rejected
+EXP-6a162d994fa94a2a	T-3773e559e29d4e5c	2026-10-24 15:37:05	pending -> rejected
+EXP-6a1e9310829a4b46	T-f953b85b00554334	2026-10-24 15:38:05	pending -> rejected
+EXP-6b1a6ca035484c21	T-bef3030dbe084955	2026-10-24 15:34:23	pending -> rejected
+EXP-6cd74cf424bc4364	T-09c201e6a43543c3	2026-10-24 15:37:53	pending -> rejected
+EXP-6d2e1c5bc60b4d4c	T-98a0b097dad4444a	2026-10-24 15:37:55	pending -> rejected
+EXP-6d3442af40734ced	T-5c97677f6e2e42c6	2026-10-24 15:34:42	pending -> rejected
+EXP-6f302ce414464f24	T-bdab54822cca40be	2026-10-24 15:36:16	pending -> rejected
+EXP-6f6d99c9835449bc	T-00857628b08545ac	2026-10-24 15:34:46	pending -> rejected
+EXP-6fce75ec47fa4428	T-d9d73aee55a14222	2026-10-24 15:38:34	pending -> rejected
+EXP-70b5409caa264e56	T-9a830dcf87fc45af	2026-10-24 15:33:13	pending -> rejected
+EXP-712f4b673b8641f9	T-fb99e74059ef4880	2026-10-24 15:33:16	pending -> rejected
+EXP-723292009ce44312	T-df8dd6f9a17a4581	2026-10-24 15:36:42	pending -> rejected
+EXP-72df196bcaf74870	T-339bdade3b4047b9	2026-10-24 15:37:07	pending -> rejected
+EXP-732f37727ebd424b	T-4c492080772b4773	2026-10-24 15:38:18	pending -> rejected
+EXP-734cdfabee0b43b8	T-8f57b085f80b4cf6	2026-10-24 15:38:43	pending -> rejected
+EXP-73e2078a7a4c484b	T-90466f06b8154ddd	2026-10-24 15:37:20	pending -> rejected
+EXP-741b4c18f45143e3	T-77dc5dcb19314f6c	2026-10-24 15:35:26	pending -> rejected
+EXP-74b5d0958dab456b	T-16dc1d858b174dcf	2026-10-24 15:37:13	pending -> rejected
+EXP-74f2ed2418e1440e	T-a4164c7b9aa945f3	2026-10-24 15:38:21	pending -> rejected
+EXP-777c742f3e264a01	T-e25fb2cf18c64c0c	2026-10-24 15:35:35	pending -> rejected
+EXP-77e4b841a7d84d98	T-f8b0540d567b4510	2026-10-24 15:33:50	pending -> rejected
+EXP-7817ebf3041c4bc9	T-8851364a322d4e79	2026-10-24 15:37:54	pending -> rejected
+EXP-79de314c2c4a4c3d	T-7206a4b8cc654659	2026-10-24 15:35:01	pending -> rejected
+EXP-7a0280345db64992	T-99e88d51ea8147a4	2026-10-24 15:33:45	pending -> rejected
+EXP-7a7af21409d84f34	T-eddb285db38a4547	2026-10-24 15:37:45	pending -> rejected
+EXP-7b5538042446470b	T-5ad451ca602643ba	2026-10-24 15:38:04	pending -> rejected
+EXP-7b862729ec8340d1	T-28a4a7dc9a7742a2	2026-10-24 15:33:52	pending -> rejected
+EXP-7bd2f55edfd94bf4	T-23db0ed82d9c49b5	2026-10-24 15:35:23	pending -> rejected
+EXP-7c1b68917e6344ed	T-a7ef6dfb37c945f5	2026-10-24 15:36:04	pending -> rejected
+EXP-7d656cd8a73b4af3	T-4a4855c6309943bd	2026-10-24 15:38:08	pending -> rejected
+EXP-7d75e58afc924fb6	T-dbc77d6c7f3b4462	2026-10-24 15:37:17	pending -> rejected
+EXP-7d7eae05bac245ea	T-42ffcaa847614655	2026-10-24 15:38:22	pending -> rejected
+EXP-7df59fb95e8442dd	T-1719640c716344c6	2026-10-24 15:36:09	pending -> rejected
+EXP-7f5275dd8d7349e0	T-f6087b873ab94f5e	2026-10-24 15:35:24	pending -> rejected
+EXP-7f5a9e5866924574	T-d434e80fe73944a7	2026-10-24 15:34:19	pending -> rejected
+EXP-8006d05a271c471c	T-0d5dcac706bb4a16	2026-10-24 15:37:57	pending -> rejected
+EXP-807e244259f148ed	T-ba24a6d5a7cb4919	2026-10-24 15:35:12	pending -> rejected
+EXP-8080b97ea20846dd	T-feb8a02e3a0348d4	2026-10-24 15:34:34	pending -> rejected
+EXP-8169238d6ba6429a	T-81c99adb79e44ed6	2026-10-24 15:35:27	pending -> rejected
+EXP-81f4e3c0aea74897	T-5cab7636c0864175	2026-10-24 15:37:12	pending -> rejected
+EXP-8329936ccbff4893	T-b398980db27b4aee	2026-10-24 15:33:35	pending -> rejected
+EXP-838fe844be9e46fc	T-c435c73fe64f42a7	2026-10-24 15:34:14	pending -> rejected
+EXP-83c0443855a44c17	T-aba790db97434012	2026-10-24 15:34:22	pending -> rejected
+EXP-84603873d8b04faa	T-1900fd4dbb454593	2026-10-24 15:33:32	pending -> rejected
+EXP-85855f4f37b545f1	T-4f0b32dd5d564ed5	2026-10-24 15:35:10	pending -> rejected
+EXP-85c78dd699904ebc	T-2886bf506fa54309	2026-10-24 15:35:14	pending -> rejected
+EXP-869d8412e00a4f4e	T-71bcd3719cb94074	2026-10-24 15:38:25	pending -> rejected
+EXP-86b38ec87d0a4fe3	T-7ec99dcd2d114d3b	2026-10-24 15:35:50	pending -> rejected
+EXP-86d55fd693c545ca	T-d2f29dbf3c5c4fbf	2026-10-24 15:33:30	pending -> rejected
+EXP-87c3007014a84275	T-434feb4628f44582	2026-10-24 15:37:03	pending -> rejected
+EXP-8838d52cc58b4bb2	T-e7f13a18fea04677	2026-10-24 15:35:39	pending -> rejected
+EXP-88fcd00fe5014d50	T-a4d59b5a71c9413b	2026-10-24 15:34:13	pending -> rejected
+EXP-89bd292e0eaa40a0	T-8fd8ab97dd1b4bc5	2026-10-24 15:36:56	pending -> rejected
+EXP-8b27999b3d504ce8	T-c7d5eb1227ca4dd1	2026-10-24 15:38:37	pending -> rejected
+EXP-8c1c2b092a7941ed	T-86c97d8075ec4886	2026-10-24 15:36:00	pending -> rejected
+EXP-8c25e2df0d1a4edf	T-325879f636454322	2026-10-24 15:33:43	pending -> rejected
+EXP-8d34431bada84e2e	T-f63f9a71898f4b17	2026-10-24 15:35:37	pending -> rejected
+EXP-8d38b7e071d045d3	T-36eb6f9b17474c25	2026-10-24 15:37:43	pending -> rejected
+EXP-8df1533c7bbc458c	T-cbb57edd84254ae7	2026-10-24 15:37:24	pending -> rejected
+EXP-8eb1066daedf4851	T-bdd82187d408472d	2026-10-24 15:36:57	pending -> rejected
+EXP-8f7f06299d7144d6	T-de653c6426994646	2026-10-24 15:38:17	pending -> rejected
+EXP-8fe1a9124db84840	T-09cbee4d698d45d9	2026-10-24 15:37:28	pending -> rejected
+EXP-90f54dbae0274430	T-3add4dc7b52b4f04	2026-10-24 15:37:00	pending -> rejected
+EXP-912649cb2b5a4f5b	T-97ca567a29f141a5	2026-10-24 15:35:30	pending -> rejected
+EXP-921a66ee96a04e25	T-df734ac1336f441b	2026-10-24 15:37:22	pending -> rejected
+EXP-924fdd3009bc421a	T-41ec3b59a12e4e27	2026-10-24 15:33:55	pending -> rejected
+EXP-92f1a9159d6d44a6	T-c139d3c88be64e94	2026-10-24 15:34:33	pending -> rejected
+EXP-933723b89fd24db3	T-2ba9f56d6c8645a0	2026-10-24 15:34:19	pending -> rejected
+EXP-933d4655ee7d4e5f	T-e2eba9cc8d974710	2026-10-24 15:33:20	pending -> rejected
+EXP-9530afea3a7340f4	T-db8e5f27a17f4067	2026-10-24 15:38:31	pending -> rejected
+EXP-959845f6b22248b3	T-cb0c92f47dd84dc5	2026-10-24 15:37:24	pending -> rejected
+EXP-968b8c6f7e63402c	T-41148092fe804465	2026-10-24 15:35:19	pending -> rejected
+EXP-9699dc51ca434698	T-f6c57dca89f84ea7	2026-10-24 15:34:01	pending -> rejected
+EXP-971b3d3f11fc4202	T-91aadaa920c34766	2026-10-24 15:36:22	pending -> rejected
+EXP-97476dc93e29429f	T-12e659d5260944fc	2026-10-24 15:35:47	pending -> rejected
+EXP-97ba14790cd144c2	T-08ddc84b39a2482d	2026-10-24 15:36:44	pending -> rejected
+EXP-9813fd73fe884530	T-d8161787e6de4707	2026-10-24 15:35:54	pending -> rejected
+EXP-985d3a21d0f747ca	T-e99d84f488634502	2026-10-24 15:34:36	pending -> rejected
+EXP-9899d08c8e1344d2	T-af3c08f0aee64051	2026-10-24 15:34:49	pending -> rejected
+EXP-98c6cb30311a4f4f	T-33e2637dff9a4ffd	2026-10-24 15:35:21	pending -> rejected
+EXP-990e2f5e012a464d	T-7e27eed31c9c42f5	2026-10-24 15:38:30	pending -> rejected
+EXP-994d59cf44b14b53	T-0ea2d94004ad4bc5	2026-10-24 15:36:34	pending -> rejected
+EXP-9a45cea8de0749b7	T-2fb52a894dde4850	2026-10-24 15:34:10	pending -> rejected
+EXP-9a62c9373db74bb4	T-3e89074e7421482d	2026-10-24 15:33:47	pending -> rejected
+EXP-9cd2c7bd74c64457	T-268ba045e3904afd	2026-10-24 15:34:08	pending -> rejected
+EXP-9d9b37ca9a1a487b	T-6b4350fef2954e0c	2026-10-24 15:38:29	pending -> rejected
+EXP-9ddf7103071a442f	T-892ab4ace8bc4b21	2026-10-24 15:33:14	pending -> rejected
+EXP-9e91fc0196624c0e	T-d1a28c94cc33444b	2026-10-24 15:36:40	pending -> rejected
+EXP-9eeeceee1f1048c1	T-12a34c34f7da4215	2026-10-24 15:34:30	pending -> rejected
+EXP-9f54e419f58d47c7	T-552a50b0384b4536	2026-10-24 15:33:19	pending -> rejected
+EXP-a100bf0f90574a8e	T-dcefa43f839347fb	2026-10-24 15:34:38	pending -> rejected
+EXP-a19e4ef0ee86469b	T-99ae6d90186a4a15	2026-10-24 15:37:50	pending -> rejected
+EXP-a200d0c719f543fe	T-d891dd6491644351	2026-10-24 15:33:21	pending -> rejected
+EXP-a2cc303f616642fd	T-361b434e2c6845a6	2026-10-24 15:34:56	pending -> rejected
+EXP-a3a66ef706834bc8	T-b263c29e09754c4d	2026-10-24 15:36:32	pending -> rejected
+EXP-a3c80a350ae94e0f	T-c6bc552a684b4c6b	2026-10-24 15:34:16	pending -> rejected
+EXP-a3ddd25e6dc142ef	T-b98e60c596b94005	2026-10-24 15:35:11	pending -> rejected
+EXP-a42402ad8c6b4134	T-e9bb89a4ccf54c15	2026-10-24 15:35:21	pending -> rejected
+EXP-a4dcb949127f40e9	T-305d8610892e4ac5	2026-10-24 15:34:03	pending -> rejected
+EXP-a541c4aa06d3443a	T-7d7207d9f02e4e14	2026-10-24 15:34:08	pending -> rejected
+EXP-a60ae94fb22c41e8	T-b1e7d48f4d484d49	2026-10-24 15:36:06	pending -> rejected
+EXP-a60db17eb87746b8	T-dd049679ab084bbf	2026-10-24 15:33:20	pending -> rejected
+EXP-a6490762b8ed41a2	T-ff1d1e70aac5429a	2026-10-24 15:35:28	pending -> rejected
+EXP-a79be113a27c4e31	T-58b08af80da2418d	2026-10-24 15:35:02	pending -> rejected
+EXP-a7f04ec41357429a	T-2e5ffbda738049bf	2026-10-24 15:33:25	pending -> rejected
+EXP-a961830d7cca46f0	T-880db1ed386a4677	2026-10-24 15:35:31	pending -> rejected
+EXP-ac89c000f98245c7	T-89a4999f99214a05	2026-10-24 15:38:11	pending -> rejected
+EXP-acaeddde2ac5401b	T-a7297241d0e3406d	2026-10-24 15:37:01	pending -> rejected
+EXP-acc876a925df4f41	T-dc61ef2995e049bd	2026-10-24 15:36:35	pending -> rejected
+EXP-ad717ce8afbd4782	T-0c1dab0b55824cde	2026-10-24 15:37:16	pending -> rejected
+EXP-ae0c45f891434a9f	T-acd23b998af4410b	2026-10-24 15:36:54	pending -> rejected
+EXP-b036cd45cc6244de	T-45dfd9c6cf3a4bb6	2026-10-24 15:34:25	pending -> rejected
+EXP-b0c5b1aeb1d54305	T-f100ddef855041fc	2026-10-24 15:35:54	pending -> rejected
+EXP-b176c0ae383d4237	T-e5170970ba3744c9	2026-10-24 15:33:52	pending -> rejected
+EXP-b1bfa55855b243da	T-3d8ab3aba3504704	2026-10-24 15:36:14	pending -> rejected
+EXP-b2cf2490726c4b4c	T-4c1de7302c744d9d	2026-10-24 15:38:00	pending -> rejected
+EXP-b350f87808244335	T-c1228a8cae79405c	2026-10-24 15:36:25	pending -> rejected
+EXP-b3e4d0438d3544b8	T-0fc68520fee544f6	2026-10-24 15:35:51	pending -> rejected
+EXP-b450b24165d04987	T-6f1313e4884940e5	2026-10-24 15:34:59	pending -> rejected
+EXP-b46abe892c314991	T-5beb396741a04bd6	2026-10-24 15:33:27	pending -> rejected
+EXP-b52f1e4aa0b3462e	T-73893da5b137495a	2026-10-24 15:36:38	pending -> rejected
+EXP-b72b8ebbc1254182	T-324d5f3d25c04c2f	2026-10-24 15:34:15	pending -> rejected
+EXP-b7d2b03deb0d4875	T-49e66cb532f94dff	2026-10-24 15:36:11	pending -> rejected
+EXP-b8954a7bad8b4155	T-94c12c2f03254660	2026-10-24 15:33:57	pending -> rejected
+EXP-b93f07af518145b8	T-1761a542ce064d56	2026-10-24 15:35:45	pending -> rejected
+EXP-b95d58f1b6e648c7	T-97de053080444051	2026-10-24 15:33:29	pending -> rejected
+EXP-b974d016aaea49b9	T-1c4f5656fc494957	2026-10-24 15:37:18	pending -> rejected
+EXP-ba3abcff44b0485f	T-cdbae014da8149b4	2026-10-24 15:33:33	pending -> rejected
+EXP-bac7141e206d4718	T-05d003a5a31f45e1	2026-10-24 15:36:08	pending -> rejected
+EXP-bbebc22eb6464f0c	T-a1265692f8544396	2026-10-24 15:36:25	pending -> rejected
+EXP-bc14033af0ae43f0	T-5e8e70c973484d37	2026-10-24 15:35:08	pending -> rejected
+EXP-bc2c0d07f5ea4ee2	T-20a5fb95500942d1	2026-10-24 15:36:05	pending -> rejected
+EXP-bc86f799644e4962	T-5c9cbdb2ad5343a0	2026-10-24 15:33:54	pending -> rejected
+EXP-bd281bd5459945b7	T-20ef7e4053024052	2026-10-24 15:33:17	pending -> rejected
+EXP-bd5b629277c445be	T-36bc8fae69074d4a	2026-10-24 15:36:41	pending -> rejected
+EXP-bded67eaec7246d7	T-435fa229a6544eb0	2026-10-24 15:33:53	pending -> rejected
+EXP-be27611d3203451f	T-3dec4e597f2d4516	2026-10-24 15:35:04	pending -> rejected
+EXP-bec9f99944cc495e	T-791b522f528a4337	2026-10-24 15:33:24	pending -> rejected
+EXP-bfd12f2da8e24a59	T-64475376d0534e7f	2026-10-24 15:36:24	pending -> rejected
+EXP-bff77ca65c0a4ec3	T-e2139976eaaa4a8a	2026-10-24 15:37:26	pending -> rejected
+EXP-c0c0a5d99efa420f	T-e6bda0dd5c774fd9	2026-10-24 15:36:48	pending -> rejected
+EXP-c1cabdc790f04ace	T-e84e723593db402d	2026-10-24 15:33:39	pending -> rejected
+EXP-c2542e0564b64ce2	T-c0540e476e57455d	2026-10-24 15:38:15	pending -> rejected
+EXP-c2ab3d34110b4a8e	T-fa53a3f3aa84489d	2026-10-24 15:36:49	pending -> rejected
+EXP-c34b7b2baaec4fdb	T-a8f71201b20b468c	2026-10-24 15:33:44	pending -> rejected
+EXP-c5c2e8f3be9d4edc	T-61dbdbbdd57447e9	2026-10-24 15:38:13	pending -> rejected
+EXP-c606f54f0e234159	T-fcf52fceb9504190	2026-10-24 15:35:13	pending -> rejected
+EXP-c616429eda134c37	T-aebbaeba460d4b5f	2026-10-24 15:33:44	pending -> rejected
+EXP-c6a95dfd68b54b9b	T-bf0b41c4772c486c	2026-10-24 15:37:58	pending -> rejected
+EXP-c7eacd3cbfec41b1	T-56096eaee42d4102	2026-10-24 15:37:27	pending -> rejected
+EXP-c863f8f0fc6d45ab	T-8af433b4da4f4126	2026-10-24 15:33:40	pending -> rejected
+EXP-c99424da2bac4a3a	T-d41e4ca63f144328	2026-10-24 15:35:20	pending -> rejected
+EXP-ca70e57089444fdb	T-19b7027762a043ed	2026-10-24 15:36:26	pending -> rejected
+EXP-ca7738db8c464bb6	T-836acd3d5e244256	2026-10-24 15:33:26	pending -> rejected
+EXP-cbb2427cf1cc4a7d	T-8255be3e74794625	2026-10-24 15:33:46	pending -> rejected
+EXP-cc87b1c0d9ce4d00	T-bb5bdfdad5b14c21	2026-10-24 15:37:46	pending -> rejected
+EXP-ccb849d8f5fb4c33	T-d13ad074131248c3	2026-10-24 15:37:44	pending -> rejected
+EXP-ceb28ce2e5d84459	T-d003ff7319a24255	2026-10-24 15:34:38	pending -> rejected
+EXP-cf07af5c4b154d3a	T-a4fa289b3e8a4121	2026-10-24 15:34:00	pending -> rejected
+EXP-d02cbf0734874680	T-1380c63df8234e9c	2026-10-24 15:34:57	pending -> rejected
+EXP-d058273bf275409f	T-9a61f7b8a7794b53	2026-10-24 15:34:32	pending -> rejected
+EXP-d09e031df2bf47d7	T-b12dc4298d7a49a8	2026-10-24 15:38:03	pending -> rejected
+EXP-d1ab4ebadf394c59	T-76618792837e4d2f	2026-10-24 15:34:28	pending -> rejected
+EXP-d1f971d454524a5e	T-fdfe6a4828f14323	2026-10-24 15:35:42	pending -> rejected
+EXP-d2230a343dd1431f	T-cbec318165f244e7	2026-10-24 15:34:55	pending -> rejected
+EXP-d2553d7b2e56403d	T-8ea8208b666048f9	2026-10-24 15:37:42	pending -> rejected
+EXP-d30b8acf36eb48eb	T-8934f0477b4c4b85	2026-10-24 15:38:39	pending -> rejected
+EXP-d3d3621e7ea8405e	T-b6aceb08c10a4bbd	2026-10-24 15:37:56	pending -> rejected
+EXP-d414d6d340044091	T-1c0d79ff729143f0	2026-10-24 15:38:10	pending -> rejected
+EXP-d56e514376254850	T-3bf62695dd6f453f	2026-10-24 15:33:28	pending -> rejected
+EXP-d6a654afe9d94a59	T-acdce834641d48de	2026-10-24 15:37:39	pending -> rejected
+EXP-d6b1b1ca78cb4ca0	T-1e0a3d578703442c	2026-10-24 15:35:43	pending -> rejected
+EXP-d8a799777b0a4512	T-265198c8af904d0c	2026-10-24 15:37:03	pending -> rejected
+EXP-d93a5b766dd54619	T-0ef296a834e74c52	2026-10-24 15:38:22	pending -> rejected
+EXP-d99255c4de6343fc	T-83a823502da148a3	2026-10-24 15:38:12	pending -> rejected
+EXP-da672137de5549dd	T-726228b3f3184088	2026-10-24 15:37:09	pending -> rejected
+EXP-da96b9156aa64606	T-fa3b6e807f9f4f3b	2026-10-24 15:34:13	pending -> rejected
+EXP-dadec4ebf6024bf8	T-b41e945b163d4500	2026-10-24 15:33:18	pending -> rejected
+EXP-db0e3d9382ba48ef	T-738596bf0e50426f	2026-10-24 15:33:36	pending -> rejected
+EXP-db18af474408435c	T-ba1b83590ac14ca1	2026-10-24 15:34:47	pending -> rejected
+EXP-db63d0162e0c4f5f	T-232647b5c1ec48a6	2026-10-24 15:38:37	pending -> rejected
+EXP-db980ac6dad1445c	T-e22385d19a5444d1	2026-10-24 15:33:34	pending -> rejected
+EXP-dc5171d7762a4f44	T-93ffb4035f594ef2	2026-10-24 15:35:45	pending -> rejected
+EXP-dc86d084614b422a	T-1ffbdbe041254840	2026-10-24 15:33:22	pending -> rejected
+EXP-dd4cd6b071fe4868	T-9a6145d53d2a4ac5	2026-10-24 15:34:06	pending -> rejected
+EXP-ddda5e2d0f414ff5	T-fec3205aac1f413b	2026-10-24 15:37:11	pending -> rejected
+EXP-de49ade9e101454c	T-6f70a214f4854b81	2026-10-24 15:33:58	pending -> rejected
+EXP-de90fb45df504010	T-1a2cc510a0144825	2026-10-24 15:38:41	pending -> rejected
+EXP-e015f811a1ac4f90	T-69b95ea5a9ee42f9	2026-10-24 15:35:47	pending -> rejected
+EXP-e082c77271b8490c	T-02b179ef27754b57	2026-10-24 15:35:33	pending -> rejected
+EXP-e11eede0b4fd4547	T-c53cd86b8d364331	2026-10-24 15:35:26	pending -> rejected
+EXP-e1902f9e9d1b49e7	T-ed6cdb61df71405d	2026-10-24 15:35:09	pending -> rejected
+EXP-e34f582c4e414d36	T-f9fcdc01720f4d55	2026-10-24 15:33:15	pending -> rejected
+EXP-e3a417371b0b4327	T-6e38c90072654f86	2026-10-24 15:37:54	pending -> rejected
+EXP-e3e1f9f53b6445be	T-5453a1cf7ed7483d	2026-10-24 15:34:18	pending -> rejected
+EXP-e3fa498d5bde4bb0	T-2d75e4540dee44c8	2026-10-24 15:36:02	pending -> rejected
+EXP-e43efcd0af204e54	T-bb2d92fb65554a86	2026-10-24 15:36:22	pending -> rejected
+EXP-e46154549c9a4eb1	T-1ad14298f9c344e6	2026-10-24 15:36:45	pending -> rejected
+EXP-e4f293e1f0f54533	T-dc07bbd444f84720	2026-10-24 15:36:52	pending -> rejected
+EXP-e5ab60c9ff074c3b	T-faf85f4abc754f05	2026-10-24 15:35:38	pending -> rejected
+EXP-e5d6c38724ac426d	T-d49a64a39b9e44c3	2026-10-24 15:35:06	pending -> rejected
+EXP-e76ea45cac724e58	T-79b6911561a64204	2026-10-24 15:34:50	pending -> rejected
+EXP-e8a7416369a14eb5	T-1345385cf9434753	2026-10-24 15:36:03	pending -> rejected
+EXP-e8d4b159b3b54630	T-d31aaae3e66940bb	2026-10-24 15:33:41	pending -> rejected
+EXP-e9e40a67abcb4236	T-c1fbcd87e28143a9	2026-10-24 15:34:48	pending -> rejected
+EXP-eaadd60065ad4525	T-708badecdfb94951	2026-10-24 15:34:30	pending -> rejected
+EXP-ebb451e41e354f44	T-3b69ad217aa94b03	2026-10-24 15:38:10	pending -> rejected
+EXP-ec291062b326460c	T-c60d34d00a714845	2026-10-24 15:38:09	pending -> rejected
+EXP-ec953e1408ff41d8	T-6af2349910ce4f53	2026-10-24 15:33:47	pending -> rejected
+EXP-ecb63e70715a4017	T-43f946a518da4d28	2026-10-24 15:34:51	pending -> rejected
+EXP-ecbcd62b300541b5	T-a4a2952ecbb947f0	2026-10-24 15:36:15	pending -> rejected
+EXP-ed61df4aadd34c77	T-18395ac8432a4706	2026-10-24 15:36:39	pending -> rejected
+EXP-edda732429614f83	T-83fddc71cec14324	2026-10-24 15:37:30	pending -> rejected
+EXP-ede295c0de124112	T-286350507bf14cc5	2026-10-24 15:36:27	pending -> rejected
+EXP-ef242f9cc965401c	T-03540259d779483b	2026-10-24 15:37:09	pending -> rejected
+EXP-efd8f36da82f48d1	T-57ff05d85eed4ef3	2026-10-24 15:38:13	pending -> rejected
+EXP-f05604db8e374ea7	T-eb6605b9d6ac4da2	2026-10-24 15:34:31	pending -> rejected
+EXP-f0620dcc62234bbc	T-772cbb4d66bf489b	2026-10-24 15:34:26	pending -> rejected
+EXP-f0bb68aed1f04df5	T-82c43af4a93e4c05	2026-10-24 15:36:19	pending -> rejected
+EXP-f149ef4af43a44d5	T-071f2e374ade41af	2026-10-24 15:37:27	pending -> rejected
+EXP-f244f8a78229469b	T-8ebc82e8b9b84ab1	2026-10-24 15:35:12	pending -> rejected
+EXP-f2dae310674d4027	T-ea9fb2354ff3406b	2026-10-24 15:38:42	pending -> rejected
+EXP-f4a7cc37604348a1	T-bba7dcf474094437	2026-10-24 15:36:27	pending -> rejected
+EXP-f54939e1e8db499f	T-cb39776926814402	2026-10-24 15:38:20	pending -> rejected
+EXP-f56405efec244d36	T-98afdc1f1093458f	2026-10-24 15:36:08	pending -> rejected
+EXP-f59155fb86d34a39	T-4a8cddffb05f4402	2026-10-24 15:33:32	pending -> rejected
+EXP-f62e8fc8bff94799	T-f4281edbef4645f9	2026-10-24 15:34:34	pending -> rejected
+EXP-f636d2462e0a4354	T-63250ef375dd4dd3	2026-10-24 15:37:32	pending -> rejected
+EXP-f770fe6b839a498b	T-12d32093d9644b54	2026-10-24 15:35:00	pending -> rejected
+EXP-f87867a0d7ff445a	T-045914633c3f451a	2026-10-24 15:37:21	pending -> rejected
+EXP-f9c82d64a4bd4f07	T-fa8c3c43b7a64811	2026-10-24 15:33:49	pending -> rejected
+EXP-f9ee01a8b4554b17	T-a3c98bc3bf8b400b	2026-10-24 15:33:23	pending -> rejected
+EXP-fafb459dd6e24628	T-f287bca7451f4394	2026-10-24 15:35:06	pending -> rejected
+EXP-fb4e111a996c486c	T-21c0095b41ad469e	2026-10-24 15:34:03	pending -> rejected
+EXP-fbcfeb164e974700	T-e051f09156a847fb	2026-10-24 15:37:16	pending -> rejected
+EXP-fc26accd1f564a4d	T-770832389c294ca2	2026-10-24 15:36:01	pending -> rejected
+EXP-fccd2b8d51e34716	T-3125403003744cf6	2026-10-24 15:33:57	pending -> rejected
+EXP-fce9cea74fe44894	T-72d4520052b6465e	2026-10-24 15:38:24	pending -> rejected
+EXP-fd27ecadd27e433c	T-7cb2b8f2cc054ad4	2026-10-24 15:37:49	pending -> rejected
+EXP-fd6b8c9a63ca40e0	T-5cc73026ba9c4a25	2026-10-24 15:33:59	pending -> rejected
+EXP-fd7c54002858413f	T-590c9e8ddae24324	2026-10-24 15:37:15	pending -> rejected
+EXP-fecd624b31a746f8	T-8502ddb1add74133	2026-10-24 15:34:02	pending -> rejected
+EXP-feed4a64437b43b6	T-f4eb308074984def	2026-10-24 15:35:38	pending -> rejected
+EXP-ff235a5f56a0446f	T-6c899042f2b0454a	2026-10-24 15:35:34	pending -> rejected
+EXP-ff700704ddab4be7	T-78f3d0057da24da9	2026-10-24 15:37:51	pending -> rejected
+==============================================================================

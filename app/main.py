@@ -5,7 +5,10 @@ import os
 import pathlib
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+import asyncio
+from .mcp_bridge import api as mcp_bridge_api
+from .telemetry import bus
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +40,10 @@ STATIC = pathlib.Path(__file__).resolve().parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    try:
+        bus.set_loop(asyncio.get_running_loop())
+    except Exception:
+        pass
     from . import flows, mcp, mailer, notify, pipeline
     from .wecom import robot
     with connect() as conn:
@@ -78,7 +85,7 @@ async def lifespan(app: FastAPI):
         wecom_watcher.stop()
 
 
-app = FastAPI(title="Agent OS", version="4.3.0", lifespan=lifespan)
+app = FastAPI(title="Agent OS", version="5.4.0", lifespan=lifespan)
 
 # the desktop shell (tauri://localhost) talks to 127.0.0.1:8077 with a Bearer token,
 # so no credentials are involved and a permissive origin list is safe here.
@@ -104,10 +111,51 @@ app.include_router(ui_ops.router, dependencies=[Depends(ui_access.request_access
 app.include_router(ui_extensions.router)
 app.include_router(ui_governance.router, dependencies=[Depends(ui_access.request_access)])
 app.include_router(ui_housekeeping.router, dependencies=[Depends(ui_access.request_access)])
+app.include_router(mcp_bridge_api.router)
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 _UI_DIST = pathlib.Path(__file__).resolve().parent.parent / "web" / "dist"
 if _UI_DIST.exists():
     app.mount("/app", StaticFiles(directory=str(_UI_DIST), html=True), name="ui")
+
+
+@app.websocket("/ws/metacorp")
+async def websocket_metacorp(websocket: WebSocket):
+    await websocket.accept()
+    bus.set_loop(asyncio.get_running_loop())
+    q = asyncio.Queue()
+    bus.register_queue(q)
+
+    async def sender():
+        while True:
+            msg = await q.get()
+            await websocket.send_text(msg)
+
+    async def receiver():
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                import json, time
+                data = json.loads(raw)
+                if data.get("action") == "ping":
+                    await q.put(json.dumps({"type": "PONG", "time": time.time()}))
+            except Exception:
+                pass
+
+    send_task = asyncio.create_task(sender())
+    recv_task = asyncio.create_task(receiver())
+    try:
+        done, pending = await asyncio.wait([send_task, recv_task], return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        bus.unregister_queue(q)
+
+
+@app.get("/api/telemetry/recent")
+def get_recent_telemetry():
+    return {"ok": True, "events": bus.recent_events(50), "connections": bus.count_connections()}
 
 
 @app.get("/health")

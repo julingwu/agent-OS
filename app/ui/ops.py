@@ -18,7 +18,7 @@ from . import store
 log = logging.getLogger("ui.ops")
 router = APIRouter(prefix="/ui", tags=["ui-ops"])
 
-VERSION = "4.3.0"
+VERSION = "5.4.0"
 
 
 def _ident(oa_ui: str | None = Cookie(default=None),
@@ -104,7 +104,12 @@ def list_alerts(token: str | None = Auth, unacked: int = 0):
 def ack_alert(alert_id: str, token: str | None = Auth):
     _require(token)
     with get_conn() as conn:
-        conn.execute("UPDATE alerts SET acked=1 WHERE id=?", (alert_id,))
+        row = conn.execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone()
+        if row:
+            conn.execute("UPDATE alerts SET acked=1 WHERE id=? OR (kind=? AND target=?) OR message=?",
+                         (alert_id, row["kind"], row["target"], row["message"]))
+        else:
+            conn.execute("UPDATE alerts SET acked=1 WHERE id=?", (alert_id,))
         conn.commit()
     return {"ok": True}
 

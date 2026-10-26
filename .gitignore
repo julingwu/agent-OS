@@ -26,6 +26,33 @@ web/src-tauri/gen/
 # v4.0: 本地发版产物（安装包/免安装 exe）不入库，避免公开仓带二进制与内嵌构建路径
 /dist/
 
-# ��ʵƾ��
+# 真实凭据
 docs/_wecom_cb.txt
 docs/wecom_saved_config.png
+
+.memsearch/
+
+Microsoft/
+config.yml
+data/agent_os.db
+
+# ---------------------------------------------------------------- v5.4 封版加固
+# 生产库与备份一律不入库（data/ 已整体忽略，这里再显式声明一次，防止将来有人删掉上面的规则）
+data/*.db
+data/*.db-*
+data/*.bak*
+data/*.bak_*
+
+# 一次性补丁脚本与本地临时产物：不是产品代码，入库存量会把真实历史改乱
+scripts/patch_*.py
+scripts/fix_*.py
+_tmp_*
+_seal_*
+.tmp*/
+
+# 测试/截图证据目录：浏览器冒烟产物常回显内网地址、Cookie 与企微链接
+*_evidence/
+screenshots/
+playwright-report/
+test-results/
+docs/evidence/

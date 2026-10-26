@@ -188,7 +188,9 @@ def test_m6_9_autorun_moves_the_task_forward(env, monkeypatch):
     assert state in ("pending_review", "completed"), state
 
 
-def test_m6_10_human_criterion_can_be_signed_from_the_chat(env):
+def test_m6_10_human_criterion_can_be_signed_from_the_chat(env, monkeypatch):
+    # v5.4：这条用例验证企微卡片人工签批路径，必须严格路径下才存在待签批判据。
+    monkeypatch.delenv("M0_AUTO_SIGN_L1_FOR_TEST", raising=False)
     raw = env["raw"]
     raw.post("/wecom/bind", headers=env["sim"], json={"userid": "Boss", "identity_id": env["ceo_id"]})
     t = env["sys"].post("/tasks/from_sentence", json={"text": "写一篇 500 字短文"}).json()

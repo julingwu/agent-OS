@@ -122,25 +122,37 @@ def _review_human_criteria(runtime, task_id):
     conn.commit()
 
 
-def test_project_build_uses_verified_initiator_role_and_mcp(runtime):
+def test_project_build_uses_verified_initiator_role_and_mcp(runtime, monkeypatch):
+    # v5.4：这条用例的前提是「fake ACP 不会替人签批 L1」，必须走严格路径，
+    # 否则测试通道的自动签批会把 L1 悄悄过掉，等于验证不到东西。
+    monkeypatch.delenv("M0_AUTO_SIGN_L1_FOR_TEST", raising=False)
     conn = runtime["conn"]
     pid = _project(runtime)
     pipeline.build_wbs(conn, pid, "开发命令行程序")
     result = pipeline.execute_build(conn, pid, "开发命令行程序")
-    # Real code acceptance still requires a human check; fake ACP does not approve it.
-    assert result["tasks"] == 1 and result["failed"] == 1
+    # v5.4 规则 1：L0/L2 全绿即可放行，未签批的 blocking L1 不再算 build 失败；
+    # 但也不许自动通过 —— 任务停在 pending_review，等第 7 阶段统一人工验收。
+    assert result["tasks"] == 1 and result["failed"] == 0
+    assert len(result["awaiting_signoff"]) == 1
     task = conn.execute("SELECT id,state FROM tasks WHERE project_id=?", (pid,)).fetchone()
     assert task["state"] == "pending_review"
     assert conn.execute("SELECT state FROM task_runs WHERE task_id=?", (task["id"],)).fetchone()[0] == "succeeded"
     _assert_owned_execution(runtime, pid, 1)
+    # 规则 2 的负向断言：自动判定可以过，人工判据一条都不许被自动置 passed
+    assert conn.execute(
+        "SELECT COUNT(*) FROM acceptance_criteria WHERE task_id=?"
+        " AND check_type='human_check' AND state='passed'", (task["id"],)).fetchone()[0] == 0
     _review_human_criteria(runtime, task["id"])
+    # 规则 3：人工签批后重入 build，任务结算为 completed、WBS 收口，且不重复起 kernel
     second = pipeline.execute_build(conn, pid, "开发命令行程序")
     assert second["tasks"] == second["failed"] == 0
     assert runtime["calls"]["starts"] == 1
+    assert conn.execute("SELECT state FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == "completed"
     assert conn.execute("SELECT state FROM wbs_items WHERE project_id=?", (pid,)).fetchone()[0] == "done"
 
 
-def test_recovery_preserves_initiator_and_employee_through_real_auth(runtime):
+def test_recovery_preserves_initiator_and_employee_through_real_auth(runtime, monkeypatch):
+    monkeypatch.delenv("M0_AUTO_SIGN_L1_FOR_TEST", raising=False)
     conn = runtime["conn"]
     pid = _project(runtime)
     runtime["calls"]["failures"] = 1
@@ -150,20 +162,52 @@ def test_recovery_preserves_initiator_and_employee_through_real_auth(runtime):
     assert conn.execute("SELECT state FROM tasks WHERE id=?", (first_task,)).fetchone()[0] == "failed"
     actor = dict(identity.get_identity(conn, runtime["people"]["own"]["id"]))
     claim = pipeline.prepare_retry(conn, pid, "开发命令行程序；修正传输失败后再次交付", actor=actor)
-    with pytest.raises(RuntimeError, match="build failed"):
-        pipeline.run_retry(conn, claim)
+    # v5.4 规则 1/2：重跑成功后 build 不再判失败，项目推进到 accept 并挂起等人工签批。
+    # 挂起不是异常也不是重试完成，所以 run_retry 返回 paused 而不是抛 build failed。
+    resumed = pipeline.run_retry(conn, claim)
+    assert resumed.get("paused") == "awaiting_accept", resumed
     current = conn.execute("SELECT task_id FROM wbs_items WHERE project_id=?", (pid,)).fetchone()[0]
     assert current != first_task
     assert conn.execute("SELECT state FROM tasks WHERE id=?", (current,)).fetchone()[0] == "pending_review"
     _assert_owned_execution(runtime, pid, 2)
-    _review_human_criteria(runtime, current)
-    claim = pipeline.prepare_retry(conn, pid, "开发命令行程序；完成代码人工检查并发布", actor=actor)
-    pipeline.run_retry(conn, claim)
-    assert runtime["calls"]["starts"] == 2
-    assert conn.execute("SELECT task_id FROM wbs_items WHERE project_id=?", (pid,)).fetchone()[0] == current
     project = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    assert project["state"] == "awaiting_accept"
+    assert project["owner_identity"] == actor["id"]
+
+    # v5.4 规则 3：人工把项目里每一条 blocking L1 都签完（真实人类就是这么做的），
+    # 然后任务才会结算、项目才会被唤醒收尾。这里同步执行，等价于后台唤醒。
+    for _ in range(30):
+        left = conn.execute(
+            "SELECT DISTINCT c.task_id FROM acceptance_criteria c JOIN tasks t ON t.id=c.task_id"
+            " WHERE t.project_id=? AND c.is_blocking=1 AND c.check_type='human_check'"
+            " AND c.state NOT IN ('passed','na')", (pid,)).fetchall()
+        if not left:
+            break
+        for r in left:
+            _review_human_criteria(runtime, r["task_id"])
+    assert conn.execute(
+        "SELECT COUNT(*) FROM acceptance_criteria c JOIN tasks t ON t.id=c.task_id"
+        " WHERE t.project_id=? AND c.is_blocking=1 AND c.check_type='human_check'"
+        " AND c.state<>'passed'", (pid,)).fetchone()[0] == 0
+    pipeline.settle_signed_tasks(conn, pid)
+    conn.execute("UPDATE projects SET state='active' WHERE id=?", (pid,))
+    conn.commit()
+    keys = [r["key"] for r in conn.execute(
+        "SELECT key FROM project_stages WHERE project_id=? AND state<>'done' ORDER BY seq",
+        (pid,)).fetchall()]
+    pipeline.run_project(conn, pid, "开发命令行程序", keys=keys)
+
+    project = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
+    # 这套 harness 的项目在阶段跑完后停在 active（没有 flow_id 时不会自动收成 done），
+    # 关键不变量是「已脱离挂起、重试令牌已释放」。
     assert project["state"] == "active" and project["retry_token"] is None
     assert project["owner_identity"] == actor["id"]
+    assert conn.execute("SELECT state FROM tasks WHERE id=?", (current,)).fetchone()[0] == "completed"
+    # 唤醒后的 release/retro 仍然用同一个发起人身份执行
+    owned = conn.execute(
+        "SELECT COUNT(*) FROM task_runs r JOIN tasks t ON t.id=r.task_id"
+        " WHERE t.project_id=? AND r.actor_identity<>?", (pid, actor["id"])).fetchone()[0]
+    assert owned == 0
 
 
 @pytest.mark.parametrize("who", ["foreign", "sibling"])

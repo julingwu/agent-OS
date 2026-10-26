@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import pathlib
 import sqlite3
+import threading
 import uuid
 
 from .audit import write_audit
@@ -55,6 +56,10 @@ CREATE TABLE IF NOT EXISTS project_stages (
   key TEXT NOT NULL,
   title TEXT NOT NULL,
   state TEXT DEFAULT 'pending',             -- pending | active | done | blocked
+  role_tag TEXT DEFAULT 'dev',
+  node_kind TEXT DEFAULT 'standard',
+  assignee_id TEXT,
+  gate_name TEXT DEFAULT '',
   started_at TIMESTAMP,
   ended_at TIMESTAMP,
   UNIQUE(project_id, seq)
@@ -170,6 +175,8 @@ def _id(prefix: str) -> str:
 
 
 def ensure(conn: sqlite3.Connection) -> None:
+    from . import finance
+    finance.ensure(conn)
     conn.executescript(DDL)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(tasks)")]
     if "project_id" not in cols:
@@ -193,6 +200,13 @@ def ensure(conn: sqlite3.Connection) -> None:
     gcols = {r[1] for r in conn.execute("PRAGMA table_info(stage_gates)")}
     if "superseded" not in gcols:
         conn.execute("ALTER TABLE stage_gates ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0")
+    scols = {r[1] for r in conn.execute("PRAGMA table_info(project_stages)")}
+    for name, ddl in (("role_tag", "TEXT DEFAULT 'dev'"),
+                      ("node_kind", "TEXT DEFAULT 'standard'"),
+                      ("assignee_id", "TEXT"),
+                      ("gate_name", "TEXT DEFAULT ''")):
+        if name not in scols:
+            conn.execute(f"ALTER TABLE project_stages ADD COLUMN {name} {ddl}")
     conn.execute("CREATE TABLE IF NOT EXISTS pipeline_migrations (name TEXT PRIMARY KEY)")
     conn.commit()
     conn.execute("BEGIN IMMEDIATE")
@@ -317,6 +331,11 @@ def finish_stage(conn, pid: str, key: str) -> None:
     row = _stage(conn, pid, key)
     conn.execute("UPDATE project_stages SET state='done', ended_at=CURRENT_TIMESTAMP WHERE id=?",
                  (row["id"],))
+    unfinished = conn.execute(
+        "SELECT COUNT(*) c FROM project_stages WHERE project_id=? AND state!='done'",
+        (pid,)).fetchone()["c"]
+    if unfinished == 0:
+        conn.execute("UPDATE projects SET state='done' WHERE id=? AND flow_id IS NOT NULL", (pid,))
     conn.commit()
     write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="stage", task_id=None, layer="system",
                 action="stage_done", target=pid, payload={"stage": key}, response={})
@@ -483,12 +502,133 @@ def complete_wbs(conn, pid: str, code: str) -> None:
     conn.commit()
 
 
+# ------------------------------------------------ 断点续跑：已完成任务不重复执行（v5.2 TASK-3.2）
+def _task_completed(conn, task_id: str | None) -> bool:
+    """任务链路是否已经完成（完成即终态，恢复时不得再派发）。"""
+    if not task_id:
+        return False
+    row = conn.execute("SELECT state FROM tasks WHERE id=?", (task_id,)).fetchone()
+    return row is not None and row["state"] == "completed"
+
+
+def resumable_stage_plan(conn, pid: str) -> dict:
+    """阶段恢复计划：已完成任务进 skip，只把未完成任务（pending/rejected/…）排进 run。
+
+    判定同时看 WBS 行状态与它绑定的 task 状态：两者任一为「已完成」就不再执行，
+    这样预算暂停/失败重入时不会把上一轮已成功的任务再烧一遍 Token。
+    """
+    items = conn.execute(
+        "SELECT id,code,state,task_id FROM wbs_items WHERE project_id=? ORDER BY rowid",
+        (pid,)).fetchall()
+    plan: dict = {"skip": [], "run": []}
+    for it in items:
+        task_state = None
+        if it["task_id"]:
+            row = conn.execute("SELECT state FROM tasks WHERE id=?",
+                               (it["task_id"],)).fetchone()
+            task_state = row["state"] if row else None
+        entry = {"code": it["code"], "task_id": it["task_id"],
+                 "wbs_state": it["state"], "task_state": task_state}
+        if it["state"] == "done" or task_state == "completed":
+            plan["skip"].append(entry)
+        else:
+            plan["run"].append(entry)
+    return plan
+
+
+def reuse_completed_task(conn, pid: str, task_id: str, *, stage_key: str = "build",
+                         role_tag: str = "") -> dict:
+    """复用已完成任务的产物：把它最近一次成功 Run 的产物回填到项目黑板。
+
+    只读产物 + 幂等写黑板（flows.blackboard_write 按 file_path 去重），
+    绝不重新调用 ACP，因此执行次数与 run 记录数都不增加。
+    """
+    run = conn.execute(
+        "SELECT id FROM task_runs WHERE task_id=?"
+        " ORDER BY run_seq DESC, rowid DESC LIMIT 1", (task_id,)).fetchone()
+    if run is None:
+        return {"task_id": task_id, "run_id": "", "reused": False, "artifacts": []}
+    arts = conn.execute(
+        "SELECT file_path FROM artifacts WHERE run_id=?"
+        " AND COALESCE(state,'active')='active' ORDER BY art_seq, rowid",
+        (run["id"],)).fetchall()
+    title = conn.execute("SELECT title FROM tasks WHERE id=?", (task_id,)).fetchone()
+    paths: list[str] = []
+    try:
+        from . import flows
+        flows.ensure(conn)
+        for art in arts:
+            path = pathlib.Path(art["file_path"])
+            try:
+                content = (path.read_text(encoding="utf-8", errors="ignore")[:4000]
+                           if path.is_file() else "")
+            except OSError:
+                content = ""
+            flows.blackboard_write(conn, pid=pid, stage_key=stage_key,
+                                   role_tag=role_tag or "reuse",
+                                   title=(title["title"] if title else stage_key),
+                                   content=content, file_path=str(path),
+                                   kind="deliverable")
+            paths.append(str(path))
+    except Exception:                        # noqa: BLE001 - 黑板复用失败不能挡住产线
+        paths = []
+    return {"task_id": task_id, "run_id": run["id"], "reused": True, "artifacts": paths}
+
+
+
 # ------------------------------------------------------------------ 全流程
 def _llm_doc(conn, pid: str, key: str, kind: str, name: str, text: str | None,
              fallback: str) -> str:
     """模型生成优先，失败回落模板；两者都写脚注标明来源。"""
     body = text if text else (fallback + "\n\n---\n_模板生成（模型不可用）_")
     return _write(conn, pid, key, kind, name, body)
+
+
+class HumanAcceptancePending(RuntimeError):
+    """v5.4：验收阶段还有未签批的 blocking L1。这是「挂起等人工」，不是失败。"""
+
+    def __init__(self, pending: list[dict]):
+        super().__init__(f"等待人工签批 {len(pending)} 项")
+        self.pending = pending
+
+
+ACCEPT_GATE = "验收通过"
+
+
+def _accept_gate(conn, pid: str, *, passed: bool, note: str) -> str:
+    """验收闸门的 upsert。
+
+    验收会经历「挂起等签批 → 签批完成 → 通过」的多次进入，直接 gate() 每次都插
+    一行会让旧 failed 行一直留着，把 trg_stage_gate_guard（阶段置 done 前不得存在
+    非 passed 闸门）永久卡死。所以这里复用同一行，只翻转状态。
+    """
+    row = conn.execute(
+        "SELECT id FROM stage_gates WHERE project_id=? AND stage_key='accept'"
+        " AND name=? AND superseded=0 ORDER BY rowid DESC LIMIT 1",
+        (pid, ACCEPT_GATE)).fetchone()
+    if row:
+        conn.execute("UPDATE stage_gates SET state=?, note=?, updated_at=CURRENT_TIMESTAMP"
+                     " WHERE id=?", ("passed" if passed else "failed", note, row["id"]))
+        conn.commit()
+        return row["id"]
+    return gate(conn, pid, "accept", ACCEPT_GATE, passed=passed, note=note)
+
+
+def _request_human_signoff(conn, pid: str, pending: list[dict]) -> None:
+    """发出待验收通知 / 企微签名请求。通知失败绝不影响挂起状态本身。"""
+    try:
+        from . import notify
+        proj = conn.execute("SELECT name, tenant_id, legal_entity_id FROM projects WHERE id=?",
+                            (pid,)).fetchone()
+        name = (proj["name"] if proj else None) or pid
+        body = (f"**项目「{name}」等待人工验收**\n\n"
+                f"- 待签批 blocking L1 判据：{len(pending)} 项\n"
+                "- 签批入口：控制台验收页 / 企微签名页（必须提交证据片段）\n"
+                "- 全部签批完成后流水线会自动走完 release 与 retro。")
+        notify.push_event(conn, pid=pid, event="accept_pending_signoff", body=body,
+                          tenant_id=(proj["tenant_id"] if proj else None), ref=pid)
+    except Exception:                        # noqa: BLE001 - 通知不是闸门
+        pass
 
 
 def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
@@ -586,10 +726,29 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
             raise RuntimeError("test failed")
 
     elif key == "accept":
+        from . import acceptance_run
+        # v5.4 规则 4：仅测试通道允许在进验收前统一放行遗留 L1（生产返回 0，不影响严格性）
+        acceptance_run.auto_sign_project_l1(conn, pid, reason="accept_stage")
+        conn.commit()
+        # v5.4 规则 2：进入验收阶段先看还有没有未签批的 blocking L1。
+        pending = acceptance_run.pending_human_signoffs(conn, pid)
+        if pending:
+            lines = ["# 验收记录", "",
+                     "- 结论：**等待人工签批**（未签批不得放行）",
+                     f"- 待签批 blocking L1 判据：{len(pending)} 项", "",
+                     "| 任务 | 判据 | 当前状态 |", "|---|---|---|"]
+            lines += [f"| {str(p['task_title'])[:28]} | {str(p['criterion'])[:50]} |"
+                      f" {p['state']} |" for p in pending]
+            lines += ["", "签批入口：`POST /criteria/{criterion_id}/check`"
+                          "（必须附非空 evidence_snippet）。"]
+            out["file"] = _write(conn, pid, key, "accept", "06_accept.md", "\n".join(lines))
+            _accept_gate(conn, pid, passed=False, note=f"等待人工签批 {len(pending)} 项")
+            _request_human_signoff(conn, pid, pending)
+            raise HumanAcceptancePending(pending)
         ok, note = accept_check(conn, pid)
         text = "# 验收记录\n\n- 结论：" + ("通过" if ok else "未通过") + "\n- 依据：" + note + "\n"
         out["file"] = _write(conn, pid, key, "accept", "06_accept.md", text)
-        gate(conn, pid, key, "验收通过", passed=ok, note=note)
+        _accept_gate(conn, pid, passed=ok, note=note)
         if not ok:
             conn.execute("UPDATE projects SET state='blocked' WHERE id=?", (pid,))
             conn.commit()
@@ -618,6 +777,15 @@ def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
         for art_f in _wdir(pid).glob("*.*"):
             if art_f.is_file() and art_f.suffix in (".html", ".htm", ".json", ".md", ".py"):
                 _shutil.copy2(art_f, rel_dir / art_f.name)
+        # v5.4：出货必须是一个能直接交付的单文件包裹。此前 release/ 只是散文件目录，
+        # 计划 DoD 要求的 zip 在全仓根本没有生成器（只有 mcp_client 注释里提到 Bundle.zip）。
+        import zipfile
+        bundle = rel_dir / "Bundle.zip"
+        with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(rel_dir.iterdir()):
+                if f.is_file() and f.name != bundle.name:
+                    zf.write(f, arcname=f.name)
+        out["bundle"] = str(bundle)
 
     elif key == "retro":
         facts = {
@@ -703,6 +871,24 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     from .engine import dsh_adapter, task_generator
     from .ui import roles as ui_roles
 
+    # 断点续跑支持：如果该阶段任务已经 completed，直接复用产物，跳过 ACP 计费
+    existing_task = conn.execute(
+        "SELECT id, state, owner_employee_id FROM tasks WHERE project_id=? AND stage=?"
+        " ORDER BY rowid DESC LIMIT 1", (pid, node["key"])).fetchone()
+    if existing_task and existing_task["state"] == "completed":
+        # v5.2 TASK-3.2：已完成任务只回填黑板产物，不再派发新 Run
+        reused = reuse_completed_task(conn, pid, existing_task["id"],
+                                      stage_key=node["key"],
+                                      role_tag=node.get("role") or "")
+        return {
+            "task_id": existing_task["id"],
+            "run_id": reused.get("run_id") or "",
+            "employee": existing_task["owner_employee_id"] or "",
+            "state": "completed",
+            "resumed": True,
+            "reused_artifacts": reused.get("artifacts") or [],
+        }
+
     entity = _task_entity(conn, pid)
     project = conn.execute("SELECT tenant_id,owner_identity FROM projects WHERE id=?",
                            (pid,)).fetchone()
@@ -727,7 +913,7 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     if bb_ctx:
         brief_parts.append(bb_ctx)
     brief = "\n\n".join(brief_parts)
-    gen = task_generator.generate(conn, brief, legal_entity_id=entity, tenant_id=tenant_id)
+    gen = task_generator.generate(conn, brief, legal_entity_id=entity, tenant_id=tenant_id, role_tag=node.get('role'))
     tid = gen["task_id"]
     conn.execute("UPDATE tasks SET project_id=?,stage=?,owner_employee_id=? WHERE id=?",
                  (pid, node["key"], employee["id"], tid))
@@ -760,6 +946,11 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
         conn, run_id, runner=os.environ.get("UI_RUNNER", "acp"),
         budget_tokens=max(1000, left),
         pause_at_tokens=finance.pause_threshold(conn, pid, node["key"]))
+    # v5.3：把「真实执行的内核」写回审计。task_runs.runner 建行时硬编码 'acp'，
+    # 只有真拉起 ACP 子进程时才回写，导致 NativeKernel 的运行被永久误标成 acp。
+    if out.get("runner") and out["runner"] != "acp":
+        conn.execute("UPDATE task_runs SET runner=? WHERE id=?", (out["runner"], run_id))
+        conn.commit()
     used = int(out.get("usage_tokens") or 0)
     if q is not None:
         finance.spend(conn, pid, node["key"], used)
@@ -814,10 +1005,31 @@ def _flow_verdict(conn, tid: str, run_id: str, node: dict) -> str:
                          (mandatory.get("detail") or "命中企业红线", tid))
             conn.commit()
             raise PermissionError(f"阶段 {node['key']} 交付物命中企业红线：{mandatory.get('detail')}")
+    # v5.4 规则 2：自动判定（L0 红线 / L2 脚本）可以按阶段闸门放行；
+    # 但 blocking L1 human_check 严禁在这里自动置 passed —— 那等于模型自评通过。
+    # 它只能由人类带 evidence_snippet 经 /criteria/{id}/check 签批。
+    # 同时收紧为只放行 state='pending'：已经判失败的 L0/L2 判据永远不许被自动翻盘，
+    # 否则就是「自动放行失败判据」，与严禁自评通过同源。
     conn.execute("UPDATE acceptance_criteria SET state='passed', note='flow_stage_accept'"
-                 " WHERE task_id=? AND is_blocking=1 AND state IN ('pending','failed')",
+                 " WHERE task_id=? AND is_blocking=1 AND check_type<>'human_check'"
+                 " AND state='pending'",
                  (tid,))
     conn.commit()
+    # 规则 4：仅测试通道才允许自动过 L1（生产严禁开启，且必然留下审计）
+    acceptance_run.auto_sign_pending_l1(conn, tid, reason="flow_stage_accept")
+    conn.commit()
+    # 已经判失败的自动判据既不许被翻盘，也不许被无声放行 —— 必须重跑或人工处理。
+    failed_auto = conn.execute(
+        "SELECT COUNT(*) n FROM acceptance_criteria WHERE task_id=? AND is_blocking=1"
+        " AND check_type<>'human_check' AND state='failed'", (tid,)).fetchone()["n"]
+    if failed_auto:
+        raise RuntimeError(
+            f"阶段 {node['key']} 有 {failed_auto} 条 blocking 自动判据未通过，不得放行")
+    left = acceptance_run.task_pending_human_signoffs(conn, tid)
+    if left:
+        # 未签批：任务停在 pending_review，交第 7 阶段 accept 统一验收
+        conn.commit()
+        return "pending_review"
     row = conn.execute("SELECT state FROM tasks WHERE id=?", (tid,)).fetchone()
     if row is not None and row["state"] == "pending_review":
         try:
@@ -900,7 +1112,7 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
     import os
     import uuid as _uuid
 
-    from . import acceptance_run
+    from . import acceptance_run, finance
     from .engine import dsh_adapter, task_generator
 
     entity = _task_entity(conn, pid)
@@ -910,7 +1122,11 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
     tenant_id = project["tenant_id"]
     items = [r for r in conn.execute(
         "SELECT * FROM wbs_items WHERE project_id=? ORDER BY rowid", (pid,)).fetchall()]
-    created = failed = 0
+    # v5.4 规则 3：人工签批之后重入 build 时，先把「判据已全绿」的任务结算成 completed，
+    # 否则它们会一直停在 pending_review，被当成未完成而重复起 kernel。
+    settle_signed_tasks(conn, pid)
+    created = failed = reused = 0
+    awaiting: list[str] = []        # v5.4 规则 1：L0/L2 全绿、只差 L1 人工签批的任务
     budget = int(os.environ.get("M0_PROJECT_TASK_BUDGET", "120000"))
 
     stub = os.environ.get("M0_PIPELINE_EXEC", "1") != "1"
@@ -920,11 +1136,18 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
     for it in items:
         if it["role_tag"] == "ops":
             continue
-        if it["state"] == "done":
+        if it["state"] == "done" or _task_completed(conn, it["task_id"]):
+            # v5.2 TASK-3.2：阶段内已成功的任务不再重复执行，直接复用黑板产物
             if it["task_id"]:
                 ok, note = _check_task_redlines(conn, pid, it["task_id"])
                 if not ok:
                     failed += 1
+                    continue
+                reuse_completed_task(conn, pid, it["task_id"], stage_key="build",
+                                     role_tag=it["role_tag"] or "dev")
+                if it["state"] != "done":
+                    complete_wbs(conn, pid, it["code"])
+                reused += 1
             continue
         if not can_start(conn, pid, it["code"]):
             continue
@@ -945,16 +1168,25 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
                 else:
                     failed += 1
                 continue
-            if existing["state"] in {"todo", "assigned", "in_progress"}:
-                failed += 1
-                continue
+
+        # v5.2 TASK-3.2：真要派新 Run 之前先看额度 —— 耗尽就只补未完成任务并等追加，
+        # 已成功的任务已经在上面的 skip 分支复用掉了。
+        stage_budget = finance.quota(conn, pid, "build")
+        if stage_budget is not None and stage_budget["quota"] - stage_budget["spent"] <= 0:
+            approval = finance.request_topup(
+                conn, pid, "build", actor=actor_id, tenant_id=tenant_id,
+                reason="阶段 build 的额度已耗尽，剩余任务等待追加预算")
+            finance.mark_stage(conn, pid, "build", "awaiting_budget")
+            raise finance.BudgetPause(
+                f"阶段 build 额度已耗尽（{stage_budget['spent']:,}/"
+                f"{stage_budget['quota']:,}），已完成 {reused} 个任务直接复用，"
+                f"等待追加预算", approval["id"], "build", approval["requested_tokens"])
+
         retry_hint = ""
         if existing and existing["state"] in ("failed", "rejected"):
-            last_err = conn.execute(
-                "SELECT error FROM task_runs WHERE task_id=? ORDER BY run_seq DESC LIMIT 1",
-                (it["task_id"],)).fetchone()
-            if last_err and last_err["error"]:
-                retry_hint = f"\n\n【上一轮未通过诊断（必须针对性修复）】：{last_err['error']}"
+            # v5.2 TASK-2.2：失败断言 / 期望产出文件 / 错误输出摘要 结构化回注，
+            # 与 HTTP 重试端点共用 acceptance_run.failure_prompt 这一份物理真相。
+            retry_hint = acceptance_run.failure_prompt(conn, it["task_id"])
         bb_ctx = get_blackboard_context(conn, pid)
         clean_req = requirement.split("【组织经验（自动注入）】")[0].strip()
         role = it["role_tag"] or "dev"
@@ -977,14 +1209,16 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
         if bb_ctx:
             brief += f"\n\n{bb_ctx}"
         if retry_hint:
-            brief += retry_hint
+            # 计划要求：失败修正清单必须在下一轮 Prompt 的顶部，模型第一眼就能单点修正
+            brief = retry_hint + "\n\n" + brief
         employee = None if stub else _build_employee(conn, it, entity=entity, tenant_id=tenant_id)
         if not stub:
             # Role selection may perform writes. Recheck the initiating identity
             # immediately before creating the execution and its durable owner.
             _execution_actor(conn, actor_id, entity, tenant_id)
         gen = task_generator.generate(conn, brief, legal_entity_id=entity,
-                                      pack_id=it["pack_id"], tenant_id=tenant_id)
+                                      pack_id=it["pack_id"], tenant_id=tenant_id,
+                                      role_tag=role)
         tid = gen["task_id"]
         conn.execute("UPDATE tasks SET project_id=?,stage='build',owner_employee_id=?,"
                      "owner_position_id=? WHERE id=?",
@@ -1060,11 +1294,13 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
             complete_wbs(conn, pid, it["code"])
             continue
 
+        run_seq = conn.execute(
+            "SELECT COALESCE(MAX(run_seq), 0) + 1 FROM task_runs WHERE task_id=?", (tid,)).fetchone()[0]
         run_id = "RUN-" + _uuid.uuid4().hex[:16]
         conn.execute(
             "INSERT INTO task_runs (id, task_id, run_seq, legal_entity_id,tenant_id,state,"
-            " runner, actor_identity) VALUES (?,?,1,?,?, 'spawned', 'acp', ?)",
-            (run_id, tid, entity,tenant_id,actor_id))
+            " runner, actor_identity) VALUES (?,?,?,?,?, 'spawned', 'acp', ?)",
+            (run_id, tid, run_seq, entity,tenant_id,actor_id))
         # 状态机：todo -> assigned（runner 只会从 assigned 推到 in_progress）
         from . import state_machine as _sm0
         try:
@@ -1075,19 +1311,57 @@ def execute_build(conn, pid: str, requirement: str) -> dict:
         out = dsh_adapter.execute_run(conn, run_id,
                                       runner=os.environ.get("UI_RUNNER", "acp"),
                                       budget_tokens=budget)
+        # v5.3：同 run_stage —— 把真实内核写回，避免 native 运行被记成 acp。
+        if out.get("runner") and out["runner"] != "acp":
+            conn.execute("UPDATE task_runs SET runner=? WHERE id=?", (out["runner"], run_id))
+            conn.commit()
+        used = int(out.get("usage_tokens") or 0)
+        stage_budget = finance.quota(conn, pid, "build")
+        if stage_budget is not None:
+            finance.spend(conn, pid, "build", used)
+        reason = str(out.get("reason") or "")
+        if out.get("budget_pause") or reason in ("budget_pause", "budget_exhausted_midturn",
+                                                 "budget_exhausted"):
+            # v5.2 TASK-3.2：触发 80% 暂停线 —— 阶段挂起等追加，已成功的任务保留复用
+            approval = finance.request_topup(
+                conn, pid, "build", actor=actor_id, tenant_id=tenant_id,
+                reason=f"阶段 build 已花 {used:,} tokens，触发 80% 暂停线")
+            finance.mark_stage(conn, pid, "build", "awaiting_budget")
+            raise finance.BudgetPause(
+                f"阶段 build 触发预算暂停（本次 {used:,} tokens），"
+                f"已完成 {reused} 个任务直接复用，等待老板追加",
+                approval["id"], "build", approval["requested_tokens"])
         state = out.get("task_state")
         if state in ("pending_review", "completed"):
             try:
                 reviewed = acceptance_run.run(conn, tid, [entity])
                 if reviewed["task_state"] == "completed":
                     complete_wbs(conn, pid, it["code"])
+                elif (reviewed.get("awaiting_human")
+                      or acceptance_run.awaiting_human_signoff(conn, tid)):
+                    # v5.4 规则 1：L0+L2 全绿、只差 blocking L1 人工签批。
+                    # 不算失败（否则 build 阶段直接 blocked，人工根本没机会签），
+                    # 也不算完成（那才是伪造签批）；任务留在 pending_review，
+                    # 由第 7 阶段 accept 统一挂起等人工。
+                    awaiting.append(it["code"])
                 else:
                     failed += 1
             except (ValueError, sqlite3.Error, PermissionError):
                 failed += 1
         else:
             failed += 1
-    return {"tasks": created, "failed": failed, "run_dir": str(_wdir(pid))}
+    plan = resumable_stage_plan(conn, pid) if reused else {"skip": [], "run": []}
+    if reused:
+        # 可观测：这一轮恢复了哪些已完成任务、复用了多少产物
+        write_audit(conn, legal_entity_id=entity, verb="resume", task_id=None,
+                    layer="system", action="stage_resume_reused_completed", target=pid,
+                    payload={"stage": "build", "reused": reused, "plan": plan},
+                    response={"ok": True, "created": created, "failed": failed})
+        conn.commit()
+    return {"tasks": created, "failed": failed, "reused": reused,
+            "awaiting_signoff": awaiting,
+            "skipped_completed": [r["code"] for r in plan["skip"]],
+            "run_dir": str(_wdir(pid))}
 
 
 def execute_test(conn, pid: str) -> dict:
@@ -1277,9 +1551,43 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
                 conn.execute("UPDATE projects SET state=? WHERE id=? AND state<>'done'",
                              ("paused" if state == "awaiting_budget" else "halted", pid))
                 conn.commit()
+                # v5.2 TASK-3.2：暂停恢复只补未完成任务，已完成任务留在原地复用。
+                proposed = (_fin.topup_tokens(conn, pid, key)
+                            if isinstance(exc, _fin.BudgetPause) else 0)
+                audit_entity = conn.execute(
+                    "SELECT legal_entity_id FROM projects WHERE id=?", (pid,)).fetchone()
+                write_audit(conn, legal_entity_id=(audit_entity["legal_entity_id"]
+                                                  if audit_entity else "LE-GROUP-HQ"),
+                            verb="stage", task_id=None, layer="system",
+                            action="stage_budget_paused", target=pid,
+                            payload={"stage": key, "reason": str(exc)[:300],
+                                     "reused_plan": resumable_stage_plan(conn, pid),
+                                     "suggested_topup": proposed},
+                            response={"state": state})
+                conn.commit()
                 return {"project_id": pid, "stages": done, "paused": state,
                         "approval_id": getattr(exc, "approval_id", None),
+                        "suggested_topup": proposed,
                         "detail": str(exc)}
+            if isinstance(exc, HumanAcceptancePending):
+                # v5.4 规则 2：验收阶段挂起等人工，不是失败。项目保持可续跑。
+                conn.execute("UPDATE project_stages SET state='awaiting_accept'"
+                             " WHERE project_id=? AND key=? AND state<>'done'", (pid, key))
+                conn.execute("UPDATE projects SET state='awaiting_accept'"
+                             " WHERE id=? AND state<>'done'", (pid,))
+                conn.commit()
+                audit_entity = conn.execute(
+                    "SELECT legal_entity_id FROM projects WHERE id=?", (pid,)).fetchone()
+                write_audit(conn, legal_entity_id=(audit_entity["legal_entity_id"]
+                                                  if audit_entity else "LE-GROUP-HQ"),
+                            verb="stage", task_id=None, layer="system",
+                            action="stage_awaiting_human_accept", target=pid,
+                            payload={"stage": key, "pending": len(exc.pending),
+                                     "criterion_ids": [p["id"] for p in exc.pending]},
+                            response={"state": "awaiting_accept"})
+                conn.commit()
+                return {"project_id": pid, "stages": done, "paused": "awaiting_accept",
+                        "pending_signoff": len(exc.pending), "detail": str(exc)}
             # v4.1：流程/产线任一阶段失败，阶段与项目都必须落到 blocked，
             # 否则界面上的阶段会永远停在「进行中」（战役四要靠这个定位失败）。
             conn.execute("UPDATE project_stages SET state='blocked'"
@@ -1297,6 +1605,85 @@ def run_project(conn, pid: str, requirement: str, keys: list[str] | None = None)
     except Exception:                        # noqa: BLE001 - 通知不是闸门
         pass
     return {"project_id": pid, "stages": done}
+
+
+def settle_signed_tasks(conn, pid: str) -> list[str]:
+    """把已签批通过的 pending_review 任务推进为 completed，并同步 WBS 完成态。
+
+    v5.4 规则 3 的前半段：人工签批把 blocking L1 全部置 passed 之后，任务才允许从
+    pending_review 走到 completed —— 这一步仍然由判据的真实状态驱动，不是无条件放行。
+    """
+    from . import acceptance_run, state_machine as _sm
+    settled: list[str] = []
+    rows = conn.execute("SELECT id FROM tasks WHERE project_id=? AND state='pending_review'",
+                        (pid,)).fetchall()
+    for r in rows:
+        if not acceptance_run.task_ready_to_settle(conn, r["id"]):
+            continue
+        try:
+            _sm.transition(conn, r["id"], "review_passed", actor="l1_signoff")
+        except Exception:                    # noqa: BLE001 - 非法跃迁说明已被别处推进
+            continue
+        wbs = conn.execute("SELECT code FROM wbs_items WHERE project_id=? AND task_id=?",
+                           (pid, r["id"])).fetchone()
+        if wbs:
+            try:
+                complete_wbs(conn, pid, wbs["code"])
+            except Exception:                # noqa: BLE001 - WBS 缺失不影响任务完成
+                pass
+        settled.append(r["id"])
+    conn.commit()
+    return settled
+
+
+def maybe_resume_after_signoff(conn, criterion_id: str) -> dict | None:
+    """v5.4 规则 3：任一 L1 签批后，若无待签批项则自动唤醒流水线走完 release/retro。
+
+    只对停在 `awaiting_accept` 的项目生效，且必须真的没有剩余 blocking L1 才唤醒 ——
+    否则就是绕过人工验收。
+    """
+    from . import acceptance_run
+    c = conn.execute("SELECT task_id FROM acceptance_criteria WHERE id=?",
+                     (criterion_id,)).fetchone()
+    if c is None or not c["task_id"]:
+        return None
+    t = conn.execute("SELECT project_id FROM tasks WHERE id=?", (c["task_id"],)).fetchone()
+    if t is None or not t["project_id"]:
+        return None
+    pid = t["project_id"]
+    settled = settle_signed_tasks(conn, pid)
+    proj = conn.execute("SELECT state, requirement FROM projects WHERE id=?", (pid,)).fetchone()
+    if proj is None:
+        return None
+    left = acceptance_run.pending_human_signoffs(conn, pid)
+    result = {"project_id": pid, "settled": settled, "pending_signoff": len(left),
+              "project_state": proj["state"]}
+    if left or proj["state"] != "awaiting_accept":
+        return result
+    keys = [r["key"] for r in conn.execute(
+        "SELECT key FROM project_stages WHERE project_id=? AND state<>'done' ORDER BY seq",
+        (pid,)).fetchall()]
+    if not keys:
+        return result
+    _wake_pipeline(pid, proj["requirement"], keys)
+    result["resumed"] = keys
+    return result
+
+
+def _wake_pipeline(pid: str, requirement: str, keys: list[str]) -> None:
+    """后台唤醒流水线。必须绑定发起时的库（v5.3 §71：线程不能到执行时再读 DB_PATH）。"""
+    from .db import db_path, open_conn
+
+    owner_db = db_path()
+
+    def _worker() -> None:
+        try:
+            with open_conn(owner_db) as c2:
+                run_project(c2, pid, requirement, keys=keys)
+        except Exception:                    # noqa: BLE001 - 后台线程不能炸
+            pass
+
+    threading.Thread(target=_worker, daemon=True, name=f"oa-accept-{pid}").start()
 
 
 def timeline(conn, pid: str) -> list[dict]:
@@ -1382,7 +1769,15 @@ def run_retry(conn, claim: dict) -> dict:
             row = conn.execute("SELECT state,retry_token FROM projects WHERE id=?", (pid,)).fetchone()
             if not row or row["state"] != "retrying" or row["retry_token"] != token:
                 raise RuntimeError("ProjectRetryClaimLost")
-            run_project(conn, pid, claim["requirement"], keys=[key])
+            out = run_project(conn, pid, claim["requirement"], keys=[key])
+            if isinstance(out, dict) and out.get("paused"):
+                # v5.4：阶段挂起（等预算 / 等人工签批）既不是失败也不是重试完成。
+                # 保留项目在挂起状态等外部输入，同时释放重试令牌，避免卡在 retrying。
+                conn.execute("UPDATE projects SET retry_token=NULL,last_error=NULL WHERE id=?",
+                             (pid,))
+                conn.commit()
+                return {"project_id": pid, "stages": finished, "paused": out["paused"],
+                        "detail": out.get("detail")}
             finished.append(key)
         conn.execute("UPDATE projects SET state='active',retry_token=NULL,last_error=NULL"
                      " WHERE id=? AND retry_token=?", (pid, token))

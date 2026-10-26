@@ -257,7 +257,10 @@ def test_m0_10_audit_timeline_and_replay_lookup(client):
 
 
 # --------------------------------------------------------------- M0-11 / full acceptance flow
-def test_m0_11_full_flow_reaches_completed(client):
+def test_m0_11_full_flow_reaches_completed(client, monkeypatch):
+    # v5.4：这条用例验证「没有人工签批就不许收尾」，必须走严格路径，
+    # 否则测试通道的自动签批会替人把 L1 过掉，等于验证不到东西。
+    monkeypatch.delenv("M0_AUTO_SIGN_L1_FOR_TEST", raising=False)
     t = make_task(client)
     run = spawn(client, t["task_id"])
     execute(client, run["run_id"])

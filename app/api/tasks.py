@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import pathlib
 import sqlite3
@@ -140,7 +141,7 @@ def manual_check(criterion_id: str, req: ManualCheckIn, _ident: dict = Depends(r
     with get_conn() as conn:
         tenant.scoped_criterion(conn, criterion_id, tenant.visible_entities(conn, _ident))
         try:
-            return l1_manual.apply(
+            result = l1_manual.apply(
                 conn, criterion_id,
                 passed=req.passed, checked_by=_ident["id"], note=req.note,
                 evidence_snippet=req.evidence_snippet, file_path=req.file_path,
@@ -153,6 +154,15 @@ def manual_check(criterion_id: str, req: ManualCheckIn, _ident: dict = Depends(r
         except ValueError as exc:
             raise HTTPException(409, detail={"code": "AutomaticCriterionRequired",
                                              "message": str(exc)}) from exc
+        # v5.4 规则 3：签批落库后立刻结算任务；若项目正停在 accept 且已无待签批，
+        # 自动唤醒流水线走完 release 与 retro。先 commit，否则后台看不到最新判据状态。
+        conn.commit()
+        try:
+            from .. import pipeline as _pipeline
+            _pipeline.maybe_resume_after_signoff(conn, criterion_id)
+        except Exception:                    # noqa: BLE001 - 唤醒失败不能吞掉签批结果
+            pass
+        return result
 
 
 @router.post("/tasks/{task_id}/acceptance/run")
@@ -174,17 +184,17 @@ def execute_run(run_id: str, req: ExecuteRunIn, _ident: dict = Depends(require("
 
 
 def _retry_prompt(conn: sqlite3.Connection, task_id: str) -> str:
-    """The follow-up turn: same session, but told exactly what failed."""
-    rows = conn.execute(
-        """SELECT seq, criterion, note FROM acceptance_criteria
-           WHERE task_id = ? AND state = 'failed' ORDER BY seq""", (task_id,)).fetchall()
-    if not rows:
-        return "继续上一次的任务：完成产出并写回同一文件，改完只回复 DONE。"
-    lines = "\n".join(
-        f"- 判据{int(r['seq'])}：{r['criterion']}｜未通过原因：{r['note'] or '人工判定'}"
-        for r in rows)
-    return ("上一轮稿件未通过验收。保持同一篇稿件，只针对下列问题修改并写回原文件，"
-            "改完只回复 DONE：\n" + lines)
+    """The follow-up turn: same session, but told exactly what failed.
+
+    v5.2：结构化失败清单由 acceptance_run.failure_prompt 统一产出，与流水线内部
+    重跑共用同一份物理真相（失败断言 / 期望产出文件 / 错误输出摘要）。
+    """
+    from ..acceptance_run import failure_prompt
+
+    prompt = failure_prompt(conn, task_id)
+    if prompt:
+        return prompt
+    return "[上一轮验收失败原因: 未知原因，请检查产物并重试。请在原文件上修改，只回复 DONE]"
 
 
 def prepare_retry(conn: sqlite3.Connection, task_id: str, req: RetryIn, ident: dict,
@@ -231,9 +241,20 @@ def prepare_retry(conn: sqlite3.Connection, task_id: str, req: RetryIn, ident: d
                 run_id=run_id, action="retry", target=run_id,
                 payload={"prompt": prompt[:400], "session_id": session_id, "run_seq": run_seq},
                 response={"resumed": bool(session_id)})
+    # 动态继承并上调预算：如果上一轮是由于 budget_exhausted_midturn / budget_pause 失败，
+    # 绝不能按默认 20,000 token 跑，否则必然秒死；自动以历史使用量的 1.8 倍（最低 25 万）追加额度继续。
+    req_budget = req.budget_tokens
+    if req_budget is None:
+        last_run = conn.execute(
+            "SELECT error, usage_tokens FROM task_runs WHERE task_id = ? AND legal_entity_id = ? ORDER BY run_seq DESC LIMIT 1",
+            (task_id, t["legal_entity_id"])).fetchone()
+        if last_run and last_run["error"] in ("budget_exhausted_midturn", "budget_pause"):
+            prev_tok = int(last_run["usage_tokens"] or 120000)
+            req_budget = max(int(prev_tok * 1.8), 250000)
+
     return {"task_id": task_id, "run_id": run_id, "run_seq": run_seq,
             "legal_entity_id": t["legal_entity_id"], "session_id": session_id,
-            "runner": runner, "prompt": prompt, "budget_tokens": req.budget_tokens}
+            "runner": runner, "prompt": prompt, "budget_tokens": req_budget}
 
 
 @router.post("/tasks/{task_id}/retry")

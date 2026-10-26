@@ -537,3 +537,246 @@ DSH 会把工具暴露成 `mcp__server_<hash>__<tool>`（本次 `mcp__server_8d6
 
 ## §68 触发器幂等（v3.2，原编号 §63）
 `pipeline.ensure()` 每次项目详情都会调用；原实现先 DROP 再 CREATE 触发器，并发请求会撞 `already exists` 导致 500。已改为 `CREATE TRIGGER IF NOT EXISTS`，不再每次删除重建。
+
+---
+
+## （v5.4 补齐：§69–§75，2026-10-26 生产库归因与并发实测）
+
+> 本节起为 v5.4 的台账。§69–§73 是「从失败数据反推物理根因」的产物，修复分别落在 v5.2 / v5.3，
+> 这里补齐记录，避免下一轮把同一个坑当新问题再查一遍；§74 是闸门被流程推进器代签的设计级缺陷
+> （v5.4 已修复并回归，全量 626 passed / 0 failed，见该节）；§75 是口径警告，不是缺陷。
+> 每条按「现象 / 物理根因 / 修法 / 如何避免重踩」四段记。
+
+## §69 L0 红线扫描的自指陷阱（v5.4 记录，修复于 v5.2）
+
+**现象**：生产库 501 个 `web-v1` 任务里 431 次红线失败，抽样归因 40/40 全部落在任务自己写出的
+`test_check.py`，驳回理由高度集中为「命中企业红线：100%」。而这些任务交付的落地页本身是干净的。
+
+**物理根因**：自检脚本按设计**必须**硬编码它要检的禁用词清单（`banned = ["100%", "绝对", ...]`），
+而 `acceptance_run.validate_mandatory()` 把 `artifacts` 里的每个文本文件都当成「对外文案」送去扫红线。
+它不区分「被测对象」与「测量工具」，于是工具自己命中了它自己要检的词 —— 命中是逻辑必然，与模型能力无关。
+这是验收层的自指（self-reference）缺陷，不是内容质量问题。
+
+**修法**：`app/acceptance_run.py:21-23` 增加工具文件正则
+
+```python
+_TOOLING_FILE = re.compile(
+    r"^(?:test_.*|.*_test|.*_check|check_.*|verify_.*|lint_.*|conftest)\.py$", re.I)
+```
+
+扫描循环里命中即 `continue`，并把跳过的路径收进 `skipped_tooling`，最终写进
+`redline_scans.snapshot["skipped_tooling"]` 与 `redline_checked` 审计 payload
+（`acceptance_run.py:134 / 146-148 / 215`）。跳过不是静默的 —— 审计里能查出「跳过了哪些文件」。
+回归用例：`tests/test_v52_redline_self_reference.py`（交付页干净 + 自检脚本含禁用词 → 必须放行）。
+
+**如何避免重踩**：任何「扫描 / 校验 / 统计」类组件上线前先问一句
+**「它的输入里会不会包含测量工具本身」**。工具文件必须显式白名单豁免，且豁免要留痕（进快照/审计），
+不要靠「让工具脚本里别写禁用词」这种口头约定 —— 那等于让测量工具自废武功。
+新增工具类文件命名（如 `*_spec.py`、`assert_*.py`）时必须同步扩这条正则，并补一条「干净交付 + 脏工具」的用例。
+
+## §70 落地页模板与自检脚本的契约不对齐（v5.4 记录，修复于 v5.2）
+
+**现象**：`_render_finops_html()` 生成的落地页从来就没有 `id="btn-calc"` 的行动按钮，
+而同一内核生成的 `test_check.py` 恰好断言 `check('id="btn-calc"' in raw, "action button: btn-calc")`。
+自检因此永远 FAIL → 内核重写一版同样内容 → 还是 FAIL → 交付物始终没有 CTA →
+L0「含可点击的行动按钮」必然驳回（生产库 438 次同一失败）。CTA 从未真正交付过。
+
+**物理根因**：模板和自检脚本是同一份契约的两端，却由两段互不引用的字符串字面量维护：
+模板在 `_render_finops_html()`，检查项在 `_render_test_check_py()`，没有任何机制在模板变更时重跑自检。
+缺的不是模型能力，是模板自己和自己打架。
+
+**修法**：模板补齐真实按钮 `<button type="button" class="cta" id="btn-calc">立即测算</button>`
+（`app/engine/runner_native.py:880`，底部同 id 的操作条见 `:920`）与对应 JS handler
+（`document.getElementById('btn-calc')` → `recalculate()` 并滚动到结果区，`:1045-1052`）；
+自检脚本里的禁用词改成 `chr()` 动态拼装，避免它自己再触发静态扫描（`:1132-1137`）。
+实测：拿模板产出跑它自己生成的自检脚本 → `PASS 24 / 24`、`exit 0`。
+回归用例：`tests/test_v52_native_landing_cta.py`。
+
+**如何避免重踩**：生成器与验收脚本必须**同源可测**。模板类交付物的最小回归是
+**「拿模板跑一遍它自己生成的自检」**，而不是只断言模板里有 `<button>`。
+改模板就必须重跑自检；自检项增减时，模板与测试要一起动。
+
+## §71 异步后台线程的 DB_PATH 寻址漂移（v5.4 记录，修复于 v5.3）
+
+**现象**：`POST /ui/projects` 与 `resume` 的自动点火线程会偶发写到**别的库**：
+测试里下一个用例改了 `DB_PATH`，上一个用例的线程才醒来执行，于是把数据写进新用例的库，
+既造成跨用例污染，又让新用例建库时撞 `database is locked`。表现为「随机失败、重跑就好」。
+
+**物理根因**：`db_path()` 按设计在执行时读环境变量（为了测试能切库），而
+「请求处理」是同步的、「流水线推进」是异步的。两者之间隔着一个可变的进程全局 ——
+线程执行时才调 `get_conn()`，读到的是**执行时**的 `DB_PATH`，不是**发起时**的那个库。
+寻址漂移的本质，是把「上下文」存进了全局变量。
+
+**修法**：请求入口就把目标库固定下来：`owner_db = db_path()`
+（`app/ui/routers/projects.py:84`、`:543`），后台线程改用 `db_connect(owner_db)` 绑定
+（`:89`、`:547`）。`app/db.py:181-196` 另提供 `open_conn(path)` 上下文管理器，
+`notify` 的后台线程用同一模式（`app/notify.py:73 / 78 / 87`）。
+生产只有一个库，行为完全等价；差别只在「进程内换库」这种测试/演练场景。
+
+**如何避免重踩**：任何跨线程、跨进程的持久化工作，都把**目标库 / 目标文件当作显式参数，
+在创建线程处绑定**，不在 worker 内部读环境变量。自查手段很土但有效：
+把所有 `def _worker` 都 grep 一遍，看里面有没有 `get_conn()`。
+
+## §72 `PRAGMA journal_mode=WAL` 的排他锁竞态（v5.4 记录，修复于 v5.3）
+
+**现象**：并发请求或测试并行时偶发 `sqlite3.OperationalError: database is locked`，
+失败点在建连接、切 WAL 这一步，与业务 SQL 无关。
+
+**物理根因**：`PRAGMA journal_mode = WAL` 是**需要短暂独占锁**的库级操作，
+而 SQLite 的 busy handler 对这条 PRAGMA **并不总生效** —— 进程内其它连接正在读时，
+切换会立刻返回 `SQLITE_BUSY`，`busy_timeout=30000` 也救不了这一步。
+同时 WAL 是**文件级持久属性**：一旦某个连接切成功，后续连接读到的就是 wal，
+所以「这次切失败」不等于「这个库不是 WAL」。
+
+**修法**：`app/db.py:22-44` 的 `_enable_wal()`：每轮先试
+`PRAGMA journal_mode = WAL` 看返回值，失败再**读当前模式**确认（可能别人已经切好了）；
+6 次短退避（`0.05s × (attempt+1)`）仍拿不到锁就**显式抛错**
+`cannot enable WAL journal mode (database is locked)`。
+绝不静默退化成 `delete` / `truncate` 模式 —— 那会破坏「WAL 单写」这条硬不变量，而且事故现场无痕。
+
+**如何避免重踩**：凡是「需要独占锁」的 PRAGMA / DDL，一律
+**先试 → 再查现状 → 短退避重试 → 最后显式失败**；
+不要用 `try/except: pass` 把锁冲突吞掉。被吞掉的那一次，就是将来最难查的那一次。
+
+## §73 `task_runs.runner` 的审计归因回写（v5.4 记录，修复于 v5.3）
+
+**现象**：用 NativeKernel 跑出来的任务，`task_runs.runner` 里写的却是 `acp`。
+Trace、FinOps 按 runner 分组统计、排障时「到底走的是 ACP 还是本地内核」全部归因错，
+生产库里这一列一度失去区分度。
+
+**物理根因**：`runner` 是**建行时的假设**，不是**执行后的事实**。
+建 run 行发生在派发之前（`pipeline.py:923`、`:1293` 都硬编码 `'acp'`），
+此时 `kernel_router` 还没决定路由；真正执行的内核名字在 `out["runner"]` 里，
+但只有「真的拉起 ACP 子进程」那条分支会回写，本地内核路径没人补。
+
+**修法**：两处 `execute_run()` 之后按执行结果回写真实内核：
+
+```python
+if out.get("runner") and out["runner"] != "acp":
+    conn.execute("UPDATE task_runs SET runner=? WHERE id=?", (out["runner"], run_id))
+```
+
+（`pipeline.py:949-953` 与 `:1314-1318`）。stub 分支的 run 建行时就直接写
+`runner='stub'`（`:1265-1269`），让「离线模拟」和「真实 ACP」在审计里一眼可分。
+
+**如何避免重踩**：审计字段凡是「执行前未知、执行后确定」的，都必须有**回写点**，
+并把「建行时的值只是占位符、最终以执行结果为准」写进注释。
+新增一条内核路由（比如再上 cloud kernel）时，先检查回写点覆盖到了没有。
+
+## §74 `flow_stage_accept` 伪造 L1 签批后门（v5.4，已修复并回归）
+
+**现象（v5.4 之前的实现）**：流水线进入 `accept` 阶段时，`pipeline._flow_verdict()` 会把这个任务**所有**
+blocking 判据直接刷成通过：
+
+```python
+conn.execute("UPDATE acceptance_criteria SET state='passed', note='flow_stage_accept'"
+             " WHERE task_id=? AND is_blocking=1 AND state IN ('pending','failed')", (tid,))
+```
+
+（v5.4 之前的 `_flow_verdict()` 实现；这段无条件刷绿的代码已在 v5.4 删除）。于是
+`human_check` 这类 L1 判据在**没有人提交任何 `evidence_snippet`**
+的情况下就成了 `passed`，任务随之 `pending_review → completed` —— 等于让模型自评通过，
+闸门本身被绕过了。行为还不统一：`web-v1` 在 `build` 阶段就被 L1 卡在 `pending_review`，
+其它 pack 却能一路自动过。
+
+**物理根因**：「验收」在实现上被写成了「把判据刷绿」，而不是「核对证据」。
+`acceptance_criteria.state` 是唯一物理真相，但写它的入口有两个：验收器（有证据、有 L0/L1/L2 分层）
+和流程推进器（只要阶段跑完就无条件刷）。后者为了让「全流程能跑通」拿到了无条件的写权，
+于是把「人工验收」这个语义整个跳过去了。这是设计级缺陷，不是某个测试的锅。
+
+**修法（v5.4，代码侧已落地）**：
+
+- **规则**：生产路径下进入 `accept` 时检查项目下所有 blocking L1，仍有未签批项则**严禁**置
+  `passed`，`accept` 阶段挂起并发出待验收通知；人类通过 `/criteria/{id}/check` 附
+  **非空 `evidence_snippet`** 补齐后，任务才 `pending_review → completed`，并自动走完
+  `release` / `retro`。仅 `M0_AUTO_SIGN_L1_FOR_TEST=1`（生产严禁开启）的测试路径放行。
+- **`acceptance_run`（判据层）**：新增 `pending_human_signoffs()`（项目级待签批清单）、
+  `task_pending_human_signoffs()`、`awaiting_human_signoff()`（「L0/L2 全绿、只差 L1」的判定单元）、
+  `task_ready_to_settle()`、`auto_sign_pending_l1()`（任务级）、`auto_sign_project_l1()`（项目级，
+  进 `accept` 前统一放行仅测试通道的遗留 L1）；`run()` 末尾的自动签批已收口到
+  `auto_sign_pending_l1()` —— 只有 `M0_AUTO_SIGN_L1_FOR_TEST=1` 才生效，且必然写
+  `l1_auto_signed_for_test` 审计、`checked_by='test-auto'`（开了就赖不掉）；返回值新增
+  `awaiting_human`，调用方不用猜（`app/acceptance_run.py:248-340 / 423 / 482`）。
+  **一个自己踩过的坑**：早期版本用 `state NOT IN ('passed','na')` 选待签批行，会把**人工显式驳回的
+  `failed` 判据也翻成 passed** —— 测试通道也不该覆盖人的否决。已收紧为 `state='pending'`。
+- **`pipeline._flow_verdict()`（阶段层）**：SQL 条件收紧成
+  `is_blocking=1 AND check_type<>'human_check' AND state='pending'`，自动判定（L0 红线 / L2 脚本）
+  只在「还没判定过」时按阶段闸门放行，但 L1 绝不由它代签；随后只在测试通道调
+  `auto_sign_pending_l1()`；仍剩未签批项就 `return "pending_review"`，任务不再被推进 `completed`
+  （`app/pipeline.py:1008-1032`）。
+- **同族残留（本轮一并收口，属隐患而非线上事故）**：原 `_flow_verdict` 还有一句
+  `state IN ('pending','failed')`，会把**已经判失败**的 blocking L0/L2 判据也翻成 passed ——
+  这是「自动放行失败判据」，与「严禁模型自评通过」同源。已收紧为 `state='pending'`，
+  并补一道兜底：仍存在 `check_type<>'human_check' AND state='failed'` 的 blocking 判据时，
+  直接 `raise RuntimeError("…blocking 自动判据未通过，不得放行")`，不再无声收尾
+  （`app/pipeline.py:1011-1027`）。**如实说明**：现有流程里阶段进入时自动判据的初始态就是
+  `pending`，`'failed'` 分支实测不可达 —— 所以这不是修一个正在发生的 bug，而是堵掉一个
+  「一旦被激活就是事故」的隐患；代价是这条收口**没有线上事故可追**，别把它写成「修复了线上错误」。
+- **`accept` 阶段（挂起而非失败）**：进入 `accept` 先走 `auto_sign_project_l1()`（仅测试通道，
+  生产环境直接返回 0），再查 `pending_human_signoffs()`；非空则写「等待人工签批」的
+  `06_accept.md`、`_accept_gate(passed=False)`、`_request_human_signoff()`（通知/企微签名请求，
+  发不出去不影响挂起），再抛 `HumanAcceptancePending`；上层把 `project_stages` / `projects`
+  置 `awaiting_accept`，**不是** failed/blocked
+  （`app/pipeline.py:587-592 / 728-755 / 1572-1590`）。闸门行用 `_accept_gate()` 做 upsert
+  （`:598-614`）：挂起 → 签批 → 通过会多次进入 `accept`，每次都插新行会让旧的 failed 行把
+  `trg_stage_gate_guard`（阶段置 done 前不得存在非 passed 闸门）永久卡死，所以复用同一行翻转状态。
+  **挂起页上的签批入口必须写真实可用路径**：`06_accept.md` 里给的是
+  `POST /criteria/{criterion_id}/check` —— 这个仓库的路由没有 `/api` 前缀，写成
+  `/api/criteria/...` 人照着操作会直接 404（这行文案后来单独修过，`:742`）。
+  给人看的接口地址必须和路由表一致。
+- **签批后自动收尾（规则 3）**：`POST /criteria/{criterion_id}/check` 走 `l1_manual.apply`
+  （缺 `evidence_snippet` 直接 400 `EvidenceRequired`），commit 之后调
+  `pipeline.maybe_resume_after_signoff()`（`app/api/tasks.py:140-165`）：先 `settle_signed_tasks()`
+  （只结算 `task_ready_to_settle()` 的任务，`review_passed` 的 actor=`l1_signoff`），
+  再仅在「已无待签批 + 项目确实停在 `awaiting_accept`」时唤醒 `release` / `retro`
+  （`app/pipeline.py:1610-1670`）。唤醒线程同样绑 `owner_db`（见 §71）。
+- **与计划原文的一处有意偏离**：计划 Action Step 2 写的是「阶段保持 `active`」，实现为
+  `project_stages.state` / `projects.state` = `awaiting_accept`。理由是 `finance.mark_stage`
+  早有 `awaiting_budget` 这种非标准状态做先例，`awaiting_accept` 能让 UI 与续跑逻辑无歧义地区分
+  「正在跑」与「等人签」，而且不碰任何触发器（`trg_stage_no_skip` 只管 seq 连续性）。
+  **这是决策，不是遗漏** —— 台账里写清楚，免得下一轮有人按计划原文把它改回 `active`。
+- **DoD 缺口（本轮补齐）**：计划 TASK-6.1 的 DoD 要求签批后「自动走完 `release` 并**生成 zip 包**」，
+  但全仓此前**没有任何 zip 生成器**（`zipfile` 只出现在 `app/docs.py` 的读取侧），
+  `release` 阶段仅把交付物拷进 `release/` 目录 —— 这条 DoD 原本无条件不达成。
+  已在 release 阶段补 `release/Bundle.zip`（`zipfile.ZipFile(..., ZIP_DEFLATED)`，不走 `_write`，
+  因此不新增 deliverable 行、不改变既有计数），并由端到端用例断言（存在、`testzip()` 无损坏、
+  条目 ≥3、含 `.md`、大小 >200B）。**写台账时要说「zip 产出能力本轮补齐」，不能说「原本就有」。**
+- **回归状态（2026-10-26 03:31，冻结树）**：全量 `pytest -q` = **626 passed / 0 failed**
+  （Lead 实测 `626 passed, 1 warning in 326.05s`，exit 0；gaps-doc 在冻结树上独立复跑
+  `626 passed, 1 warning in 326.33s`，exit 0，两次一致）。626 = 622 基线
+  + `tests/test_v54_l1_human_gate_strict.py` 新增 4 条 —— 后来补的 `state='pending'` / `raise`
+  两处收口是加强既有 4 条用例的断言，不新增用例，所以总数仍是 626 而不是 627。
+  收尾过程中先后有 2 条与 8 条存量用例按 v5.4 语义重写，其中两条（`test_m0_11_full_flow_reaches_completed`、
+  `test_m6_10_human_criterion_can_be_signed_from_the_chat`）**反而显式 `delenv("M0_AUTO_SIGN_L1_FOR_TEST")`**
+  —— 它们验证的就是「没人签批不许收尾」，全局自动签批一开，这两条等于什么都没验证。
+  **「全绿」只对这次冻结树成立，不追认之前的中间态**（中途实测过 620 passed / 2 failed 与
+  618 passed / 8 failed 两次中间态，根因都在 TASK-6.1 自身，不是文档或版本号改动）。
+
+**如何避免重踩**：闸门的「通过」必须能一路追到证据（`evidence_snippet` + `checked_by` + 审计行）；
+**不允许流程推进器代签**。测试要断言**负向事实**（「没证据时项目必停在 accept」），
+而不只是「补了证据能过」—— 只测正向的测试，恰好是这次后门能活下来的原因。
+凡是在代码里看到 `note='<阶段名>'` 这种自签备注，一律当红旗查。
+
+## §75 `M0_PIPELINE_EXEC=0` 的测试捷径会污染验收指标（v5.4）
+
+**现象**：`M0_PIPELINE_EXEC=0` 时 `execute_build()` 走 stub 分支：不调模型、不派 ACP，
+直接写占位产物（`index.html` / `api_schema.json` / `*_delivery.md` / `*_stub.py`），
+插一条 `runner='stub'`、`state='succeeded'` 的 run，然后把
+`run_spawned → run_started → run_succeeded → review_passed` 全部推过去（`actor="stub"`），
+`complete_wbs()` 收工（`app/pipeline.py:1231-1294`）。**整条验收链（L0/L1/L2 判据、红线扫描）
+一步都没跑**。拿这样的库算 DoD 指标，会得到毫无意义的「完成率 1.00 / 零驳回」。
+
+**物理根因**：这个短路本身是给离线单测和演练用的，默认值也没错
+（`stub = os.environ.get("M0_PIPELINE_EXEC", "1") != "1"`，生产默认真执行）；
+错的是**指标采集不看 run 的来源**。stub run 在数据里已经标了三处
+（`task_runs.runner='stub'`、`artifacts.checksum='stub'`、状态机 actor=`stub`），
+但项目/任务层面的完成率统计没有排除它们。
+
+**修法（口径，不是代码缺陷）**：任何 DoD / 验收指标在使用前必须确认
+**`M0_PIPELINE_EXEC=1`**；跨轮对比指标时，统计口径要显式排除 `task_runs.runner='stub'` 的 run。
+当前会显式设 0 的地方：`tests/` 里绝大多数 UI/流水线用例、`scripts/e2e_commercial_dryrun.py`、
+`tools/serve_ui_test.py`。`_flow_stage()` 另有 `M0_FLOW_EXEC` 开关，同理。
+
+**如何避免重踩**：短路开关必须同时打上**可识别的标记**（这里已做：runner / checksum / actor 三处），
+并在指标查询里显式过滤。报告里凡是出现「全绿 / 1.00 / 零驳回」，都要附带当时的环境变量快照
+与 runner 分布 —— 否则你测的不是系统，是 stub。
