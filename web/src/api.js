@@ -137,8 +137,8 @@ export const api = {
   deleteTask: (taskId) => req(`/tasks/${taskId}`, { method: "DELETE" }),
   action: (taskId, action, note) =>
     req(`/tasks/${taskId}/action`, { method: "POST", body: JSON.stringify({ action, note }) }),
-  retryTask: (taskId, note = "") =>
-    req(`/tasks/${taskId}/retry`, { method: "POST", body: JSON.stringify({ note }) }),
+  retryTask: (taskId, note = "", budget_tokens = null) =>
+    req(`/tasks/${taskId}/retry`, { method: "POST", body: JSON.stringify({ note, budget_tokens }) }),
   addMember: (payload) =>
     req("/members", { method: "POST", body: JSON.stringify(payload) }),
 };
@@ -228,6 +228,8 @@ Object.assign(api, {
   projects: () => req("/projects"),
   project: (id) => req(`/projects/${id}`),
   createProject: (body) => req("/projects", { method: "POST", body: JSON.stringify(body) }),
+  kernelStatus: () => req("/kernel/status"),
+  setKernelMode: (mode) => req("/kernel/mode", { method: "POST", body: JSON.stringify({ mode }) }),
   flowTemplates: () => req("/flow-templates"),
   stageDetail: (pid, key) => req(`/projects/${pid}/stages/${key}`),
   assignStage: (pid, key, employee_id) =>
@@ -321,6 +323,7 @@ Object.assign(api, {
   createExperience: body => req("/experiences", { method: "POST", body: JSON.stringify(body) }),
   editExperience: (id, body) => req(`/experiences/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   reviewExperience: (id, action, note, expected_version) => req(`/experiences/${id}/review`, { method: "POST", body: JSON.stringify({ action, note, expected_version }) }),
+  batchReviewExperiences: (experience_ids = [], action = "reject", note = "", archive_unreviewed_redlines = false) => req("/experiences/batch-review", { method: "POST", body: JSON.stringify({ experience_ids, action, note, archive_unreviewed_redlines }) }),
   retryProject: (id, requirement) => req(`/projects/${id}/retry`, { method: "POST", body: JSON.stringify({ requirement }) }),
   mcpServers: () => req("/mcp"),
   addMcp: body => req("/mcp", { method: "POST", body: JSON.stringify(body) }),
@@ -355,3 +358,5 @@ Object.assign(api, {
   maintenanceStats: () => req("/maintenance/stats"),
   maintenancePurge: (body) => req("/maintenance/purge", { method: "POST", body: JSON.stringify(body) }),
 });
+
+export default api;

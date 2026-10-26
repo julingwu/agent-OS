@@ -65,11 +65,16 @@ class QueryIn(BaseModel):
 
 @router.get("/experiences")
 def experiences(kind: str | None = None, state: str | None = None,
-                oa_ui: str | None = Depends(_token)):
+                group: str | None = None, oa_ui: str | None = Depends(_token)):
     with get_conn() as conn:
         _, scope = _actor(conn, oa_ui)
-        return {"experiences": experience.list_all(conn, kind=kind, state=state, **scope),
-                "stats": experience.stats(conn, **scope)}
+        # v5.2 TASK-3.1：复盘来源 c 由 experience.list_all/stats 读取时幂等补齐
+        # （复盘发生在 pipeline 内，本任务不能改 pipeline，故挂在治理读取入口）。
+        rows = experience.list_all(conn, kind=kind, state=state, **scope)
+        return {"experiences": rows,
+                "stats": experience.stats(conn, **scope),
+                "groups": experience.groups(conn, **scope),
+                "group": group or "kind"}
 
 
 @router.post("/experiences")
@@ -109,6 +114,52 @@ def review_experience(exp_id: str, payload: ReviewIn,
         except (KeyError, PermissionError, ValueError, experience.ReviewConflict) as exc:
             raise _error(exc) from exc
         return {"ok": True, "experience": row}
+
+
+class BatchReviewIn(BaseModel):
+    experience_ids: list[str] = Field(default_factory=list)
+    # 计划原文用的是 exp_ids；两个名字都收，避免调用方踩空。
+    exp_ids: list[str] = Field(default_factory=list)
+    action: str = Field(default="reject")
+    note: str | None = None
+    archive_unreviewed_redlines: bool = False
+    require_pending: bool = True
+
+
+@router.post("/experiences/batch-review")
+def batch_review_experiences(payload: BatchReviewIn,
+                              oa_ui: str | None = Depends(_token)):
+    """单事务批量审核（approve/reject），逐条写 experience_reviewed 审计。
+
+    v5.2 TASK-3.1：只返回**真正处理成功**的 id；越权/不存在/已审核的 id 进 skipped，
+    不会因一条坏数据整批失败，也不会跨租户写库。
+    """
+    with get_conn() as conn:
+        actor, scope = _actor(conn, oa_ui, admin=True)
+        act = (payload.action or "reject").strip().lower()
+        if act not in {"approve", "passed", "reject", "rejected"}:
+            raise HTTPException(422, detail={"code": "InvalidReviewAction"})
+        action = "approve" if act in ("approve", "passed") else "reject"
+        target_ids = list(payload.experience_ids or payload.exp_ids or [])
+        if payload.archive_unreviewed_redlines or not target_ids:
+            rows = conn.execute(
+                "SELECT id FROM org_experiences WHERE state='pending'"
+                " AND tenant_id=? AND legal_entity_id=? ORDER BY rowid DESC LIMIT 500",
+                (scope["tenant_id"], scope["entity"])
+            ).fetchall()
+            target_ids = [r["id"] for r in rows]
+        if not target_ids:
+            return {"ok": True, "count": 0, "action": action,
+                    "processed_ids": [], "skipped": []}
+        try:
+            out = experience.batch_review(
+                conn, target_ids, action, reviewer=actor["id"],
+                note=payload.note or "批量归档操作",
+                require_pending=payload.require_pending, **scope)
+        except (KeyError, PermissionError, ValueError, experience.ReviewConflict) as exc:
+            raise _error(exc) from exc
+        return {"ok": True, "count": out["processed"], "action": action,
+                "processed_ids": out["processed_ids"], "skipped": out["skipped"]}
 
 
 @router.delete("/experiences/{exp_id}")

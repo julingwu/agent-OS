@@ -690,6 +690,9 @@ export default function MissionControl({ Icon, onOpenChat, me }) {
                   <p className="mc-requirement">{detail.project.requirement}</p>
                 </div>
                 <div className="mc-proj-actions">
+                  <a href="?tab=cyberdeck" className="mc-btn" style={{ borderColor: "#00F0FF", color: "#00F0FF", textDecoration: "none" }} title="进入赛博全息指挥舱">
+                    ⚙️ 赛博全息舱
+                  </a>
                   {(detail.allowed_actions || []).includes("retry") && (
                     <button className="mc-btn" disabled={busy} onClick={() => act("retry")}>
                       <Icon name="refresh" /> 重试

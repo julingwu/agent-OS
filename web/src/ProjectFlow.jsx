@@ -65,10 +65,31 @@ export function LiveStream({ runId, onFinished }) {
 }
 
 /* ------------------------------------------------ 失败诊断 */
-export function FailureDiagnosis({ runId, taskId, onRetry }) {
+// v5.2 TASK-3.2：按阻塞原因给三种「一键自愈」动作，而不是一律重跑整个阶段。
+const HEAL = {
+  budget_pause: "💸 一键批准追加 30% 阶段额度并续跑未完成任务",
+  awaiting_approval: "🛡 一键批准平台代执行并 session/resume",
+  veto: "📝 填写修订意见并重开研讨/解除否决",
+};
+
+function blockingKind(diag, { blocking, approvalId } = {}) {
+  if (blocking) return blocking;
+  if (approvalId) return "awaiting_approval";
+  if (!diag) return null;
+  const text = `${diag.cause || ""} ${(diag.fixes || []).join(" ")} ${diag.error || ""}`;
+  if (/budget|预算|额度|80%/.test(text)) return "budget_pause";
+  if (/awaiting_approval|审批|高危工具|越权|平台代执行|session\/resume/.test(text)) return "awaiting_approval";
+  if (/veto|否决|冻结|blocked|修订需求/.test(text)) return "veto";
+  return null;
+}
+
+export function FailureDiagnosis({ runId, taskId, onRetry, projectId, stageKey,
+                                   blocking, approvalId, requirement }) {
   const [diag, setDiag] = useState(null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  const [vetoOpen, setVetoOpen] = useState(false);
 
   useEffect(() => {
     if (!runId) return undefined;
@@ -79,12 +100,96 @@ export function FailureDiagnosis({ runId, taskId, onRetry }) {
     return () => { alive = false; };
   }, [runId]);
 
+  const kind = blockingKind(diag, { blocking, approvalId });
+
+  // ① budget_pause：按阶段当前额度追加 30%，然后只续跑未完成任务
+  async function healBudget() {
+    if (busy) return;
+    setBusy("budget"); setError("");
+    try {
+      if (!projectId) throw new Error("缺少项目上下文，无法追加预算。");
+      const data = await api.budgetApprovals();
+      const ap = (data.approvals || []).find((a) => a.project_id === projectId
+        && (!stageKey || !a.stage_key || a.stage_key === stageKey));
+      if (!ap) throw new Error("没有待批的追加预算单，请刷新项目后重试。");
+      const tokens = ap.topup_tokens || Math.round((ap.stage_quota || 0) * 0.3) || undefined;
+      const out = await api.decideBudget(ap.id, true, tokens);
+      if (out && out.state === "exhausted") throw new Error("项目预算池已见底，无法追加。");
+      await api.resumeProject(projectId);
+      onRetry?.();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(""); }
+  }
+
+  // ② awaiting_approval：批准平台代执行，后端用同一 run_id + session_id 续跑
+  async function healApproval() {
+    if (busy) return;
+    setBusy("approval"); setError("");
+    try {
+      const data = await api.approvals();
+      const list = data.pending || [];
+      const ap = list.find((a) => (approvalId ? a.id === approvalId
+        : (a.run_id === runId || a.task_id === taskId)));
+      if (!ap) throw new Error("没有待批的高危操作审批单，请刷新后重试。");
+      await api.decideApproval(ap.id, true);
+      onRetry?.();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(""); }
+  }
+
+  // ③ 闸门 veto：填写修订意见后重开研讨（后端 prepare_retry 会重新评审否决）
+  async function healVeto() {
+    if (busy) return;
+    const revised = note.trim();
+    if (!revised) { setError("请先填写修订意见，再重开研讨。"); return; }
+    if (!projectId) { setError("缺少项目上下文，无法提交修订。"); return; }
+    setBusy("veto"); setError("");
+    try {
+      const base = (requirement || "").trim();
+      const merged = base ? `${base}\n\n【修订意见】\n${revised}` : revised;
+      await api.retryProject(projectId, merged);
+      setVetoOpen(false); setNote("");
+      onRetry?.();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(""); }
+  }
+
   async function retry() {
     if (!taskId || busy) return;
-    setBusy(true); setError("");
-    try { await api.retryTask(taskId, "按诊断建议重试"); onRetry?.(); }
+    setBusy("retry"); setError("");
+    try {
+      const isBudget = kind === "budget_pause";
+      const budgetTokens = isBudget ? 250000 : null;
+      await api.retryTask(taskId, "追加充足额度并继续执行", budgetTokens);
+      onRetry?.();
+    }
     catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+    finally { setBusy(""); }
+  }
+
+  const healEnabled = kind === "awaiting_approval" || !!projectId;
+  let healButton = null;
+  if (kind === "budget_pause" && healEnabled) {
+    healButton = (
+      <button className="btn primary" disabled={!!busy} onClick={healBudget}
+              title="按阶段当前额度的 30% 追加后只续跑未完成任务，已完成任务直接复用黑板产物">
+        {busy === "budget" ? "正在划拨…" : HEAL.budget_pause}
+      </button>
+    );
+  } else if (kind === "awaiting_approval" && healEnabled) {
+    healButton = (
+      <button className="btn primary" disabled={!!busy} onClick={healApproval}
+              title="批准后平台代执行该高危工具调用，并用同一 run_id + session_id 断点续跑">
+        {busy === "approval" ? "正在批准…" : HEAL.awaiting_approval}
+      </button>
+    );
+  } else if (kind === "veto" && healEnabled) {
+    healButton = (
+      <button className="btn primary" disabled={!!busy} onClick={() => setVetoOpen(true)}
+              title="填写修订意见后重开研讨，由独立评审重新裁决原否决">
+        {HEAL.veto}
+      </button>
+    );
   }
 
   return (
@@ -98,18 +203,43 @@ export function FailureDiagnosis({ runId, taskId, onRetry }) {
           <ul className="diag-fixes">
             {(diag.fixes || []).map((f, i) => <li key={i}>{f}</li>)}
           </ul>
-          <div className="diag-foot">
-            <span className="hint">{diag.source === "llm" ? "模型诊断" : "规则诊断"}{diag.cached ? " · 已缓存" : ""}</span>
-            {taskId && <button className="btn ghost" disabled={busy} onClick={retry}>一键重试</button>}
-          </div>
         </>
+      )}
+      {vetoOpen && (
+        <div className="heal-veto">
+          <label htmlFor={`veto-note-${runId}`}>修订意见（会写进项目需求并重新评审否决）</label>
+          <textarea id={`veto-note-${runId}`} rows={3} value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="例如：补充法务要求的证据来源与回滚方案…" />
+          <div className="heal-veto-actions">
+            <button className="btn" disabled={!!busy} onClick={healVeto}>
+              {busy === "veto" ? "正在重开研讨…" : "提交修订并重开研讨"}
+            </button>
+            <button className="btn ghost" disabled={!!busy} onClick={() => setVetoOpen(false)}>取消</button>
+          </div>
+        </div>
+      )}
+      {(diag || healButton) && (
+        <div className="diag-foot">
+          <span className="hint">
+            {diag ? `${diag.source === "llm" ? "模型诊断" : "规则诊断"}${diag.cached ? " · 已缓存" : ""}` : "等待审批/追加后继续"}
+            {kind === "budget_pause" ? " · 已完成任务将自动跳过" : ""}
+          </span>
+          {healButton}
+          {taskId && (
+            <button className="btn ghost" disabled={!!busy} onClick={retry}
+                    title="保留当前生成上下文并重试该任务">
+              {busy === "retry" ? "正在调度…" : "只重试该任务"}
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
 /* ------------------------------------------------ 阶段详情 */
-export function StageDetail({ projectId, stageKey, onClose, onChanged }) {
+export function StageDetail({ projectId, stageKey, onClose, onChanged, requirement }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
 
@@ -136,6 +266,9 @@ export function StageDetail({ projectId, stageKey, onClose, onChanged }) {
   const st = data.stage;
   const lastRun = data.runs[0];
   const failedRun = data.runs.find((r) => r.state === "failed" || r.state === "cancelled");
+  // v5.2 TASK-3.2：高危工具拦截的 Run 是「挂起」而不是失败，单独给一键批准入口
+  const parkedRun = data.runs.find((r) => r.state === "awaiting_approval");
+  const vetoed = data.gates.some((g) => g.state === "vetoed");
 
   return (
     <div className="mask" onClick={onClose}>
@@ -156,8 +289,18 @@ export function StageDetail({ projectId, stageKey, onClose, onChanged }) {
         {st.state === "active" && lastRun && (
           <LiveStream runId={lastRun.run_id} onFinished={() => { load(); onChanged?.(); }} />
         )}
-        {st.state === "blocked" && failedRun && (
+        {(st.state === "blocked" || st.state === "awaiting_budget") && failedRun && (
           <FailureDiagnosis runId={failedRun.run_id} taskId={failedRun.task_id}
+                            projectId={projectId} stageKey={stageKey}
+                            blocking={st.state === "awaiting_budget" ? "budget_pause"
+                              : (vetoed ? "veto" : undefined)}
+                            requirement={requirement}
+                            onRetry={() => { load(); onChanged?.(); }} />
+        )}
+        {!(st.state === "blocked" || st.state === "awaiting_budget") && parkedRun && (
+          <FailureDiagnosis runId={parkedRun.run_id} taskId={parkedRun.task_id}
+                            projectId={projectId} stageKey={stageKey}
+                            blocking="awaiting_approval" requirement={requirement}
                             onRetry={() => { load(); onChanged?.(); }} />
         )}
 
@@ -272,6 +415,18 @@ export function BudgetAsk({ projectId, onChanged }) {
     finally { setBusy(""); load(); onChanged?.(); }
   }
 
+  // v5.2 TASK-3.2：一键按阶段额度的 30% 追加，并只续跑未完成任务
+  async function decideTopup30(ap) {
+    setBusy(ap.id); setNote("");
+    try {
+      const tokens = ap.topup_tokens || Math.round((ap.stage_quota || 0) * 0.3) || undefined;
+      const out = await api.decideBudget(ap.id, true, tokens);
+      if (out && out.state === "exhausted") setNote("预算池已见底，项目已停摆");
+      else await api.resumeProject(projectId);
+    } catch (e) { setNote(e.message || "审批失败"); }
+    finally { setBusy(""); load(); onChanged?.(); }
+  }
+
   return (
     <div className="budget-ask" role="region" aria-label="追加预算审批">
       {items.map((ap) => (
@@ -281,11 +436,17 @@ export function BudgetAsk({ projectId, onChanged }) {
             <p className="hint">
               申请追加 {fmtTokens(ap.requested_tokens)} tokens · 池内可用 {fmtTokens(ap.remaining)}
               {" · "}{ap.reason || "触发 80% 暂停线"}
+              {ap.topup_tokens ? ` · 建议追加 ${fmtTokens(ap.topup_tokens)}（阶段额度 30%）` : ""}
             </p>
           </div>
           <div className="budget-ask-actions">
+            <button className="btn primary" disabled={busy === ap.id}
+                    onClick={() => decideTopup30(ap)}
+                    title="按阶段当前额度的 30% 追加后只续跑未完成任务，已完成任务直接复用黑板产物">
+              💸 一键批准追加 30% 阶段额度并续跑未完成任务
+            </button>
             <button className="btn" disabled={busy === ap.id}
-                    onClick={() => decide(ap, true)}>批准并继续</button>
+                    onClick={() => decide(ap, true)}>按申请额度批准</button>
             <button className="btn ghost" disabled={busy === ap.id}
                     onClick={() => decide(ap, false)}>驳回</button>
           </div>
@@ -312,6 +473,27 @@ export default function ProjectFlow({ projectId, data, onChanged }) {
       </div>
       <BudgetBar budget={data?.budget} />
       <BudgetAsk projectId={projectId} onChanged={onChanged} />
+      {stages.some((s) => ["awaiting_budget", "halted"].includes(s.state)) && (
+        <div style={{ margin: "10px 0", padding: "10px 14px", background: "rgba(245, 158, 11, 0.12)", border: "1px solid var(--warn, #f59e0b)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <b style={{ color: "var(--warn, #f59e0b)" }}>⚠️ 阶段因预算暂停/停摆</b>
+            <p className="hint" style={{ margin: "4px 0 0 0" }}>已完成的任务将自动跳过，仅断点续跑未完成的任务。</p>
+          </div>
+          <button
+            className="btn primary"
+            onClick={async () => {
+              try {
+                await api.resumeProject(projectId);
+                onChanged?.();
+              } catch (e) {
+                alert(e.message || "续跑失败");
+              }
+            }}
+          >
+            ▶ 一键断点续跑（只补未完成任务）
+          </button>
+        </div>
+      )}
       <ol className="flow-timeline">
         {stages.map((s) => {
           const failed = s.state === "blocked";
@@ -332,6 +514,7 @@ export default function ProjectFlow({ projectId, data, onChanged }) {
         })}
       </ol>
       {open && <StageDetail projectId={projectId} stageKey={open}
+                            requirement={data?.project?.requirement}
                             onClose={() => setOpen(null)} onChanged={onChanged} />}
     </div>
   );

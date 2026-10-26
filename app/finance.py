@@ -27,6 +27,7 @@ ELASTIC_DEFAULT = 1.5          # 50% 试错缓冲
 CAP_DEFAULT = 1_000_000        # 项目全局最高预算（安全锁）
 PAUSE_RATIO_DEFAULT = 0.8      # 花到 80% 暂停并要钱
 MIN_STAGE_QUOTA = 3000
+TOPUP_RATIO_DEFAULT = 0.3      # v5.2 一键自愈：按阶段当前额度追加 30%
 
 DDL = """
 CREATE TABLE IF NOT EXISTS project_budgets (
@@ -165,10 +166,19 @@ def set_config(conn: sqlite3.Connection, *, elastic: float | None = None,
 
 
 # ------------------------------------------------------------------ 估算
-def _base_for(node: dict) -> int:
+def _base_for(node: dict, requirement: str = "") -> int:
     key = str(node.get("key") or "").split("_")[-1]          # an_retrieve → retrieve
     kind = str(node.get("kind") or "").lower()
     role = str(node.get("role") or "").lower()
+    req_low = (requirement or "").lower()
+
+    # 财务智能补正：复杂前端交互页面/落地页需编写完整 HTML+CSS+JS 结构及合规自检，
+    # 实测单次执行达 10-15 万 token，若仅给 3 万底座必撞额度墙。
+    if any(w in req_low for w in ("html", "落地页", "网页", "前端", "页面")) and (
+        role == "dev" or kind in ("implement", "build") or key in ("build", "dev")
+    ):
+        return 80000
+
     if kind in BASE_BY_KIND:
         return BASE_BY_KIND[kind]
     if key in BASE_BY_KIND:
@@ -183,6 +193,8 @@ def _complexity(requirement: str, flow_id: str = "") -> float:
     factor = 0.9 if n < 20 else (1.0 if n < 80 else 1.15)
     if "URGENT" in (flow_id or ""):
         factor *= 1.2                                        # 救火要人，也要钱
+    if any(w in (requirement or "") for w in ("广告法", "极限词", "合规", "国家级")):
+        factor *= 1.3
     return factor
 
 
@@ -192,7 +204,7 @@ def estimate(nodes: list[dict], requirement: str = "", flow_id: str = "",
     factor = _complexity(requirement, flow_id)
     out = []
     for node in nodes:
-        base = int(round(_base_for(node) * factor / 500.0) * 500)
+        base = int(round(_base_for(node, requirement) * factor / 500.0) * 500)
         quota = int(round(base * elastic / 500.0) * 500)
         out.append({"stage_key": node.get("key"), "title": node.get("title"),
                     "role": node.get("role"), "base_estimate": max(base, 1000),
@@ -301,6 +313,15 @@ def pause_threshold(conn: sqlite3.Connection, pid: str, stage_key: str) -> int:
     return max(1000, int(q["quota"] * cfg["pause_ratio"]) - q["spent"])
 
 
+def topup_tokens(conn: sqlite3.Connection, pid: str, stage_key: str,
+                 ratio: float = TOPUP_RATIO_DEFAULT) -> int:
+    """v5.2 TASK-3.2：一键自愈的追加额度 = 阶段当前额度的 30%（取整到 1000）。"""
+    q = quota(conn, pid, stage_key)
+    if not q:
+        return 0
+    return max(1000, int(round(q["quota"] * float(ratio) / 1000.0)) * 1000)
+
+
 def spend(conn: sqlite3.Connection, pid: str, stage_key: str, tokens: int) -> dict:
     """记录阶段/项目的真实消耗（按 run 结束后回写）。"""
     tokens = max(0, int(tokens or 0))
@@ -357,8 +378,12 @@ def request_topup(conn: sqlite3.Connection, pid: str, stage_key: str, *, tokens:
 def pending(conn: sqlite3.Connection, *, tenant_id: str | None = None,
             limit: int = 50) -> list[dict]:
     ensure(conn)
-    sql = ("SELECT a.*, b.pool_tokens, b.spent_tokens FROM budget_approvals a"
+    sql = ("SELECT a.*, b.pool_tokens, b.spent_tokens,"
+           "       s.quota AS stage_quota, s.spent AS stage_spent"
+           " FROM budget_approvals a"
            " LEFT JOIN project_budgets b ON b.project_id=a.project_id"
+           " LEFT JOIN stage_budgets s ON s.project_id=a.project_id"
+           "   AND s.stage_key=a.stage_key"
            " WHERE a.state='pending'")
     args: list = []
     if tenant_id:
@@ -367,12 +392,23 @@ def pending(conn: sqlite3.Connection, *, tenant_id: str | None = None,
     sql += " ORDER BY a.created_at DESC LIMIT ?"
     args.append(limit)
     rows = conn.execute(sql, args).fetchall()
-    return [{"id": r["id"], "project_id": r["project_id"], "stage_key": r["stage_key"],
-             "requested_tokens": r["requested_tokens"], "reason": r["reason"],
-             "state": r["state"], "created_at": r["created_at"],
-             "pool": int(r["pool_tokens"] or 0), "spent": int(r["spent_tokens"] or 0),
-             "remaining": max(0, int(r["pool_tokens"] or 0) - int(r["spent_tokens"] or 0))}
-            for r in rows]
+    out = []
+    for r in rows:
+        stage_quota = int(r["stage_quota"] or 0)
+        suggested = (max(1000, int(round(stage_quota * TOPUP_RATIO_DEFAULT / 1000.0)) * 1000)
+                     if stage_quota else int(r["requested_tokens"] or 0))
+        out.append({"id": r["id"], "project_id": r["project_id"],
+                    "stage_key": r["stage_key"],
+                    "requested_tokens": r["requested_tokens"], "reason": r["reason"],
+                    "state": r["state"], "created_at": r["created_at"],
+                    "pool": int(r["pool_tokens"] or 0), "spent": int(r["spent_tokens"] or 0),
+                    "remaining": max(0, int(r["pool_tokens"] or 0)
+                                     - int(r["spent_tokens"] or 0)),
+                    "stage_quota": stage_quota,
+                    "stage_spent": int(r["stage_spent"] or 0),
+                    # v5.2 TASK-3.2：前端「一键批准追加 30% 阶段额度」直接用它
+                    "topup_tokens": suggested})
+    return out
 
 
 def decide(conn: sqlite3.Connection, approval_id: str, *, approve: bool,
