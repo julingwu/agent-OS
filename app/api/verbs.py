@@ -32,7 +32,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------- helpers
 def budget_limit() -> int:
-    return int(os.environ.get("M0_BUDGET_LIMIT_TOKENS", "200000"))
+    return int(os.environ.get("M0_BUDGET_LIMIT_TOKENS", "500000"))
 
 
 def amount_limit() -> float:
@@ -349,6 +349,18 @@ def do_reserve_budget(conn: sqlite3.Connection, req: ReserveBudgetIn,
 
     run = scoped_run(conn, req.run_id, ident)
     b = get_or_create_budget(conn, run)
+
+    # 动态扩容：若单任务上限不足，但公司总账池有足量未占用额度，自动划拨扩充任务上限
+    needed = b["reserved_tokens"] + req.estimated_tokens
+    if needed > b["limit_tokens"]:
+        pool = entity_pool(conn, run["legal_entity_id"])
+        if pool is not None:
+            pool_avail = max(0, pool["limit_tokens"] - pool["used_tokens"] - pool["reserved_tokens"])
+            if pool_avail >= req.estimated_tokens:
+                new_limit = max(b["limit_tokens"], needed)
+                conn.execute("UPDATE budgets SET limit_tokens = ? WHERE id = ?", (new_limit, b["id"]))
+                b = conn.execute("SELECT * FROM budgets WHERE id = ?", (b["id"],)).fetchone()
+
     if b["reserved_tokens"] + req.estimated_tokens > b["limit_tokens"]:
         resp = {"result": "denied", "reason": "budget_exhausted",
                 "limit": b["limit_tokens"], "reserved": b["reserved_tokens"]}

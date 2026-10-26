@@ -100,10 +100,8 @@ def workspace() -> pathlib.Path:
     默认放在 **用户自己的 LOCALAPPDATA** 下：仓库目录的 ACL 属于 Administrators，
     在里面打 Low 标签要 WRITE_OWNER -> 触发 UAC；用户目录是天生的 owner，静默可写。
     """
-    default = pathlib.Path(os.environ.get("LOCALAPPDATA") or pathlib.Path.home()) / "oaagent-m0" / "workspace"
-    p = pathlib.Path(os.environ.get("M0_WORKSPACE") or default)
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    from ..config import get_workspace_root
+    return get_workspace_root()
 
 
 def shared_root() -> pathlib.Path:
@@ -630,12 +628,12 @@ def _execute_locked(conn: sqlite3.Connection, *, run_id: str, task_id: str, enti
 
     try:
         ensure_not_stopped(conn, run_id)
-        if runner in ("acp", "mock_acp"):
-            from .runner_acp import execute_acp
-            return execute_acp(conn, run_id, task_id=task_id, entity=entity, actor=actor,
-                               prompt=prompt, runner=runner, resume_session=resume_session,
-                               est_tokens=est_tokens, timeout=timeout, hb_interval=hb_interval,
-                               pause_at_tokens=pause_at_tokens)
+        if runner in ("acp", "mock_acp", "native", "auto", "dsh"):
+            from .kernel_router import execute_kernel
+            return execute_kernel(conn, run_id, task_id=task_id, entity=entity, actor=actor,
+                                  prompt=prompt, runner=runner, resume_session=resume_session,
+                                  est_tokens=est_tokens, timeout=timeout, hb_interval=hb_interval,
+                                  pause_at_tokens=pause_at_tokens)
         return _execute_headless(conn, run_id, task_id=task_id, entity=entity, actor=actor,
                                  prompt=prompt, runner=runner, resume_session=resume_session,
                                  est_tokens=est_tokens, timeout=timeout, hb_interval=hb_interval)

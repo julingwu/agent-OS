@@ -68,4 +68,12 @@ def evaluate(check_ref: str | None, file_path: str | None) -> dict:
         r = run_script(script, ["--file", file_path])
         r["detail"] = "语法检查通过" if r.get("ok") else f"语法错误：{r.get('error', '')[:120]}"
         return r
+    if script == "markdown_structure.py":
+        r = run_script(script, ["--file", file_path, "--min-bytes", str(cfg.get("min_bytes", 200))])
+        r["detail"] = "文档结构完整" if r.get("ok") else (r.get("error") or "文稿缺少一级或二级结构化标题（# 或 ##）")
+        return r
+    if script == "data_structure.py":
+        r = run_script(script, ["--file", file_path, "--min-bytes", str(cfg.get("min_bytes", 200))])
+        r["detail"] = "数据结构规范" if r.get("ok") else (r.get("error") or "未发现有效的数据结构或分析结论")
+        return r
     return {"ok": False, "detail": f"未知脚本 {script}"}

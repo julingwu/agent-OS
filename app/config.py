@@ -30,3 +30,10 @@ def load_env(path: str | pathlib.Path | None = None) -> dict[str, str]:
         loaded[key] = value
         os.environ.setdefault(key, value)      # real environment always wins
     return loaded
+
+
+def get_workspace_root() -> pathlib.Path:
+    default = pathlib.Path(os.environ.get("LOCALAPPDATA") or pathlib.Path.home()) / "oaagent-m0" / "workspace"
+    p = pathlib.Path(os.environ.get("M0_WORKSPACE") or default)
+    p.mkdir(parents=True, exist_ok=True)
+    return p

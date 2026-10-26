@@ -66,7 +66,7 @@ def test_software_flow_is_eight_steps_and_keeps_wbs(env):
     conn, _ = env
     plan = flows.plan(conn, "开发一个算账工具", ["dev"])
     keys = [n["key"] for n in plan["nodes"]]
-    assert len(keys) == 8 and keys[:2] == ["intake", "wbs"], keys
+    assert len(keys) == 9 and keys[:2] == ["intake", "charter"], keys
     # 明确说不发布/不复盘时，optional 节点才被裁掉
     trimmed = flows.plan(conn, "内部使用的小工具，开发一个算账脚本，不用发布", ["dev"])
     assert "release" not in [n["key"] for n in trimmed["nodes"]]

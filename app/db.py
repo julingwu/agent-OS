@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sqlite3
+import time
 from contextlib import contextmanager
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -18,13 +19,39 @@ def schema_sql() -> str:
     return (pathlib.Path(__file__).resolve().parent / "schema.sql").read_text(encoding="utf-8")
 
 
+def _enable_wal(conn: sqlite3.Connection) -> None:
+    """把连接切到 WAL，并对瞬时并发做重试。
+
+    物理事实：`PRAGMA journal_mode = WAL` 需要短暂独占锁，而 SQLite 的 busy
+    handler 对这条 PRAGMA 并不总是生效，进程内其它连接正在读时它会立刻
+    SQLITE_BUSY。WAL 是**文件级持久属性**，一旦切成功后续连接读到的就是 wal，
+    所以这里先试切换、再看当前模式，都拿不到锁就短退避重试。
+    """
+    for attempt in range(6):
+        try:
+            mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            if str(mode).lower() == "wal":
+                return
+        except sqlite3.OperationalError:
+            pass
+        try:
+            if str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower() == "wal":
+                return
+        except sqlite3.OperationalError:
+            pass
+        time.sleep(0.05 * (attempt + 1))
+    # 重试仍失败：明确报错，绝不静默退化成非 WAL（那会破坏 WAL 单写不变量）。
+    raise sqlite3.OperationalError("cannot enable WAL journal mode (database is locked)")
+
+
 def connect(path: str | None = None) -> sqlite3.Connection:
     p = path or db_path()
     pathlib.Path(p).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(p, timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    _enable_wal(conn)
     return conn
 
 
@@ -64,6 +91,10 @@ MIGRATIONS = [
     ("budgets", "limit_amount", "ALTER TABLE budgets ADD COLUMN limit_amount REAL DEFAULT 0"),
     ("budgets", "reserved_amount", "ALTER TABLE budgets ADD COLUMN reserved_amount REAL DEFAULT 0"),
     ("budgets", "used_amount", "ALTER TABLE budgets ADD COLUMN used_amount REAL DEFAULT 0"),
+    ("project_stages", "role_tag", "ALTER TABLE project_stages ADD COLUMN role_tag TEXT DEFAULT 'dev'"),
+    ("project_stages", "node_kind", "ALTER TABLE project_stages ADD COLUMN node_kind TEXT DEFAULT 'standard'"),
+    ("project_stages", "assignee_id", "ALTER TABLE project_stages ADD COLUMN assignee_id TEXT"),
+    ("project_stages", "gate_name", "ALTER TABLE project_stages ADD COLUMN gate_name TEXT DEFAULT ''"),
 ]
 
 
@@ -115,6 +146,16 @@ def init_db(path: str | None = None) -> None:
     conn = connect(path)
     try:
         conn.executescript(schema_sql())
+        from . import pipeline
+        pipeline.ensure(conn)
+        from . import flows
+        flows.ensure(conn)
+        from .ui import roles
+        roles.ensure(conn)
+        from . import experience
+        experience.ensure(conn)
+        from . import evals
+        evals.ensure(conn)
         added_tenants = _migrate(conn)
         _backfill_tenants(conn, added_tenants)
         conn.execute("UPDATE wecom_pushes SET created_at = CURRENT_TIMESTAMP"
@@ -127,6 +168,24 @@ def init_db(path: str | None = None) -> None:
 @contextmanager
 def get_conn():
     conn = connect()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@contextmanager
+def open_conn(path: str | None = None):
+    """get_conn 的「绑定指定库」版本。
+
+    后台线程必须用它：异步任务的大脑是发起请求时那个库，不是执行时 DB_PATH
+    碰巧指向的库。否则线程会漂移到别人的库上（进程内换库的场景下尤其致命）。
+    """
+    conn = connect(path)
     try:
         yield conn
         conn.commit()

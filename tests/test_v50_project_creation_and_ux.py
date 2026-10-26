@@ -51,7 +51,7 @@ def test_project_create_api_software_flow(ctx):
     assert out.get("ok") is True
     pid = out.get("project_id")
     assert pid and pid.startswith("P-")
-    assert out.get("stages_count") == 8
+    assert out.get("stages_count") == 9
     assert out.get("flow_id") == "FLOW-SOFTWARE"
 
     # Verify project exists in database
@@ -61,7 +61,7 @@ def test_project_create_api_software_flow(ctx):
         assert proj is not None
         assert proj["name"] == "电商营销自动化系统"
         stages = conn.execute("SELECT * FROM project_stages WHERE project_id=? ORDER BY seq ASC", (pid,)).fetchall()
-        assert len(stages) == 8
+        assert len(stages) == 9
         pb = conn.execute("SELECT * FROM project_budgets WHERE project_id=?", (pid,)).fetchone()
         assert pb is not None
         assert pb["pool_tokens"] > 0

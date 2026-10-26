@@ -77,18 +77,19 @@ def _node(key: str, title: str, role: str, gate: str, *, kind: str = "doc",
 
 PRESETS: dict[str, dict] = {
     "FLOW-SOFTWARE": {
-        "name": "软件交付流",
+        "name": "标准 9 阶段软件工程流水线",
         "kind": "software",
-        "description": "接需求 → 方案 → 实现 → 测试 → 评审 → 验收 → 发布 → 复盘（8 步）",
+        "description": "接需求 → 立项 → 4轮研讨 → 黑板拆解 → 生产装配 → 激光质检 → 验收 → 出货 → 复盘（9 步）",
         "nodes": [
             _node("intake", "接需求", "product", "需求可交付"),
-            _node("wbs", "拆解与方案", "architect", "DAG 无环且依赖可满足"),
-            _node("build", "实现开发", "dev", "代码可运行"),
-            _node("test", "联调测试", "qa", "测试报告通过"),
-            _node("review", "合规评审", "audit", "无合规风险", optional=True),
-            _node("accept", "验收", "product", "验收通过"),
-            _node("release", "发布", "ops", "发布清单齐全", optional=True),
-            _node("retro", "复盘", "product", "含改进项", optional=True),
+            _node("charter", "立项界标", "product", "立项书章节完整"),
+            _node("workshop", "4轮研讨会", "architect", "全员留下风险意见"),
+            _node("wbs", "黑板拆解", "architect", "DAG 无环且依赖可满足"),
+            _node("build", "生产装配", "dev", "代码可运行"),
+            _node("test", "脉冲激光质检", "qa", "测试报告通过"),
+            _node("accept", "验收网关", "product", "验收通过"),
+            _node("release", "出货港", "ops", "发布清单齐全", optional=True),
+            _node("retro", "紫晶金库", "product", "含改进项", optional=True),
         ],
     },
     "FLOW-ANALYSIS": {
@@ -162,6 +163,7 @@ def ensure(conn: sqlite3.Connection) -> None:
         pcols = {r[1] for r in conn.execute("PRAGMA table_info(projects)")}
         if "flow_id" not in pcols:
             conn.execute("ALTER TABLE projects ADD COLUMN flow_id TEXT")
+    conn.execute("DELETE FROM flow_templates WHERE id='FLOW-STANDARD'")
     for fid, tpl in PRESETS.items():
         conn.execute(
             "INSERT OR IGNORE INTO flow_templates (id,name,kind,description,nodes)"
@@ -182,6 +184,8 @@ def templates(conn) -> list[dict]:
 
 def template(conn, flow_id: str) -> dict | None:
     ensure(conn)
+    if flow_id == "FLOW-STANDARD":
+        flow_id = "FLOW-SOFTWARE"
     row = conn.execute("SELECT * FROM flow_templates WHERE id=?", (flow_id,)).fetchone()
     if row is None:
         return None

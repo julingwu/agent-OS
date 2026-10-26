@@ -65,11 +65,17 @@ def _record(conn, *, tenant_id: str, entity: str, event: str, ref: str,
 
 
 def _dispatch(tenant_id: str, notify_id: str, event: str, body: str) -> None:
+    from .db import db_path, open_conn
+
+    # v5.3：投递是异步的，必须绑定「入队时」的库。若等到执行时才读 DB_PATH，
+    # 进程内换库场景（测试的下一个用例）会把通知写进别人的库，
+    # 并在对方建库时抢锁导致 database is locked。
+    owner_db = db_path()
+
     def deliver() -> None:
-        from .db import get_conn
         from .wecom import robot
         try:
-            with get_conn() as conn:
+            with open_conn(owner_db) as conn:
                 out = robot.push(conn, tenant_id=tenant_id, event=event, markdown=body)
                 conn.execute("UPDATE notifications SET state=?, detail=? WHERE id=?",
                              ("sent" if out.get("ok") else "failed",
@@ -78,8 +84,7 @@ def _dispatch(tenant_id: str, notify_id: str, event: str, body: str) -> None:
         except Exception as exc:                 # noqa: BLE001 - 后台线程不能炸
             log.warning("notify delivery failed: %s", exc)
             try:
-                from .db import get_conn
-                with get_conn() as conn:
+                with open_conn(owner_db) as conn:
                     conn.execute("UPDATE notifications SET state='failed', detail=? WHERE id=?",
                                  (str(exc)[:500], notify_id))
                     conn.commit()

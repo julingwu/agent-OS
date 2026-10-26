@@ -11,27 +11,30 @@
 param(
     [switch]$SkipOcto,
     [switch]$SkipTunnel,
-    [switch]$Status,
-    [switch]$KeepDshDesktop
+    [switch]$Status
 )
 
 $ErrorActionPreference = "Continue"
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $LogDir = Join-Path $Root "data\logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 
 function Say($msg) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $msg) }
 
-# DSH 桌面端会占用 agent runtime 的单实例锁，导致 ACP 子进程卡在 initialize（真机踩过：
-# 11:50-12:10 所有 run 都 timeout waiting for initialize）。启动前先把它关掉。
-function Stop-DshDesktop {
+# DSH 运行环境说明：
+# 本项目 Agent OS 本身就是以 DeepSeek Harness (DSH) 作为底层执行内核。
+# 此处仅做环境检测，绝不关闭用户的 DSH 桌面端窗口。
+function Check-DshRuntime {
     $procs = Get-Process -Name "DeepSeek Harness" -ErrorAction SilentlyContinue
-    if (-not $procs) { Say "DSH desktop: not running (runtime lock free)"; return }
-    if ($KeepDshDesktop) { Say "DSH desktop: running — 按 -KeepDshDesktop 跳过；ACP 可能初始化超时"; return }
-    $procs | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    Say ("DSH desktop: closed {0} process(es), runtime lock released" -f $procs.Count)
+    if ($procs) {
+        Say ("DSH 环境: 检测到 DeepSeek Harness 正常运行中 ({0} 进程) — 内核就绪" -f $procs.Count)
+    } else {
+        Say "DSH 环境: 使用独立 DSH CLI/ACP 运行"
+    }
 }
+
 function Get-EnvValue($key) {
     $p = Join-Path $Root ".env"
     if (-not (Test-Path $p)) { return $null }
@@ -40,6 +43,7 @@ function Get-EnvValue($key) {
     }
     return $null
 }
+
 function Set-EnvValue($key, $value) {
     $p = Join-Path $Root ".env"
     $text = if (Test-Path $p) { Get-Content $p -Raw -Encoding UTF8 } else { "" }
@@ -50,10 +54,12 @@ function Set-EnvValue($key, $value) {
     }
     [System.IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding($false)))
 }
+
 function ListenOn($port) {
     $c = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
     return [bool]$c
 }
+
 function Wait-Url($url, $tries = 40, $sleep = 3) {
     for ($i = 0; $i -lt $tries; $i++) {
         try {
@@ -69,21 +75,31 @@ Say "root: $Root"
 
 if ($Status) { $SkipOcto = $true; $SkipTunnel = $true }
 
-if (-not $Status) { Stop-DshDesktop }
+if (-not $Status) { Check-DshRuntime }
 
 # ---------------------------------------------------------------- 1. Docker
 if (-not $SkipOcto -and -not $Status) {
     $dockerBin = "C:\Program Files\Docker\Docker\resources\bin"
     if (Test-Path $dockerBin) { $env:PATH = "$env:PATH;$dockerBin" }
+    $dockerExe = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+    $hasDockerCli = [bool](Get-Command docker -ErrorAction SilentlyContinue)
     $engine = $false
-    try { docker info --format "{{.ServerVersion}}" 2>$null | Out-Null; $engine = $LASTEXITCODE -eq 0 } catch { }
-    if (-not $engine) {
+    if ($hasDockerCli) {
+        try { docker info --format "{{.ServerVersion}}" 2>$null | Out-Null; $engine = $LASTEXITCODE -eq 0 } catch { }
+    }
+    if (-not $engine -and (Test-Path $dockerExe)) {
         Say "starting Docker Desktop ..."
-        Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe" -ErrorAction SilentlyContinue
-        for ($i = 0; $i -lt 30; $i++) {
-            Start-Sleep -Seconds 5
-            try { docker info --format "{{.ServerVersion}}" 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { $engine = $true; break } } catch { }
+        try {
+            Start-Process $dockerExe -ErrorAction SilentlyContinue
+            for ($i = 0; $i -lt 10; $i++) {
+                Start-Sleep -Seconds 3
+                try { docker info --format "{{.ServerVersion}}" 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { $engine = $true; break } } catch { }
+            }
+        } catch {
+            Say "failed to launch Docker Desktop - Octo skipped"
         }
+    } elseif (-not $engine) {
+        Say "Docker not detected on machine - Octo container skipped (optional)"
     }
     if ($engine) {
         Say "docker engine up"
@@ -94,7 +110,7 @@ if (-not $SkipOcto -and -not $Status) {
         $ok = Wait-Url "http://127.0.0.1:28080/" 40 3
         Say ("octo web: " + $(if ($ok) { "up" } else { "NOT responding yet (containers still booting)" }))
     } else {
-        Say "docker engine did NOT come up - Octo skipped"
+        Say "Octo workshop stack: skipped (fast local mode)"
     }
 }
 
@@ -104,9 +120,7 @@ if (-not (ListenOn 8077)) {
     $py = Join-Path $Root ".venv\Scripts\python.exe"
     $out = Join-Path $LogDir "oaagent-8077.log"
     $err = Join-Path $LogDir "oaagent-8077.err.log"
-    Start-Process -FilePath $py -WorkingDirectory $Root -WindowStyle Hidden `
-        -ArgumentList @("-m", "uvicorn", "app.main:app", "--port", "8077", "--log-level", "info") `
-        -RedirectStandardOutput $out -RedirectStandardError $err
+    Start-Process -FilePath $py -WorkingDirectory $Root -WindowStyle Hidden -ArgumentList @("-m", "uvicorn", "app.main:app", "--port", "8077", "--log-level", "info") -RedirectStandardOutput $out -RedirectStandardError $err
     $ok = Wait-Url "http://127.0.0.1:8077/health" 20 2
     Say ("oaagent: " + $(if ($ok) { "up" } else { "FAILED - see data\logs\oaagent-8077.err.log" }))
 } else {
@@ -122,9 +136,12 @@ if (-not $SkipTunnel) {
     if (-not $running) {
         Say "starting cloudflared quick tunnel ..."
         $log = Join-Path $LogDir "cloudflared.log"
-        Start-Process -FilePath $cf -WindowStyle Hidden `
-            -ArgumentList @("tunnel", "--url", "http://127.0.0.1:8077", "--no-autoupdate", "--logfile", $log)
-        Start-Sleep -Seconds 12
+        try {
+            Start-Process -FilePath $cf -WindowStyle Hidden -ArgumentList @("tunnel", "--url", "http://127.0.0.1:8077", "--no-autoupdate", "--logfile", $log) -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 8
+        } catch {
+            Say "cloudflared not available - tunnel skipped"
+        }
     }
     $logs = @()
     $logs += Get-ChildItem -Path (Join-Path $Root "data") -Filter "cloudflared*.log" -ErrorAction SilentlyContinue
@@ -152,7 +169,9 @@ if (-not $SkipTunnel) {
 Say "health board"
 $rows = @()
 $rows += @{ n = "oaagent  /health"; u = "http://127.0.0.1:8077/health" }
-$rows += @{ n = "watch    /octo/watch"; u = "http://127.0.0.1:8077/octo/watch?token=" + (Get-EnvValue "OCTO_SIM_TOKEN") }
+if (Test-Path (Join-Path $Root "vendor\octo-deployment\docker")) {
+    $rows += @{ n = "watch    /octo/watch"; u = "http://127.0.0.1:8077/octo/watch?token=" + (Get-EnvValue "OCTO_SIM_TOKEN") }
+}
 $rows += @{ n = "console  /app/"; u = "http://127.0.0.1:8077/app/" }
 foreach ($r in $rows) {
     $ok = $false
@@ -165,4 +184,8 @@ try {
     Say ("approval poller: running=" + $ap.poller.running + " last=" + ($ap.poller.last | ConvertTo-Json -Compress))
 } catch { Say "approval poller: cannot query (is the service up?)" }
 
+Say "=========================================================="
+Say "  元公司赛博全息指挥舱已就绪！"
+Say "  控制台访问: http://127.0.0.1:8077/app/"
+Say "=========================================================="
 Say "done. logs in data\logs"

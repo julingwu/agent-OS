@@ -230,11 +230,74 @@ TEMPLATE_WEB = [
     ),
 ]
 
+TEMPLATE_RESEARCH = [
+    dict(
+        criterion="调研/文稿交付物存在、可读且非空（≥200 字节）",
+        check_type="script_exec",
+        check_ref=lambda lo, hi, needle=None: json.dumps({"script": "file_exists.py", "min_bytes": 200, "name": ".md"}),
+        is_blocking=1, evidence_required=1, acceptance_layer="L2", is_deterministic=1,
+    ),
+    dict(
+        criterion="文档结构完整（包含一级或二级结构化标题 # 或 ##）",
+        check_type="script_exec",
+        check_ref=lambda lo, hi, needle=None: json.dumps({"script": "markdown_structure.py", "min_bytes": 200}),
+        is_blocking=1, evidence_required=1, acceptance_layer="L2", is_deterministic=1,
+    ),
+    dict(
+        criterion="不含广告法禁用词（最好/最佳/第一品牌/绝对/100%/根治/治愈…）",
+        check_type="rule_auto",
+        check_ref=lambda lo, hi, needle=None: "banned",
+        is_blocking=1, evidence_required=1, acceptance_layer="L0", is_deterministic=1,
+    ),
+    dict(
+        criterion="调研结论详实、事实逻辑严密（人工判定，须附原文片段）",
+        check_type="human_check",
+        check_ref=lambda lo, hi, needle=None: None,
+        is_blocking=1, evidence_required=1, acceptance_layer="L1", is_deterministic=0,
+    ),
+]
+
+TEMPLATE_ANALYST = [
+    dict(
+        criterion="数据分析报告存在且非空（≥200 字节）",
+        check_type="script_exec",
+        check_ref=lambda lo, hi, needle=None: json.dumps({"script": "file_exists.py", "min_bytes": 200}),
+        is_blocking=1, evidence_required=1, acceptance_layer="L2", is_deterministic=1,
+    ),
+    dict(
+        criterion="数据结构规范（有效 JSON/CSV 或包含数据表格与数值分析结论）",
+        check_type="script_exec",
+        check_ref=lambda lo, hi, needle=None: json.dumps({"script": "data_structure.py", "min_bytes": 200}),
+        is_blocking=1, evidence_required=1, acceptance_layer="L2", is_deterministic=1,
+    ),
+    dict(
+        criterion="数据分析结论明确且有数据论据支撑",
+        check_type="rule_auto",
+        check_ref=lambda lo, hi, needle=None: "contains_any:分析|结论|数据|指标|趋势|比例|汇总|同比|环比",
+        is_blocking=1, evidence_required=0, acceptance_layer="L0", is_deterministic=1,
+    ),
+    dict(
+        criterion="指标口径统一、数值具备业务可解释性（人工复核）",
+        check_type="human_check",
+        check_ref=lambda lo, hi, needle=None: None,
+        is_blocking=1, evidence_required=1, acceptance_layer="L1", is_deterministic=0,
+    ),
+]
+
 # 本地脚本（不联网）：不应该拿「必须发网络请求」去卡它 —— FizzBuzz 也会被判 failed。
 TEMPLATE_CODE_LOCAL = [t for t in TEMPLATE_CODE if "网络请求" not in t["criterion"]]
 
-TEMPLATE_BY_KEY = {"content": TEMPLATE, "code": TEMPLATE_CODE, "code_local": TEMPLATE_CODE_LOCAL,
-                   "review": TEMPLATE_REVIEW, "finance": TEMPLATE_FINANCE, "web": TEMPLATE_WEB}
+TEMPLATE_BY_KEY = {
+    "content": TEMPLATE,
+    "code": TEMPLATE_CODE,
+    "code_local": TEMPLATE_CODE_LOCAL,
+    "review": TEMPLATE_REVIEW,
+    "finance": TEMPLATE_FINANCE,
+    "web": TEMPLATE_WEB,
+    "research": TEMPLATE_RESEARCH,
+    "analyst": TEMPLATE_ANALYST,
+    "data": TEMPLATE_ANALYST,
+}
 
 NET_WORDS = ("抓取", "爬虫", "下载", "接口", "api", "请求", "汇率", "股价", "行情", "http", "url")
 
@@ -259,8 +322,44 @@ def keyword_groups(text: str) -> list[list[str]]:
     return [["说明", "方案"], ["步骤", "流程"], ["结果", "交付"]]
 
 
+# v5.3 TASK-4.1：role_tag → (template, task_type, pack) 的推断表。
+# 只在调用方**没有**声明 pack_id（或声明的 pack 解析不到）时才使用。
+ROLE_PACKS = {
+    "research": (TEMPLATE_RESEARCH, "research_write", "research-v1"),
+    "researcher": (TEMPLATE_RESEARCH, "research_write", "research-v1"),
+    "data": (TEMPLATE_ANALYST, "analyst_write", "analyst-v1"),
+    "analyst": (TEMPLATE_ANALYST, "analyst_write", "analyst-v1"),
+    "content": (TEMPLATE_RESEARCH, "content_write", "content-v1"),
+    "product": (TEMPLATE_RESEARCH, "content_write", "content-v1"),
+    "dev": (TEMPLATE_CODE_LOCAL, "code_write", "code-local-v1"),
+    "ops": (TEMPLATE_CODE_LOCAL, "code_write", "code-local-v1"),
+    "qa": (TEMPLATE_REVIEW, "review_write", "review-v1"),
+    "audit": (TEMPLATE_REVIEW, "review_write", "review-v1"),
+    "legal": (TEMPLATE_REVIEW, "review_write", "review-v1"),
+}
+
+
+def _pack_by_id(conn: sqlite3.Connection, pack_id: str | None):
+    """显式声明的 pack 解析：别名或 packs 表 active 记录命中才算数，否则 None。"""
+    if not pack_id:
+        return None
+    if pack_id in ("research-v1", "research"):
+        return TEMPLATE_RESEARCH, "research_write", pack_id
+    if pack_id in ("analyst-v1", "data-v1"):
+        return TEMPLATE_ANALYST, "analyst_write", pack_id
+    prow = conn.execute("SELECT * FROM packs WHERE id = ? AND state = 'active'",
+                        (pack_id,)).fetchone()
+    if prow is None:
+        return None
+    # code-local-v1 与 code-v1 共用 template='code'，但判据不同：本地脚本不查联网
+    template = (TEMPLATE_CODE_LOCAL if pack_id == "code-local-v1"
+                else TEMPLATE_BY_KEY[prow["template"]])
+    return template, f"{prow['template']}_write", pack_id
+
+
 def generate(conn: sqlite3.Connection, text: str, legal_entity_id: str = "LE-GROUP-HQ",
-             pack_id: str | None = None, tenant_id: str | None = None) -> dict:
+             pack_id: str | None = None, tenant_id: str | None = None,
+             role_tag: str | None = None) -> dict:
     from ..tenancy import checked_entity_tenant
     tenant_id = checked_entity_tenant(conn, legal_entity_id, tenant_id)
     text = (text or "").strip()
@@ -268,18 +367,21 @@ def generate(conn: sqlite3.Connection, text: str, legal_entity_id: str = "LE-GRO
         raise ValueError("text is empty")
     lo, hi = _target_words(text)
     ttype = task_type_of(text)
-    if pack_id:
-        prow = conn.execute("SELECT * FROM packs WHERE id = ? AND state = 'active'",
-                            (pack_id,)).fetchone()
-        if prow is None:
-            raise ValueError(f"unknown pack {pack_id}")
-        # code-local-v1 与 code-v1 共用 template='code'，但判据不同：本地脚本不查联网
-        template = (TEMPLATE_CODE_LOCAL if pack_id == "code-local-v1"
-                    else TEMPLATE_BY_KEY[prow["template"]])
-        ttype, pack = f"{prow['template']}_write", pack_id
-        tpl_override = True
+    # v5.3 TASK-4.1：优先级 = 显式 pack_id（解析成功）> role_tag 推断 > 文本启发式。
+    # 旧顺序反了：pipeline.execute_build 同时传 pack_id=web-v1 与 role_tag=dev，
+    # role 分支抢先命中，把「页面交付」判成了「python 脚本交付」（py_syntax 误杀）。
+    resolved = _pack_by_id(conn, pack_id)
+    if resolved is not None:
+        template, ttype, pack = resolved
+        tpl_override, pack_source = True, "explicit_pack"
+    elif role_tag and role_tag.lower() in ROLE_PACKS:
+        template, ttype, pack = ROLE_PACKS[role_tag.lower()]
+        tpl_override, pack_source = True, "role_tag"
     else:
-        tpl_override = False
+        tpl_override, pack_source = False, "heuristic"
+    if not tpl_override and pack_id:
+        # 显式声明了却解析不到，且 role_tag 也给不出替代：保持旧的严格报错。
+        raise ValueError(f"unknown pack {pack_id}")
     if not tpl_override:
         template = {"code_write": TEMPLATE_CODE, "review_write": TEMPLATE_REVIEW,
                     "finance_write": TEMPLATE_FINANCE,
@@ -327,7 +429,8 @@ def generate(conn: sqlite3.Connection, text: str, legal_entity_id: str = "LE-GRO
         layer="system",
         action="create_task",
         target=task_id,
-        payload={"text": text, "word_range": [lo, hi], "task_type": ttype, "needle": needle},
+        payload={"text": text, "word_range": [lo, hi], "task_type": ttype, "needle": needle,
+                 "pack_id": pack, "pack_source": pack_source, "role_tag": role_tag},
         response={"criteria_count": len(created), "pack": pack},
     )
     return {
@@ -336,6 +439,7 @@ def generate(conn: sqlite3.Connection, text: str, legal_entity_id: str = "LE-GRO
         "title": text[:120],
         "task_type": ttype,
         "pack_id": pack,
+        "pack_source": pack_source,
         "word_range": [lo, hi],
         "criteria": criteria_of(conn, task_id),
     }
@@ -349,4 +453,4 @@ def criteria_of(conn: sqlite3.Connection, task_id: str) -> list[dict]:
 
 
 def budget_limit() -> int:
-    return int(os.environ.get("M0_BUDGET_LIMIT_TOKENS", "200000"))
+    return int(os.environ.get("M0_BUDGET_LIMIT_TOKENS", "500000"))

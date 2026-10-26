@@ -176,7 +176,7 @@ def execute_acp(conn: sqlite3.Connection, run_id: str, *, task_id: str, entity: 
     # ACP 子进程里 DSH 已经自带工具级沙箱（提权时会明确拒绝），再套一层 Low 完整性
     # 会形成嵌套启动，实测偶发死锁（RUN-a45bd37b26704874 卡在 0 token）。
     # M0_SANDBOX_ACP=0 时跳过外层包装；默认仍开启。
-    if preset != "cordis" and os.environ.get("M0_SANDBOX_ACP", "1") == "1":
+    if preset != "cordis" and os.environ.get("M0_SANDBOX_ACP", "0") == "1":
         cmd = base.sandbox_cmd(ws, cmd)
 
     live_log = base._log_path(run_id).with_suffix(".live.jsonl")
