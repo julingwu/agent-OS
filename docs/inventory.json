@@ -1,0 +1,1255 @@
+{
+ "api": {
+  "total_paths": 167,
+  "by_tag": {
+   "(none)": [
+    "GET    /",
+    "GET    /api/telemetry/recent",
+    "GET    /health",
+    "GET    /review"
+   ],
+   "tasks": [
+    "GET    /audit/by-key/{key}",
+    "GET    /locks",
+    "GET    /tasks",
+    "GET    /tasks/{task_id}",
+    "GET    /tasks/{task_id}/timeline",
+    "POST   /criteria/{criterion_id}/check",
+    "POST   /runs/{run_id}/execute",
+    "POST   /tasks/from_sentence",
+    "POST   /tasks/{task_id}/acceptance/run",
+    "POST   /tasks/{task_id}/rejudge",
+    "POST   /tasks/{task_id}/retry"
+   ],
+   "decisions": [
+    "GET    /decision-rules",
+    "GET    /decisions",
+    "GET    /decisions/{decision_id}",
+    "POST   /decisions",
+    "POST   /decisions/{decision_id}/decide",
+    "POST   /decisions/{decision_id}/evaluate"
+   ],
+   "mcp-exchange": [
+    "GET    /mcp-exchange/export/{pack_id}",
+    "GET    /mcp-exchange/packs",
+    "GET    /mcp-exchange/tools",
+    "POST   /mcp-exchange/hire-remote",
+    "POST   /mcp-exchange/import",
+    "POST   /mcp-exchange/rpc"
+   ],
+   "memory": [
+    "GET    /memory",
+    "GET    /memory/{memory_id}",
+    "POST   /memory"
+   ],
+   "octo": [
+    "GET    /octo/artifacts",
+    "GET    /octo/status",
+    "GET    /octo/watch",
+    "POST   /octo/chains/reset",
+    "POST   /octo/demo/ceo_group",
+    "POST   /octo/mute/{bot_uid}",
+    "POST   /octo/runner/start",
+    "POST   /octo/runner/stop"
+   ],
+   "reports": [
+    "GET    /packs",
+    "GET    /reports/usage"
+   ],
+   "relay": [
+    "POST   /relay/run"
+   ],
+   "ui-ops": [
+    "DELETE /ui/jobs/{job_id}",
+    "GET    /ui/about",
+    "GET    /ui/alerts",
+    "GET    /ui/jobs",
+    "POST   /ui/alerts/{alert_id}/ack",
+    "POST   /ui/jobs",
+    "POST   /ui/jobs/{job_id}/run"
+   ],
+   "ui-admin": [
+    "DELETE /ui/account/preferences/{key}",
+    "DELETE /ui/departments/{dept_id}",
+    "DELETE /ui/files/{artifact_id}",
+    "DELETE /ui/groups/{chat_id}/members/{employee_id}",
+    "DELETE /ui/kb/{doc_id}",
+    "GET    /ui/account",
+    "GET    /ui/departments",
+    "GET    /ui/files",
+    "GET    /ui/files/{artifact_id}/download",
+    "GET    /ui/files/{artifact_id}/preview",
+    "GET    /ui/groups/{chat_id}/members",
+    "GET    /ui/kb",
+    "GET    /ui/settings",
+    "PATCH  /ui/departments/{dept_id}",
+    "PATCH  /ui/employees/{employee_id}",
+    "POST   /ui/account/secret",
+    "POST   /ui/departments",
+    "POST   /ui/employees/{employee_id}/fire",
+    "POST   /ui/files/batch-delete",
+    "POST   /ui/files/purge-missing",
+    "POST   /ui/files/{artifact_id}/preview-ticket",
+    "POST   /ui/groups/{chat_id}/leave",
+    "POST   /ui/groups/{chat_id}/members",
+    "POST   /ui/kb",
+    "PUT    /ui/account/preferences",
+    "PUT    /ui/settings"
+   ],
+   "ui": [
+    "DELETE /ui/chats/{chat_id}",
+    "DELETE /ui/chats/{chat_id}/messages",
+    "DELETE /ui/evals/batches/{batch_id}",
+    "DELETE /ui/evals/sets/{set_id}",
+    "DELETE /ui/flow-templates/{flow_id}",
+    "DELETE /ui/projects/{project_id}",
+    "DELETE /ui/roles/{role_id}",
+    "DELETE /ui/tasks/{task_id}",
+    "GET    /ui/approvals",
+    "GET    /ui/budgets/approvals",
+    "GET    /ui/budgets/projects",
+    "GET    /ui/chats",
+    "GET    /ui/chats/{chat_id}/messages",
+    "GET    /ui/chats/{chat_id}/stream",
+    "GET    /ui/dev-login",
+    "GET    /ui/employees",
+    "GET    /ui/evals",
+    "GET    /ui/evals/batches/{batch_id}",
+    "GET    /ui/finops",
+    "GET    /ui/flow-templates",
+    "GET    /ui/kernel/status",
+    "GET    /ui/live/{run_id}",
+    "GET    /ui/me",
+    "GET    /ui/org",
+    "GET    /ui/projects",
+    "GET    /ui/projects/{project_id}",
+    "GET    /ui/projects/{project_id}/budget",
+    "GET    /ui/projects/{project_id}/release/files",
+    "GET    /ui/projects/{project_id}/release/preview/{filename}",
+    "GET    /ui/projects/{project_id}/release/zip",
+    "GET    /ui/projects/{project_id}/stages/{stage_key}",
+    "GET    /ui/projects/{project_id}/stages/{stage_key}/files/{delivery_id}",
+    "GET    /ui/rbac/approvals",
+    "GET    /ui/rbac/resources",
+    "GET    /ui/resources",
+    "GET    /ui/roles",
+    "GET    /ui/runs/{run_id}/diagnosis",
+    "GET    /ui/runs/{run_id}/live-stream",
+    "GET    /ui/runs/{run_id}/trace",
+    "GET    /ui/tasks",
+    "GET    /ui/tasks/{task_id}",
+    "GET    /ui/traces/spans/{span_id}/audit",
+    "PATCH  /ui/chats/{chat_id}",
+    "PATCH  /ui/projects/{project_id}",
+    "PATCH  /ui/roles/{role_id}",
+    "POST   /ui/approvals/{approval_id}",
+    "POST   /ui/budgets/approvals/{approval_id}",
+    "POST   /ui/chats/{chat_id}/attachments",
+    "POST   /ui/chats/{chat_id}/messages",
+    "POST   /ui/designs/{task_id}/approve",
+    "POST   /ui/designs/{task_id}/reject",
+    "POST   /ui/evals/baselines",
+    "POST   /ui/evals/regress",
+    "POST   /ui/evals/{set_id}/run",
+    "POST   /ui/flow-templates",
+    "POST   /ui/groups",
+    "POST   /ui/groups/{chat_id}/request_role",
+    "POST   /ui/groups/{chat_id}/role_requests/{message_id}/decide",
+    "POST   /ui/kernel/mode",
+    "POST   /ui/login",
+    "POST   /ui/logout",
+    "POST   /ui/members",
+    "POST   /ui/projects",
+    "POST   /ui/projects/batch-delete",
+    "POST   /ui/projects/{project_id}/resume",
+    "POST   /ui/projects/{project_id}/stages/{stage_key}/assign",
+    "POST   /ui/rbac/approvals/{approval_id}",
+    "POST   /ui/rbac/check",
+    "POST   /ui/rbac/grant",
+    "POST   /ui/rbac/guard",
+    "POST   /ui/rbac/resources",
+    "POST   /ui/rbac/revoke",
+    "POST   /ui/resources/drill",
+    "POST   /ui/resources/seed",
+    "POST   /ui/roles",
+    "POST   /ui/runs/{run_id}/kill",
+    "POST   /ui/tasks/{task_id}/action",
+    "POST   /ui/tasks/{task_id}/retry",
+    "POST   /ui/tools/call"
+   ],
+   "governance": [
+    "DELETE /ui/experiences/{exp_id}",
+    "GET    /ui/experiences",
+    "PATCH  /ui/experiences/{exp_id}",
+    "POST   /ui/experiences",
+    "POST   /ui/experiences/preview",
+    "POST   /ui/experiences/{exp_id}/review",
+    "POST   /ui/projects/{project_id}/retry"
+   ],
+   "housekeeping": [
+    "GET    /ui/maintenance/stats",
+    "POST   /ui/maintenance/purge"
+   ],
+   "extensions": [
+    "DELETE /ui/mcp/{sid}",
+    "GET    /ui/mcp",
+    "GET    /ui/mcp/bindings/{agent_id}",
+    "GET    /ui/notifications",
+    "GET    /ui/smtp",
+    "GET    /ui/wecom/robot",
+    "PATCH  /ui/mcp/{sid}",
+    "POST   /ui/mcp",
+    "POST   /ui/mcp/{sid}/test",
+    "POST   /ui/smtp/test",
+    "POST   /ui/wecom/robot/test",
+    "PUT    /ui/mcp/bindings/{agent_id}",
+    "PUT    /ui/smtp",
+    "PUT    /ui/wecom/robot"
+   ],
+   "verbs": [
+    "POST   /verbs/attach_artifact",
+    "POST   /verbs/emit_event",
+    "POST   /verbs/report_heartbeat",
+    "POST   /verbs/request_arbitration",
+    "POST   /verbs/reserve_budget",
+    "POST   /verbs/spawn_run"
+   ],
+   "wecom": [
+    "GET    /wecom/approval/list",
+    "GET    /wecom/approval/status",
+    "GET    /wecom/callback",
+    "GET    /wecom/outbox",
+    "GET    /wecom/sign",
+    "GET    /wecom/status",
+    "POST   /wecom/approval/create",
+    "POST   /wecom/approval/poll",
+    "POST   /wecom/bind",
+    "POST   /wecom/callback",
+    "POST   /wecom/sign",
+    "POST   /wecom/simulate",
+    "POST   /wecom/simulate/event",
+    "POST   /wecom/watcher/tick"
+   ]
+  }
+ },
+ "modules": [
+  {
+   "path": "app/__init__.py",
+   "loc": 1,
+   "doc": ""
+  },
+  {
+   "path": "app/acceptance/__init__.py",
+   "loc": 29,
+   "doc": "Acceptance package: L0 rules, L1 manual, L2 scripts."
+  },
+  {
+   "path": "app/acceptance/l0_rules.py",
+   "loc": 133,
+   "doc": "L0 rule checks: keyword coverage and advertising-law banned phrases."
+  },
+  {
+   "path": "app/acceptance/l1_manual.py",
+   "loc": 80,
+   "doc": "L1: a human decision with mandatory evidence."
+  },
+  {
+   "path": "app/acceptance/l2_scripts.py",
+   "loc": 72,
+   "doc": "L2: run a script from scripts/l2 in a child process with a hard timeout."
+  },
+  {
+   "path": "app/acceptance_run.py",
+   "loc": 270,
+   "doc": "Acceptance run as a callable, so the relay can drive it without HTTP."
+  },
+  {
+   "path": "app/api/__init__.py",
+   "loc": 1,
+   "doc": ""
+  },
+  {
+   "path": "app/api/decisions.py",
+   "loc": 108,
+   "doc": "Decision package endpoints: create, filter, CEO inbox, decide."
+  },
+  {
+   "path": "app/api/memory.py",
+   "loc": 60,
+   "doc": "Memory endpoints (F2): reads are scoped by entity and pack, not filtered later."
+  },
+  {
+   "path": "app/api/relay.py",
+   "loc": 28,
+   "doc": "Relay endpoint: one call dispatches coder -> reviewer."
+  },
+  {
+   "path": "app/api/reports.py",
+   "loc": 122,
+   "doc": "Usage/report API: tokens, artifacts, success rate — by entity, agent, pack."
+  },
+  {
+   "path": "app/api/tasks.py",
+   "loc": 274,
+   "doc": "Task endpoints: create from one sentence, inspect, run acceptance, execute a run."
+  },
+  {
+   "path": "app/api/verbs.py",
+   "loc": 430,
+   "doc": "The six verbs. `do_*` functions hold the logic so the adapter can call them"
+  },
+  {
+   "path": "app/audit.py",
+   "loc": 60,
+   "doc": "Audit log: the only writer of ai_audit_logs."
+  },
+  {
+   "path": "app/config.py",
+   "loc": 33,
+   "doc": "Minimal .env loader (no extra dependency)."
+  },
+  {
+   "path": "app/db.py",
+   "loc": 138,
+   "doc": "SQLite plumbing: connection, schema bootstrap, per-request transaction."
+  },
+  {
+   "path": "app/decisions.py",
+   "loc": 288,
+   "doc": "Decision packages: the CEO filter, on top of a finance track and an audit track."
+  },
+  {
+   "path": "app/docs.py",
+   "loc": 32,
+   "doc": "Best-effort text extraction for the knowledge base."
+  },
+  {
+   "path": "app/engine/__init__.py",
+   "loc": 1,
+   "doc": ""
+  },
+  {
+   "path": "app/engine/acp_client.py",
+   "loc": 207,
+   "doc": "ACP (Agent Client Protocol) client over stdio."
+  },
+  {
+   "path": "app/engine/dsh_adapter.py",
+   "loc": 818,
+   "doc": "Runner adapter: the shell owns state, DSH is a child process."
+  },
+  {
+   "path": "app/engine/kernel_router.py",
+   "loc": 108,
+   "doc": "Kernel Router: Pluggable Dual-Engine Kernel & Automatic Failover."
+  },
+  {
+   "path": "app/engine/lowil.py",
+   "loc": 187,
+   "doc": "给目录打 Low 完整性标签 —— 走 Win32 原生 API，不调用 icacls，不触发 UAC。"
+  },
+  {
+   "path": "app/engine/repair.py",
+   "loc": 151,
+   "doc": "Automatic length repair."
+  },
+  {
+   "path": "app/engine/runner_acp.py",
+   "loc": 521,
+   "doc": "ACP runner: JSON-RPC to `dsh --profile acp`, live usage, cancel-based gate."
+  },
+  {
+   "path": "app/engine/runner_native.py",
+   "loc": 765,
+   "doc": "Native Kernel: In-process high-reliability async/sync LLM Tool-Calling engine."
+  },
+  {
+   "path": "app/engine/sandbox_env.py",
+   "loc": 75,
+   "doc": "Sandbox environment shared by every runner."
+  },
+  {
+   "path": "app/engine/task_generator.py",
+   "loc": 353,
+   "doc": "One sentence -> a task plus the six acceptance criteria of v2 §7."
+  },
+  {
+   "path": "app/errors.py",
+   "loc": 61,
+   "doc": "Business-language error mapping (v3.1)."
+  },
+  {
+   "path": "app/evals.py",
+   "loc": 377,
+   "doc": "离线评测与回归（v2.4）。"
+  },
+  {
+   "path": "app/experience.py",
+   "loc": 457,
+   "doc": "组织经验（v2.4）：把「被驳回的意见」和「研讨会共识」沉淀成可复用记忆。"
+  },
+  {
+   "path": "app/finance.py",
+   "loc": 482,
+   "doc": "V4.3 动态财务预算引擎。"
+  },
+  {
+   "path": "app/finops.py",
+   "loc": 194,
+   "doc": "FinOps：token → 人民币（v2.4）。"
+  },
+  {
+   "path": "app/flows.py",
+   "loc": 679,
+   "doc": "V4.1 流程模板、DAG 规划、黑板与失败诊断。"
+  },
+  {
+   "path": "app/idempotency.py",
+   "loc": 61,
+   "doc": "Idempotency: a key maps to the first response; every later hit replays it."
+  },
+  {
+   "path": "app/identity.py",
+   "loc": 159,
+   "doc": "Request signing (HMAC-SHA256) and identity verification."
+  },
+  {
+   "path": "app/llm.py",
+   "loc": 45,
+   "doc": "最小的 DeepSeek 文本生成封装（非流式）。"
+  },
+  {
+   "path": "app/locks.py",
+   "loc": 104,
+   "doc": "Run-level locks: one run per task, one run per DSH session."
+  },
+  {
+   "path": "app/mailer.py",
+   "loc": 112,
+   "doc": "Tenant-scoped SMTP configuration and explicit administrator test sends."
+  },
+  {
+   "path": "app/main.py",
+   "loc": 176,
+   "doc": "FastAPI entry point for the M0 shell."
+  },
+  {
+   "path": "app/mcp.py",
+   "loc": 389,
+   "doc": "Tenant-admin managed HTTP MCP connections."
+  },
+  {
+   "path": "app/mcp_bridge/__init__.py",
+   "loc": 2,
+   "doc": "MCP Bridge module for MetaCorp Multi-World Exchange."
+  },
+  {
+   "path": "app/mcp_bridge/api.py",
+   "loc": 111,
+   "doc": "FastAPI router for MetaCorp MCP Multi-World Exchange."
+  },
+  {
+   "path": "app/mcp_bridge/mcp_client.py",
+   "loc": 109,
+   "doc": "MCP Client for cross-company hiring and external MetaCorp integration."
+  },
+  {
+   "path": "app/mcp_bridge/mcp_server.py",
+   "loc": 199,
+   "doc": "MCP Server implementation for MetaCorp Multi-World Exchange."
+  },
+  {
+   "path": "app/mcp_bridge/pack_exporter.py",
+   "loc": 179,
+   "doc": "Blueprint & Experience Pack Exporter/Importer for MetaCorp Exchange."
+  },
+  {
+   "path": "app/memory.py",
+   "loc": 103,
+   "doc": "F2 memory isolation."
+  },
+  {
+   "path": "app/models.py",
+   "loc": 117,
+   "doc": "Request/response models for the six verbs and the task endpoints."
+  },
+  {
+   "path": "app/notify.py",
+   "loc": 185,
+   "doc": "Business event push (v4.0): project closed 9/9 and red-line block."
+  },
+  {
+   "path": "app/octo/__init__.py",
+   "loc": 2,
+   "doc": "Octo (OCTO) channel bridge: bot events -> shell tasks -> group replies."
+  },
+  {
+   "path": "app/octo/agent.py",
+   "loc": 70,
+   "doc": "PM agent: turn one big ask into a group + a dispatch plan."
+  },
+  {
+   "path": "app/octo/api.py",
+   "loc": 166,
+   "doc": "Octo bridge endpoints: status, demo, mute, scoped artifacts."
+  },
+  {
+   "path": "app/octo/client.py",
+   "loc": 94,
+   "doc": "Octo Bot API client (send + long-poll events) and the human-token group API."
+  },
+  {
+   "path": "app/octo/guard.py",
+   "loc": 114,
+   "doc": "Loop guard + per-bot budget."
+  },
+  {
+   "path": "app/octo/inbox.py",
+   "loc": 109,
+   "doc": "Read new Octo messages straight from MySQL."
+  },
+  {
+   "path": "app/octo/intent.py",
+   "loc": 114,
+   "doc": "Intent recognition for the Octo bridge."
+  },
+  {
+   "path": "app/octo/runner.py",
+   "loc": 229,
+   "doc": "Event loop: Octo messages -> shell tasks -> replies, with the loop guard in front."
+  },
+  {
+   "path": "app/octo/tools.py",
+   "loc": 44,
+   "doc": "Tools the PM agent may call. Each one is a thin, auditable wrapper."
+  },
+  {
+   "path": "app/pipeline.py",
+   "loc": 1501,
+   "doc": "v1.5 产线：项目 / 阶段 / 闸门 / 研讨会 / WBS。"
+  },
+  {
+   "path": "app/pipeline_llm.py",
+   "loc": 158,
+   "doc": "产线文档的模型生成层（v1.6）。"
+  },
+  {
+   "path": "app/policy.py",
+   "loc": 67,
+   "doc": "Tool-call policy for ACP runs."
+  },
+  {
+   "path": "app/rbac.py",
+   "loc": 656,
+   "doc": "RBAC + 高危工具审批 + 断点续跑（v2.3）。"
+  },
+  {
+   "path": "app/redline.py",
+   "loc": 62,
+   "doc": "Hard red lines (v3.2): L0 compliance, not a suggestion."
+  },
+  {
+   "path": "app/relay.py",
+   "loc": 109,
+   "doc": "Two-agent relay: coder writes, reviewer checks — the shell dispatches."
+  },
+  {
+   "path": "app/resources.py",
+   "loc": 254,
+   "doc": "资源目录（RES-DEV / RES-FIN）的落地、展示与越权演练（v2.3）。"
+  },
+  {
+   "path": "app/role_alignment.py",
+   "loc": 117,
+   "doc": "Role guidance injected into agent prompts; authorization remains in RBAC."
+  },
+  {
+   "path": "app/state_machine.py",
+   "loc": 71,
+   "doc": "The state machine. The database trigger mirrors this table (defence in depth)."
+  },
+  {
+   "path": "app/telemetry.py",
+   "loc": 95,
+   "doc": "Real-time Telemetry Bus for Agent OS / MetaCorp."
+  },
+  {
+   "path": "app/tenancy.py",
+   "loc": 61,
+   "doc": "Workspace tenant context, inherited from verified identities and entities."
+  },
+  {
+   "path": "app/tenant.py",
+   "loc": 161,
+   "doc": "Tenant (legal entity) helpers: every data access goes through here."
+  },
+  {
+   "path": "app/tools_acl.py",
+   "loc": 71,
+   "doc": "Tool ACL：角色绑定的工具在执行期真正拦截。"
+  },
+  {
+   "path": "app/trace.py",
+   "loc": 254,
+   "doc": "全链路 Trace（v2.3）：一次 Run 的分段耗时与 token。"
+  },
+  {
+   "path": "app/ui/access.py",
+   "loc": 114,
+   "doc": "Shared UI identity/ownership checks; tenant and entity checks are cumulative."
+  },
+  {
+   "path": "app/ui/admin.py",
+   "loc": 841,
+   "doc": "v1.1 管理面：群组/成员、员工、设置、文件库、知识库、告警、定时任务。"
+  },
+  {
+   "path": "app/ui/api.py",
+   "loc": 2855,
+   "doc": "BFF for the self-hosted console."
+  },
+  {
+   "path": "app/ui/approval_access.py",
+   "loc": 72,
+   "doc": "UI approval access stays within the administrator's writable entity."
+  },
+  {
+   "path": "app/ui/approval_flow.py",
+   "loc": 268,
+   "doc": "审批流：卡片、企微推送后的站内状态、批准后的断点续跑（v2.3）。"
+  },
+  {
+   "path": "app/ui/artifacts.py",
+   "loc": 25,
+   "doc": "Canonical file identity for console artifact lists and soft deletion."
+  },
+  {
+   "path": "app/ui/dispatcher.py",
+   "loc": 237,
+   "doc": "CEO 调度台：老板的模糊需求 → 标签 → 流程规划 → 挑人建群 → 派活。"
+  },
+  {
+   "path": "app/ui/extensions.py",
+   "loc": 192,
+   "doc": "Admin-only MCP and SMTP settings with active identity and tenant checks."
+  },
+  {
+   "path": "app/ui/governance.py",
+   "loc": 164,
+   "doc": "Scoped human review for organization knowledge and project recovery."
+  },
+  {
+   "path": "app/ui/housekeeping.py",
+   "loc": 256,
+   "doc": "系统维护：找出并清理「只增不减」的历史残留。"
+  },
+  {
+   "path": "app/ui/intel.py",
+   "loc": 213,
+   "doc": "Agent 的「记忆 / 上下文 / 查库」三件套。"
+  },
+  {
+   "path": "app/ui/ops.py",
+   "loc": 240,
+   "doc": "v1.1 运维面：告警、定时任务、关于。"
+  },
+  {
+   "path": "app/ui/pm.py",
+   "loc": 100,
+   "doc": "项目制协作：PM 先出方案，老板点头，才允许动代码。"
+  },
+  {
+   "path": "app/ui/roles.py",
+   "loc": 265,
+   "doc": "角色库（Role Library）。"
+  },
+  {
+   "path": "app/ui/router_llm.py",
+   "loc": 70,
+   "doc": "LLM 兜底路由：关键词没命中时，把原话丢给便宜模型换一个 JSON。"
+  },
+  {
+   "path": "app/ui/store.py",
+   "loc": 258,
+   "doc": "Chat storage for the self-hosted console (replaces the Octo bridge)."
+  },
+  {
+   "path": "app/wecom/__init__.py",
+   "loc": 2,
+   "doc": "WeCom (企业微信) middleware: callback crypto, cards, watcher, local simulator."
+  },
+  {
+   "path": "app/wecom/api.py",
+   "loc": 211,
+   "doc": "WeCom callback endpoints + a local simulator (no corp account needed)."
+  },
+  {
+   "path": "app/wecom/approval.py",
+   "loc": 282,
+   "doc": "WeCom native approval (审批) as the sign-off channel."
+  },
+  {
+   "path": "app/wecom/bridge.py",
+   "loc": 316,
+   "doc": "Bridge between WeCom messages/cards and the OA shell API."
+  },
+  {
+   "path": "app/wecom/client.py",
+   "loc": 105,
+   "doc": "WeCom outbound client: access_token cache, text + template-card sends."
+  },
+  {
+   "path": "app/wecom/crypto.py",
+   "loc": 84,
+   "doc": "WeCom (企业微信) callback crypto: signature check + AES-256-CBC envelope."
+  },
+  {
+   "path": "app/wecom/guard.py",
+   "loc": 120,
+   "doc": "Callback hardening: MsgId idempotency (anti-replay) + source-IP allowlist."
+  },
+  {
+   "path": "app/wecom/robot.py",
+   "loc": 208,
+   "doc": "WeCom group robot (群机器人) push: one HTTPS webhook, no corp token needed."
+  },
+  {
+   "path": "app/wecom/sign_page.py",
+   "loc": 133,
+   "doc": "A signed link that lets the chairman sign a human criterion from his phone."
+  },
+  {
+   "path": "app/wecom/watcher.py",
+   "loc": 167,
+   "doc": "Background watcher: turn shell state changes into WeCom cards, exactly once."
+  }
+ ],
+ "loc_app": 22023,
+ "frontend": [
+  {
+   "file": "api.js",
+   "loc": 360
+  },
+  {
+   "file": "App.jsx",
+   "loc": 3569
+  },
+  {
+   "file": "cyber_factorio.css",
+   "loc": 1396
+  },
+  {
+   "file": "CyberFactorioDeck.jsx",
+   "loc": 1105
+  },
+  {
+   "file": "CyberStageDrawer.jsx",
+   "loc": 531
+  },
+  {
+   "file": "DialogAccessibility.jsx",
+   "loc": 140
+  },
+  {
+   "file": "ExtensionsView.jsx",
+   "loc": 242
+  },
+  {
+   "file": "GovernanceView.jsx",
+   "loc": 136
+  },
+  {
+   "file": "main.jsx",
+   "loc": 2
+  },
+  {
+   "file": "MaintenanceView.jsx",
+   "loc": 145
+  },
+  {
+   "file": "mission.css",
+   "loc": 1094
+  },
+  {
+   "file": "MissionControl.jsx",
+   "loc": 957
+  },
+  {
+   "file": "NewTaskModal.jsx",
+   "loc": 179
+  },
+  {
+   "file": "ProjectFlow.jsx",
+   "loc": 350
+  },
+  {
+   "file": "styles.css",
+   "loc": 2656
+  },
+  {
+   "file": "Workspace.jsx",
+   "loc": 120
+  }
+ ],
+ "db": {
+  "tables": 71,
+  "counts": {
+   "acceptance_criteria": 4406,
+   "agent_mcp_tools": 1,
+   "agent_permissions": 3,
+   "agent_traces": 459,
+   "ai_audit_logs": 11460,
+   "ai_employees": 18,
+   "alerts": 16,
+   "artifacts": 1866,
+   "auth_nonces": 327,
+   "budget_approvals": 0,
+   "budget_events": 7,
+   "budgets": 548,
+   "chat_attachments": 1,
+   "chat_members": 44,
+   "chat_messages": 269,
+   "chats": 34,
+   "decision_filter_rules": 9,
+   "decision_finance": 14,
+   "decision_packages": 14,
+   "eval_results": 5,
+   "eval_runs": 4,
+   "eval_sets": 2,
+   "evidence_refs": 1289,
+   "experience_reviews": 0,
+   "flow_templates": 5,
+   "group_hops": 13,
+   "identities": 22,
+   "kb_documents": 0,
+   "legal_entities": 5,
+   "mcp_servers": 1,
+   "memory_entries": 2,
+   "notifications": 442,
+   "octo_bots": 3,
+   "octo_chains": 2,
+   "octo_seen": 24,
+   "org_experiences": 465,
+   "packs": 7,
+   "pipeline_migrations": 1,
+   "positions": 18,
+   "project_artifacts": 151,
+   "project_budgets": 7,
+   "project_stages": 59,
+   "projects": 7,
+   "redline_scans": 456,
+   "resources": 2,
+   "role_templates": 43,
+   "run_diagnoses": 0,
+   "run_locks": 3,
+   "run_stream": 1203,
+   "scheduled_jobs": 0,
+   "settings": 13,
+   "smtp_configs": 0,
+   "stage_budgets": 57,
+   "stage_deliverables": 148,
+   "stage_gates": 162,
+   "task_runs": 621,
+   "tasks": 597,
+   "tenants": 1,
+   "tool_approvals": 5,
+   "trace_spans": 1092,
+   "user_preferences": 4,
+   "wbs_items": 24,
+   "wecom_approvals": 21,
+   "wecom_outbox": 14,
+   "wecom_pushes": 14,
+   "wecom_robot_outbox": 0,
+   "wecom_robots": 0,
+   "wecom_seen": 10,
+   "wecom_users": 1,
+   "workshop_turns": 90,
+   "workshops": 6
+  },
+  "triggers": [
+   "trg_gate_veto_ins",
+   "trg_gate_veto_upd",
+   "trg_stage_gate_guard",
+   "trg_stage_no_skip",
+   "trg_tasks_state_guard"
+  ],
+  "states": {
+   "tasks": {
+    "assigned": 5,
+    "completed": 30,
+    "failed": 82,
+    "in_progress": 4,
+    "pending_review": 10,
+    "rejected": 459,
+    "todo": 7
+   },
+   "runs": {
+    "failed": 87,
+    "running": 2,
+    "spawned": 9,
+    "succeeded": 519,
+    "timeout": 4
+   },
+   "projects": {
+    "active": 2,
+    "blocked": 3,
+    "done": 2
+   },
+   "experiences": {
+    "approved": 12,
+    "pending": 452,
+    "rejected": 1
+   }
+  }
+ },
+ "tests": [
+  {
+   "file": "test_adapter_acceptance_boundary.py",
+   "tests": 4,
+   "loc": 67
+  },
+  {
+   "file": "test_approval_notification_scope.py",
+   "tests": 8,
+   "loc": 251
+  },
+  {
+   "file": "test_extensions_integration.py",
+   "tests": 19,
+   "loc": 405
+  },
+  {
+   "file": "test_governance_integration.py",
+   "tests": 21,
+   "loc": 434
+  },
+  {
+   "file": "test_html_advertising_checks.py",
+   "tests": 4,
+   "loc": 104
+  },
+  {
+   "file": "test_m0.py",
+   "tests": 20,
+   "loc": 478
+  },
+  {
+   "file": "test_m05.py",
+   "tests": 8,
+   "loc": 186
+  },
+  {
+   "file": "test_m1.py",
+   "tests": 11,
+   "loc": 197
+  },
+  {
+   "file": "test_m10_group.py",
+   "tests": 3,
+   "loc": 57
+  },
+  {
+   "file": "test_m11_core.py",
+   "tests": 9,
+   "loc": 142
+  },
+  {
+   "file": "test_m12_pm.py",
+   "tests": 5,
+   "loc": 67
+  },
+  {
+   "file": "test_m12_preview.py",
+   "tests": 5,
+   "loc": 87
+  },
+  {
+   "file": "test_m13_preset.py",
+   "tests": 4,
+   "loc": 54
+  },
+  {
+   "file": "test_m14_lowil.py",
+   "tests": 3,
+   "loc": 45
+  },
+  {
+   "file": "test_m15_dispatcher.py",
+   "tests": 9,
+   "loc": 112
+  },
+  {
+   "file": "test_m16_pipeline.py",
+   "tests": 11,
+   "loc": 164
+  },
+  {
+   "file": "test_m17_rbac.py",
+   "tests": 6,
+   "loc": 70
+  },
+  {
+   "file": "test_m18_approval_resume.py",
+   "tests": 3,
+   "loc": 155
+  },
+  {
+   "file": "test_m19_finops_eval_memory.py",
+   "tests": 3,
+   "loc": 135
+  },
+  {
+   "file": "test_m2.py",
+   "tests": 6,
+   "loc": 179
+  },
+  {
+   "file": "test_m3.py",
+   "tests": 4,
+   "loc": 155
+  },
+  {
+   "file": "test_m4.py",
+   "tests": 6,
+   "loc": 104
+  },
+  {
+   "file": "test_m5.py",
+   "tests": 6,
+   "loc": 179
+  },
+  {
+   "file": "test_m6_wecom.py",
+   "tests": 10,
+   "loc": 208
+  },
+  {
+   "file": "test_m6b_guard.py",
+   "tests": 5,
+   "loc": 137
+  },
+  {
+   "file": "test_m8_octo.py",
+   "tests": 12,
+   "loc": 163
+  },
+  {
+   "file": "test_m9_approval.py",
+   "tests": 6,
+   "loc": 179
+  },
+  {
+   "file": "test_mcp_runtime_integration.py",
+   "tests": 7,
+   "loc": 199
+  },
+  {
+   "file": "test_pipeline_runtime_identity.py",
+   "tests": 7,
+   "loc": 235
+  },
+  {
+   "file": "test_runner_artifact_collection.py",
+   "tests": 6,
+   "loc": 226
+  },
+  {
+   "file": "test_runner_start_guards.py",
+   "tests": 5,
+   "loc": 219
+  },
+  {
+   "file": "test_serve_ui_test.py",
+   "tests": 5,
+   "loc": 73
+  },
+  {
+   "file": "test_task_requirements.py",
+   "tests": 5,
+   "loc": 98
+  },
+  {
+   "file": "test_tenant_foundation.py",
+   "tests": 8,
+   "loc": 152
+  },
+  {
+   "file": "test_tenant_isolation_v4.py",
+   "tests": 10,
+   "loc": 513
+  },
+  {
+   "file": "test_ui_approval_access.py",
+   "tests": 4,
+   "loc": 104
+  },
+  {
+   "file": "test_ui_artifact_access.py",
+   "tests": 4,
+   "loc": 120
+  },
+  {
+   "file": "test_ui_artifact_aliases.py",
+   "tests": 2,
+   "loc": 94
+  },
+  {
+   "file": "test_ui_preview_embed.py",
+   "tests": 3,
+   "loc": 103
+  },
+  {
+   "file": "test_ui_preview_ticket.py",
+   "tests": 5,
+   "loc": 106
+  },
+  {
+   "file": "test_ui_task_actions.py",
+   "tests": 8,
+   "loc": 252
+  },
+  {
+   "file": "test_ui_task_scope_retry.py",
+   "tests": 7,
+   "loc": 197
+  },
+  {
+   "file": "test_ui_task_status.py",
+   "tests": 4,
+   "loc": 101
+  },
+  {
+   "file": "test_ui_tenant_integration.py",
+   "tests": 15,
+   "loc": 337
+  },
+  {
+   "file": "test_v41_flows.py",
+   "tests": 12,
+   "loc": 217
+  },
+  {
+   "file": "test_v42_intent.py",
+   "tests": 15,
+   "loc": 258
+  },
+  {
+   "file": "test_v43_budget.py",
+   "tests": 11,
+   "loc": 245
+  },
+  {
+   "file": "test_v44_dynamic_wbs_blackboard.py",
+   "tests": 6,
+   "loc": 162
+  },
+  {
+   "file": "test_v45_custom_flow_templates.py",
+   "tests": 1,
+   "loc": 74
+  },
+  {
+   "file": "test_v45_release_bundle.py",
+   "tests": 1,
+   "loc": 92
+  },
+  {
+   "file": "test_v46_project_delete.py",
+   "tests": 6,
+   "loc": 196
+  },
+  {
+   "file": "test_v47_cleanup_routes.py",
+   "tests": 8,
+   "loc": 231
+  },
+  {
+   "file": "test_v48_preferences_and_batch_cleanup.py",
+   "tests": 5,
+   "loc": 124
+  },
+  {
+   "file": "test_v49_full_system_enhancements.py",
+   "tests": 4,
+   "loc": 188
+  },
+  {
+   "file": "test_v4_notifications.py",
+   "tests": 13,
+   "loc": 263
+  },
+  {
+   "file": "test_v50_project_creation_and_ux.py",
+   "tests": 3,
+   "loc": 92
+  },
+  {
+   "file": "test_v51_metacorp_cyber_and_mcp.py",
+   "tests": 4,
+   "loc": 125
+  }
+ ],
+ "test_total": 405,
+ "env_keys": [
+  "DEEPSEEK_API_KEY",
+  "MODEL_BASE_URL",
+  "DB_PATH",
+  "DEFAULT_LEGAL_ENTITY_ID",
+  "RUNNER",
+  "M0_BUDGET_LIMIT_TOKENS",
+  "M0_BUDGET_EST_TOKENS",
+  "M0_RUN_TIMEOUT",
+  "M0_HEARTBEAT_SECONDS",
+  "OA_ID",
+  "OA_SECRET",
+  "OA_BASE",
+  "OA_PANEL_URL",
+  "WECOM_MOCK",
+  "WECOM_WATCHER",
+  "WECOM_TICK",
+  "WECOM_SIM_TOKEN",
+  "WECOM_CORP_ID",
+  "WECOM_AGENT_ID",
+  "WECOM_SECRET",
+  "WECOM_TOKEN",
+  "WECOM_AES_KEY",
+  "WECOM_CALLBACK_URL",
+  "WECOM_IP_ALLOWLIST",
+  "WECOM_AUTORUN",
+  "WECOM_AUTORUN_RUNNER",
+  "OCTO_API_URL",
+  "OCTO_BOT_UID",
+  "OCTO_BOT_TOKEN",
+  "OCTO_HUMAN_UID",
+  "OCTO_HUMAN_TOKEN",
+  "OCTO_SIM_TOKEN",
+  "OCTO_AUTORUN",
+  "OCTO_RUNNER",
+  "OCTO_RUNNER_ENGINE",
+  "OCTO_SPACE_ID",
+  "OCTO_INBOX",
+  "OCTO_MYSQL_HOST",
+  "OCTO_MYSQL_PORT",
+  "OCTO_MYSQL_USER",
+  "OCTO_MYSQL_PASSWORD",
+  "OCTO_MYSQL_DB",
+  "OCTO_TASK_BUDGET",
+  "M0_SANDBOX",
+  "WECOM_APPROVAL_POLLER",
+  "WECOM_APPROVAL_TICK",
+  "WECOM_APPROVAL_APPROVER",
+  "WECOM_APPROVAL_TEMPLATE_ID",
+  "WECOM_APPROVAL_CTRL_TASK",
+  "WECOM_APPROVAL_CTRL_CONCLUSION",
+  "UI_DEV_LOGIN",
+  "UI_TASK_BUDGET",
+  "UI_RUNNER",
+  "M0_SANDBOX_ACP",
+  "M0_PROJECT_TASK_BUDGET",
+  "MODEL_PRICES_JSON",
+  "FINOPS_INPUT_RATIO",
+  "EVAL_JUDGE",
+  "EVAL_BUDGET",
+  "M0_FLOW_STAGE_BUDGET"
+ ]
+}
