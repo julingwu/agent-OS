@@ -632,7 +632,23 @@ def _request_human_signoff(conn, pid: str, pending: list[dict]) -> None:
 
 
 def run_stage(conn, pid: str, key: str, requirement: str) -> dict:
-    """执行单个阶段：进入 → 产物（优先模型生成）→ 闸门 → 结束。"""
+    """执行单个阶段：进入 → 产物（优先模型生成）→ 闸门 → 结束。
+
+    v5.4.2 TASK-2：整段包在 `finance.overhead_scope` 里 —— 范围内所有
+    `llm.complete()`（立项书/研讨纪要/WBS/复盘/阶段文档）的真实 token 都会
+    记成该阶段的 `stage_overhead`，进入 stage_budgets.spent 与 finops 口径。
+    没有 sink 时（其它调用路径）行为完全不变。
+    """
+    from . import finance as _finance
+
+    proj = conn.execute("SELECT tenant_id FROM projects WHERE id=?", (pid,)).fetchone()
+    tenant_id = proj["tenant_id"] if proj is not None else None
+    with _finance.overhead_scope(conn, pid, key, tenant_id):
+        return _run_stage(conn, pid, key, requirement)
+
+
+def _run_stage(conn, pid: str, key: str, requirement: str) -> dict:
+    """run_stage 的实现体（v5.4.2 起由 run_stage 套一层 overhead 记账作用域）。"""
     from . import pipeline_llm as gen
 
     row = conn.execute("SELECT use_llm_docs,state FROM projects WHERE id=?", (pid,)).fetchone()
@@ -1671,19 +1687,20 @@ def maybe_resume_after_signoff(conn, criterion_id: str) -> dict | None:
 
 
 def _wake_pipeline(pid: str, requirement: str, keys: list[str]) -> None:
-    """后台唤醒流水线。必须绑定发起时的库（v5.3 §71：线程不能到执行时再读 DB_PATH）。"""
-    from .db import db_path, open_conn
+    """后台唤醒流水线。
+
+    v5.3 §71：必须绑定发起时的库（线程不能到执行时再读 DB_PATH）。
+    v5.4.2 §79：改走 `spawn_bg_thread` 统一派发口，顺带把线程登记进排空屏障。
+    """
+    from .db import db_path, open_conn, spawn_bg_thread
 
     owner_db = db_path()
 
     def _worker() -> None:
-        try:
-            with open_conn(owner_db) as c2:
-                run_project(c2, pid, requirement, keys=keys)
-        except Exception:                    # noqa: BLE001 - 后台线程不能炸
-            pass
+        with open_conn(owner_db) as c2:
+            run_project(c2, pid, requirement, keys=keys)
 
-    threading.Thread(target=_worker, daemon=True, name=f"oa-accept-{pid}").start()
+    spawn_bg_thread(_worker, name=f"oa-accept-{pid}", db=owner_db)
 
 
 def timeline(conn, pid: str) -> list[dict]:

@@ -63,8 +63,10 @@ def approve_design(task_id: str, payload: DesignIn | None = None,
         conn.commit()
         chat_id = msg["chat_id"]
         requirement = meta.get("requirement") or ""
-    threading.Thread(target=_dev_phase, args=(chat_id, task_id, requirement, ident),
-                     daemon=True).start()
+    # v5.4.2 §79：后台线程走统一派发口（绑定 owner_db + 登记排空屏障）。
+    from ...db import db_path, spawn_bg_thread
+    spawn_bg_thread(lambda: _dev_phase(chat_id, task_id, requirement, ident),
+                    name=f"oa-dev-{task_id}", db=db_path())
     return {"ok": True}
 
 
@@ -374,8 +376,11 @@ def _execute_task_retry(retry: dict) -> None:
 
 
 def _launch_task_retry(retry: dict) -> None:
-    threading.Thread(target=_get_api_attr("_execute_task_retry", _execute_task_retry), args=(retry,),
-                     name=f"retry-{retry['run_id']}", daemon=True).start()
+    # v5.4.2 §79：重试也是后台流水线，必须绑定发起时的库并登记排空屏障。
+    from ...db import db_path, spawn_bg_thread
+    worker = _get_api_attr("_execute_task_retry", _execute_task_retry)
+    spawn_bg_thread(lambda: worker(retry), name=f"retry-{retry['run_id']}",
+                    db=db_path())
 
 
 @router.post("/tasks/{task_id}/retry", status_code=202)
@@ -650,10 +655,17 @@ async def run_live_stream(run_id: str, after: int = 0, oa_ui: str | None = Depen
 def run_diagnosis(run_id: str, oa_ui: str | None = Depends(_token)):
     """失败诊断：规则结论优先，模型可用时补一句根因与修复建议（中文）。"""
     _require(oa_ui)
-    from ... import flows
+    from ... import finance, flows
     with get_conn() as conn:
         try:
-            return flows.diagnose(conn, run_id)
+            # v5.4.2 TASK-2：诊断里的 llm.complete 也要入账。它没有阶段上下文，
+            # 就记到这次 run 所属项目的项目级 overhead 上；查不到项目就只记本地计数。
+            row = conn.execute("SELECT t.project_id FROM task_runs r"
+                               " JOIN tasks t ON t.id=r.task_id WHERE r.id=?",
+                               (run_id,)).fetchone()
+            pid = row["project_id"] if row is not None else None
+            with finance.overhead_scope(conn, pid):
+                return flows.diagnose(conn, run_id)
         except KeyError:
             raise HTTPException(404, detail={"code": "RunNotFound"}) from None
 

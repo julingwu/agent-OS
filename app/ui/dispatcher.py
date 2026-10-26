@@ -200,14 +200,19 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
     def _run() -> None:
         from ..db import get_conn as _gc
         from ..errors import human_error
+        from .. import finance as _fin
         targets = [c for c in (group["chat_id"] if group else None, ceo_chat_id) if c]
         with _gc() as c2:
             try:
-                pipeline.run_project(c2, pid, text)
-                rows = c2.execute("SELECT state FROM project_stages WHERE project_id=?",
-                                  (pid,)).fetchall()
+                # v5.4.2 TASK-2：pm_summary 的 llm.complete 没有阶段上下文，按项目级
+                # overhead（stage_key=None）入账；run_project 内部每个阶段另有自己的
+                # stage 作用域，会覆盖这层 sink，互不串账。
+                with _fin.overhead_scope(c2, pid):
+                    pipeline.run_project(c2, pid, text)
+                    rows = c2.execute("SELECT state FROM project_stages WHERE project_id=?",
+                                      (pid,)).fetchall()
+                    summary = flows.pm_summary(c2, pid, llm_docs=bool(use_llm_docs))
                 done = sum(1 for r in rows if r["state"] == "done")
-                summary = flows.pm_summary(c2, pid, llm_docs=bool(use_llm_docs))
                 body = (f"项目 {pid} 跑完 {done}/{len(rows)} 个阶段。\n\n"
                         + (summary["summary"] or "（黑板为空）"))
                 for chat in targets:
@@ -225,7 +230,10 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
     if os.environ.get("M0_DISPATCH_SYNC") == "1":     # 测试里同步跑，避免竞态
         _run()
     else:
-        threading.Thread(target=_run, daemon=True).start()
+        # v5.4.2 §79：后台派活线程同样必须「绑定发起时的库 + 登记进排空屏障」，
+        # 否则它执行时读到的 DB_PATH 可能已经是下一个用例的临时库。
+        from ..db import db_path, spawn_bg_thread
+        spawn_bg_thread(_run, name=f"oa-dispatch-{pid}", db=db_path())
 
     return {"project_id": pid, "tags": tags, "route": how, "reason": reason,
             "stages": [n["key"] for n in plan["nodes"]], "flow": plan,

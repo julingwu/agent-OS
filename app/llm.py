@@ -5,7 +5,9 @@
 """
 from __future__ import annotations
 
+import contextvars
 import os
+from contextlib import contextmanager
 
 import httpx
 
@@ -56,15 +58,38 @@ def is_offline() -> bool:
     return _llm_mode() == "off"
 
 
-# 可选的使用量接收方：谁有 run/项目上下文，谁就 set_usage_sink()。没注册就只进本地计数。
-_usage_sink = None
+# 可选的使用量接收方：谁有 run/项目上下文，谁就注册 sink。没注册就只进本地计数。
+# v5.4.2 §79/TASK-2：sink 从模块全局变量改成 contextvars.ContextVar —— 同一进程里
+# 多个后台线程/协程同时在跑时，全局变量会互相覆盖（A 项目的账记到 B 项目头上）。
+_current_sink: contextvars.ContextVar = contextvars.ContextVar(
+    "oa_llm_usage_sink", default=None)
 _usage_totals = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
 
 
 def set_usage_sink(fn) -> None:
-    """注册一个 callable(kind: str, usage: dict) 来接管用量记账；传 None 取消。"""
-    global _usage_sink
-    _usage_sink = fn
+    """在当前上下文注册 callable(kind: str, usage: dict) 来接管用量记账；传 None 取消。
+
+    兼容旧接口；作用域只到当前上下文（线程/协程），不会再泄漏给别的线程。
+    """
+    _current_sink.set(fn)
+
+
+def current_usage_sink():
+    """当前上下文已注册的 sink（没有则 None）。"""
+    return _current_sink.get()
+
+
+@contextmanager
+def usage_sink(fn):
+    """在当前上下文里临时注册 sink，退出时严格恢复旧值（线程/协程安全）。
+
+    用法：`with llm.usage_sink(meter): ...complete()...`
+    """
+    token = _current_sink.set(fn)
+    try:
+        yield fn
+    finally:
+        _current_sink.reset(token)
 
 
 def usage_totals() -> dict:
@@ -76,12 +101,12 @@ def _record_usage(kind: str, usage: dict) -> None:
     _usage_totals["calls"] += 1
     _usage_totals["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
     _usage_totals["completion_tokens"] += int(usage.get("completion_tokens") or 0)
-    if _usage_sink is not None:
+    sink = _current_sink.get()
+    if sink is not None:
         try:
-            _usage_sink(kind, usage)
+            sink(kind, usage)
         except Exception:                       # noqa: BLE001 - 记账失败不能拖垮生成
             pass
-
 
 
 def chat(messages: list[dict], *, tools: list[dict] | None = None,

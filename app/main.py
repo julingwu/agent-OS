@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
         wecom_watcher.stop()
 
 
-app = FastAPI(title="Agent OS", version="5.4.1", lifespan=lifespan)
+app = FastAPI(title="Agent OS", version="5.4.2", lifespan=lifespan)
 
 # the desktop shell (tauri://localhost) talks to 127.0.0.1:8077 with a Bearer token,
 # so no credentials are involved and a permissive origin list is safe here.

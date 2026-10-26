@@ -214,23 +214,31 @@ def parse_stream(text: str) -> dict:
 def start_heartbeat(run_id: str, interval: int, stop: threading.Event):
     if interval <= 0:
         return None
+    # v5.4.2 §79：心跳线程写的是「这次 run 归属的库」。它可能比用例活得久
+    # （kill/超时类用例的子进程还没收尾），所以绑定 owner_db 但**不**登记进
+    # 排空屏障：绑定已足够防止它写到下一个用例的库；若 owner 库已被回收，
+    # connect() 会抛 BoundDbUnavailable，被下面的 except 吞掉，绝不自建空库。
+    from ..db import db_path, pin_thread_db
+
+    owner_db = db_path()
 
     def beat() -> None:
         seq = 0
-        while True:
-            seq += 1
-            try:
-                conn = connect()
+        with pin_thread_db(owner_db):
+            while True:
+                seq += 1
                 try:
-                    verbs.do_report_heartbeat(
-                        conn, HeartbeatIn(run_id=run_id, hb_seq=seq, estimated_next_cost=None))
-                    conn.commit()
-                finally:
-                    conn.close()
-            except Exception:
-                pass
-            if stop.wait(interval):
-                break
+                    conn = connect()
+                    try:
+                        verbs.do_report_heartbeat(
+                            conn, HeartbeatIn(run_id=run_id, hb_seq=seq, estimated_next_cost=None))
+                        conn.commit()
+                    finally:
+                        conn.close()
+                except Exception:
+                    pass
+                if stop.wait(interval):
+                    break
 
     t = threading.Thread(target=beat, name=f"hb-{run_id}", daemon=True)
     t.start()

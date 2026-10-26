@@ -848,3 +848,112 @@ prompt，而任务标题又是从这个 prompt 里截出来的（`flows`/`task_g
 **如何避免重踩**：凡是「把 A 的内容拼进 prompt、再从 prompt 里截出 B」的链路，
 B 的写入口必须做标记剥离；套娃不会自己停，它只会越来越长。
 
+## §79 后台线程的库上下文继承与测试排空屏障（v5.4.2，已修复）
+
+**现象**：v5.4.1 三次全量里 1 次出现 2 failed，报错都是 `no such table: task_runs`：
+
+- `test_runner_artifact_collection.py::test_runners_register_all_fresh_deliverables_but_only_known_partial_files[True-acp]`
+- `test_runner_start_guards.py::test_killed_queued_run_never_reserves_or_spawns_but_new_retry_is_allowed[failed-mock_acp]`
+
+单跑这两个文件 29 条全绿 —— 典型的跨用例后台线程竞态。
+
+**物理根因（两层，缺一层都解释不通）**：
+
+1. 后台线程到**执行时**才读库位置。`projects.py` 的立项点火 / 续跑线程、
+   `pipeline._wake_pipeline()` 虽然是后台线程，但 `run_project` 内部深层仍调
+   `get_conn()` → `connect()` → `db_path()` → 重读 `DB_PATH`。用例 A 的线程活到
+   用例 B 时，读到的是 B 的库或一个已被删除的 tmp 路径。
+2. SQLite 默认 `connect()` 对不存在的文件**静默新建 0 表空库**。于是「库已经不是
+   我的了」被降级成业务层的 `no such table: task_runs`，根因被埋掉。
+
+**实测证据**（v5.4.1 tag 干净 worktree 上挂线程探针跑全量，`631 passed, 409.35s`）：
+1262 次 setup/teardown 快照里 260 次存在残留线程，其中在**下一个用例 setup 时**仍
+活着的记录包括：
+
+- `oa-pipe-P-ce3c2440b5c0`：在 `test_v50_project_creation_and_ux` 里创建，活到
+  `test_v50` 下一条、再到 `test_v51_metacorp_cyber_and_mcp` 的 3 条用例；
+- `retry-RUN-50b7ee1a60114943`：活到
+  `test_runner_start_guards.py::test_killed_queued_run...[failed-mock_acp]` 的 setup
+  —— 正是 v5.4.1 那次失败的那条参数；
+- `oa-notify`（活到 `test_v43_budget` 6 条）、`hb-RUN-*`（心跳，活到后面 3 条）、
+  `Thread-194 (push_approval)`。
+
+**修法（四层，缺一层都不算根治）**：
+
+1. **优先级下沉到 `db_path()` 本身**（不是只放在 `get_conn()`）：线程绑定 > `DB_PATH`
+   环境变量 > 默认生产库。`threading.local` + `pin_thread_db(path)` 上下文管理器 +
+   `current_thread_db()`。这样 `connect()` / `open_conn()` / 任意 20 层深的 caller 全部
+   继承，不需要层层透传 `db_path`。
+2. **绑定态连接防御**：绑定态一律用 `file:...?mode=rw`（`uri=True`）打开，并校验核心表
+   （`tasks` / `task_runs` / `project_stages`）。文件被删或库未初始化 →
+   `BoundDbUnavailable`，事件进 `db.bound_db_failures()`，线程干净退出。
+   **非绑定态保持原行为**（允许 `connect()` 建新库）——`init_db()` 与 631 条既有用例
+   依赖这一点，防御只对绑定态后台线程生效。
+3. **统一派发口 `db.spawn_bg_thread(target, name=, db=)`**：登记 `_active_bg_threads`
+   + 线程内 `pin_thread_db` + `finally` 注销。已收口的派发点：`projects.py`（立项点火 /
+   续跑）、`pipeline._wake_pipeline()`（L1 签批后自动唤醒）、`dispatcher` 异步派活、
+   `tasks_runs.py`（设计确认后的开发线程、重试 worker）、`rbac` 审批卡推送、`notify`
+   投递、`dsh_adapter.start_heartbeat`（心跳只绑定、不登记：kill/超时类用例里 run 线程
+   本就可以比用例长寿，登记只会让 teardown 白等）。
+4. **测试生命周期屏障**：`tests/conftest.py` 的 autouse fixture 在 `yield` 之后、
+   `DB_PATH` 断言之前调用 `wait_for_bg_threads(timeout=10.0)`；排不空就 fail
+   （不是 sleep、不是重试），把「泄漏线程」变成可见的失败而不是下一条用例的玄学。
+
+**验证**：`tests/test_v542_thread_db.py`（9 条）覆盖——绑定优先于 `DB_PATH`、后台线程内
+不传参的 `get_conn()` 经 3 层调用仍命中 owner 库、`DB_PATH` 已换库仍命中、库文件被删/
+未初始化都不新建、非绑定态仍能建库、内部登记与排空语义。全量与循环跑数字见
+`SEAL_v5.4.2.md`。
+
+**如何避免重踩**：任何「请求里派后台线程」的代码禁止直接 `thread.start()`，一律
+`spawn_bg_thread`；任何「线程里查数据库」的代码禁止自己读 `os.environ["DB_PATH"]`，
+一律 `db.db_path()`。防御必须装在**唯一入口**（`db_path()` / `connect()`），装在调用方
+在第 2 个调用方出现的当天就会漏。
+
+## §80 `complete()` 的阶段 overhead 记账闭环（v5.4.2，已修复 §77 的「仍未解决」）
+
+**现象**：§77 已记：`complete()` 能拿到 usage，但**没有落到任何账本**。立项书 / 研讨 /
+WBS / 复盘 / 阶段文档这些「阶段内」的模型调用（12 处调用点）在 FinOps 上一律记 0，
+是成本黑洞——它既不计入 `task_runs.usage_tokens`，也不进阶段 80% 预算检查。
+
+**物理根因（三个断点，修一个不够）**：
+
+1. sink 是模块全局变量 `_usage_sink`：同一进程多个后台线程/协程同时跑时互相覆盖，
+   A 项目的账会记到 B 项目头上；
+2. 即使注册了 sink 也没用：调用方（`pipeline_llm.*`、`flows.*`）手上没有 `conn`，
+   也不知道自己正处在哪个项目/阶段；
+3. `finops.overview()` 只按 `task_runs.usage_tokens` 聚合，阶段 overhead 即便记了
+   也看不见。
+
+**修法（复用现成积木，不另造表、不另造记账函数）**：
+
+1. **sink 存 `contextvars.ContextVar`**：`llm.usage_sink(fn)` 上下文管理器 +
+   `current_usage_sink()`；`set_usage_sink()` 保留兼容但作用域只到当前上下文。
+   实测 Python 新线程是空上下文，拿不到主线程的 sink —— 正好是我们要的隔离。
+2. **阶段执行处注册**：`finance.overhead_scope(conn, project_id, stage_key, tenant_id)`
+   包住 `pipeline.run_stage`（原实现改名 `_run_stage`）。12 处调用点的归属：
+   立项书 / 研讨发言 / 纪要 / WBS / 阶段文档 / 否决复评等 10 处落在对应阶段；
+   `flows.pm_summary`、`/ui/runs/{id}/diagnosis` 没有阶段上下文，按**项目级 overhead**
+   （`stage_key=None`）入账；立项前的 `flows.classify` 与 `evals` 生成没有 `project_id`，
+   静默不入账（不报错、不写脏账）。
+3. **落账口径复用 `finance`**：`finance.record_stage_overhead()` = 累加
+   `stage_budgets.spent` + `project_budgets.spent_tokens`（与 `spend()` 同口径，所以
+   `quota()` / `pause_threshold()` 的 80% 检查天然覆盖它）+ 写一条
+   `budget_events(kind='stage_overhead')` 供审计与报表分列。
+4. **finops 口径显式分列**：`totals.tokens = task_tokens + overhead_tokens`，并新增
+   `overhead.by_stage`（按 project + stage 归集）。`by_agent` / `by_model` 仍是**纯任务
+   口径**（overhead 没有 agent/模型上下文），注释与文档都写清——不要拿它们对 `totals` 求和。
+
+**一个关键取舍（写在这里免得下一轮被当 bug 查）**：sink **不在回调里直接写库**。
+`complete()` 是在阶段主事务**进行中**被调用的（研讨会先 `INSERT workshops` 再调模型），
+此时另开连接写库会撞主事务的写锁（`SQLITE_BUSY` / 30s `busy_timeout`），既慢又丢账。
+所以 `StageUsageMeter` 只在内存里线程安全累加，阶段边界上用**同一个 `conn`** 落账：
+成功路径自己 commit；异常路径只写不 commit，让调用方事务决定去留（与阶段半成品产物
+同一语义）。记账异常一律吞掉——记账失败绝不能阻塞生成。
+
+**验证**：`tests/test_v542_stage_overhead.py`（9 条）：charter 的 1000 token 精确进
+`stage_budgets.spent`、研讨会 5 次调用全被捕获、`quota()` / `project_budgets` 看得到、
+项目级（无阶段）入账、无 `project_id` 不报错不写脏账、finops 分列与租户过滤。
+
+**如何避免重踩**：跨线程的「当前上下文」一律用 `contextvars`，不要用模块全局；记账 API
+必须接受 `conn` 且允许失败；报表口径变化要同时改注释与文档，否则下一轮会被当成 regression
+去「修」。

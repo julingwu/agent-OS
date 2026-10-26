@@ -19,7 +19,9 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import uuid
+from contextlib import contextmanager
 
 log = logging.getLogger("finance")
 
@@ -332,6 +334,110 @@ def spend(conn: sqlite3.Connection, pid: str, stage_key: str, tokens: int) -> di
                  " updated_at=CURRENT_TIMESTAMP WHERE project_id=?", (tokens, pid))
     conn.commit()
     return {"spent": tokens, **overview(conn, pid)}
+
+
+# ------------------------------------------------- 阶段 overhead 记账（v5.4.2 TASK-2）
+class StageUsageMeter:
+    """收集一次阶段执行里 `llm.complete()` 的真实用量，阶段收尾时一次性入账。
+
+    为什么先累加、后写库：complete() 是在阶段主事务**进行中**被调用的（研讨会先
+    INSERT workshops 再调模型）。sink 若当场开另一条连接写库，就会撞主事务持有的
+    写锁（SQLITE_BUSY / 30 秒 busy_timeout），既慢又会丢账。所以 sink 只做线程安全
+    累加，落账由阶段边界上同一个 conn 完成。
+    """
+
+    def __init__(self, project_id: str | None, stage_key: str | None,
+                 tenant_id: str | None = None) -> None:
+        self.project_id = project_id
+        self.stage_key = stage_key
+        self.tenant_id = tenant_id
+        self.calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.kinds: list[str] = []
+        self._lock = threading.Lock()
+
+    def __call__(self, kind: str, usage: dict) -> None:
+        prompt = int(usage.get("prompt_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or 0)
+        with self._lock:
+            self.calls += 1
+            self.prompt_tokens += prompt
+            self.completion_tokens += completion
+            if kind:
+                self.kinds.append(str(kind))
+
+    @property
+    def tokens(self) -> int:
+        with self._lock:
+            return self.prompt_tokens + self.completion_tokens
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {"calls": self.calls, "prompt_tokens": self.prompt_tokens,
+                    "completion_tokens": self.completion_tokens,
+                    "tokens": self.prompt_tokens + self.completion_tokens,
+                    "kinds": list(self.kinds)}
+
+    def flush(self, conn: sqlite3.Connection, *, commit: bool = True) -> dict:
+        tokens = self.tokens
+        if tokens <= 0 or not self.project_id:
+            return {"tokens": 0, "charged": False}
+        detail = json.dumps({**self.snapshot(), "stage_key": self.stage_key,
+                             "tenant_id": self.tenant_id}, ensure_ascii=False)
+        return record_stage_overhead(conn, self.project_id, self.stage_key, tokens,
+                                     detail=detail, commit=commit)
+
+
+def record_stage_overhead(conn: sqlite3.Connection, pid: str, stage_key: str | None,
+                          tokens: int, *, detail: str | None = None,
+                          actor: str = "llm.complete", commit: bool = True) -> dict:
+    """阶段 overhead 入账：累加 stage_budgets.spent + 记一条 kind='stage_overhead'。
+
+    复用 `spend()` 的累加口径（stage_budgets.spent / project_budgets.spent_tokens），
+    所以 80% 预算检查（quota / pause_threshold）天然覆盖这部分真实消耗；额外写一条
+    budget_events 让 finops 能把「任务 token」与「阶段 overhead」分列审计。
+    stage_key=None 表示项目级未归属 overhead（只累加项目池）。
+    """
+    tokens = max(0, int(tokens or 0))
+    if tokens <= 0:
+        return {"tokens": 0, "charged": False}
+    ensure(conn)
+    if stage_key:
+        conn.execute("UPDATE stage_budgets SET spent=spent+?"
+                     " WHERE project_id=? AND stage_key=?", (tokens, pid, stage_key))
+    conn.execute("UPDATE project_budgets SET spent_tokens=spent_tokens+?,"
+                 " updated_at=CURRENT_TIMESTAMP WHERE project_id=?", (tokens, pid))
+    _event(conn, pid, stage_key, "stage_overhead", tokens, detail, actor)
+    if commit:
+        conn.commit()
+    return {"tokens": tokens, "charged": True, "stage_key": stage_key}
+
+
+@contextmanager
+def overhead_scope(conn: sqlite3.Connection, project_id: str | None,
+                   stage_key: str | None = None, tenant_id: str | None = None):
+    """在阶段/项目执行处注册当前 (project_id, stage_key, tenant_id) 的 usage sink。
+
+    用法：`with finance.overhead_scope(conn, pid, key, tenant_id): run_stage(...)`。
+    作用域内所有 `llm.complete()` 的真实 token 都会记到该阶段头上。没有 project_id
+    （立项前的意图路由等）时不入账、不报错——绝不因为记账问题阻塞主流程。
+    """
+    from . import llm
+
+    meter = StageUsageMeter(project_id, stage_key, tenant_id)
+    ok = False
+    with llm.usage_sink(meter):
+        try:
+            yield meter
+            ok = True
+        finally:
+            try:
+                # 成功才提交；异常路径只把账写进调用方事务，由它的回滚/提交决定
+                # 去留（与阶段自身的半成品产物保持同一事务语义）。
+                meter.flush(conn, commit=ok)
+            except Exception:                    # noqa: BLE001 - 记账失败不能阻塞产线
+                pass
 
 
 def mark_stage(conn, pid: str, stage_key: str, state: str) -> None:

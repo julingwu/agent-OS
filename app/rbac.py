@@ -359,7 +359,11 @@ def guard_tool(conn, *, agent_id: str, tool: str, args: dict | None = None,
                 response={"ok": True, "run_id": run_id})
     conn.commit()
     if push and (run_id or chat_id):
-        threading.Thread(target=push_approval, args=(aid,), daemon=True).start()
+        # v5.4.2 §79：卡片推送线程走统一派发口（绑定当前库 + 登记排空屏障），
+        # 否则它会到执行时才读 DB_PATH，进程内换库后往别人的库里写审批审计。
+        from .db import db_path, spawn_bg_thread
+        spawn_bg_thread(lambda: push_approval(aid), name=f"push-approval-{aid}",
+                        db=db_path())
     return {"needs_approval": True, "approval_id": aid, "state": "pending",
             "run_id": run_id, "session_id": session_id, "resource_id": resource_id}
 

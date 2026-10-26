@@ -6,6 +6,14 @@
 
 真实计费需要输入/输出分开，而 ACP 的 `usage_update` 只给累计 used。这里按输入占比
 估算，并在前端明确标注「估算口径」——不把估算伪装成账单。
+
+v5.4.2 TASK-2 口径变更（写清楚，避免下一轮又当 bug 查）：
+任务执行消耗（task_runs.usage_tokens）与**阶段 overhead**（立项/研讨/WBS/复盘等
+`llm.complete` 调用，落在 budget_events.kind='stage_overhead'）是两个来源。
+`totals.tokens/cost` 是二者之和，同时显式给出 `task_tokens/task_cost` 与
+`overhead_tokens/overhead_cost`，并在 `overhead.by_stage` 里按项目+阶段分列。
+`by_agent` / `by_model` 只能归因到任务（overhead 没有 agent/模型上下文），
+所以这两张表永远是**任务口径**，不要拿它们对 totals 求和。
 """
 from __future__ import annotations
 
@@ -74,6 +82,26 @@ def blended_price(model: str | None) -> float:
 
 def estimate(model: str | None, tokens: int) -> float:
     return round(max(0, int(tokens or 0)) * blended_price(model) / 1_000_000, 4)
+
+
+def _overhead_rows(conn: sqlite3.Connection, days: int,
+                   tenant_id: str | None) -> list[sqlite3.Row]:
+    """阶段 overhead 明细：budget_events.kind='stage_overhead'（v5.4.2 TASK-2）。
+
+    表还没建（老库/只读快照）时按 0 处理——报表不能因为少一张表就打不开。
+    """
+    where = "e.kind='stage_overhead' AND date(e.created_at) >= date('now', ?)"
+    args: list = [f"-{days - 1} days"]
+    if tenant_id:
+        where += " AND COALESCE(p.tenant_id,'TENANT-HQ')=?"
+        args.append(tenant_id)
+    try:
+        return conn.execute(
+            f"""SELECT e.project_id, e.stage_key, e.tokens, e.created_at
+                FROM budget_events e LEFT JOIN projects p ON p.id = e.project_id
+                WHERE {where}""", args).fetchall()
+    except sqlite3.Error:
+        return []
 
 
 def overview(conn: sqlite3.Connection, days: int = 30,
@@ -146,6 +174,32 @@ def overview(conn: sqlite3.Connection, days: int = 30,
         by_day[day]["tokens"] += tokens
         by_day[day]["cost"] += cost
 
+    # v5.4.2 TASK-2：阶段 overhead（charter/workshop/wbs/retro 等 llm.complete 的
+    # 真实消耗）不在 task_runs.usage_tokens 口径里，必须单独并入，否则报表永远
+    # 看不见这 12 处调用。口径：budget_events.kind='stage_overhead'，ttl 与任务一致。
+    overhead_rows = _overhead_rows(conn, days, tenant_id)
+    overhead_tokens = 0
+    overhead_cost = 0.0
+    by_stage: dict[tuple, dict] = {}
+    for r in overhead_rows:
+        tokens = max(0, int(r["tokens"] or 0))
+        if tokens <= 0:
+            continue
+        cost = estimate(default_model(), tokens)
+        overhead_tokens += tokens
+        overhead_cost += cost
+        skey = (r["project_id"] or "", r["stage_key"] or "")
+        item = by_stage.setdefault(
+            skey, {"project_id": skey[0], "stage_key": skey[1] or "project",
+                   "tokens": 0, "cost": 0.0, "calls": 0})
+        item["tokens"] += tokens
+        item["cost"] += cost
+        item["calls"] += 1
+        day = (r["created_at"] or "")[:10]
+        by_day[day]["date"] = day
+        by_day[day]["tokens"] += tokens
+        by_day[day]["cost"] += cost
+
     # 补齐日期，前端画柱状图不用自己补空
     series = []
     import datetime as _dt
@@ -162,6 +216,9 @@ def overview(conn: sqlite3.Connection, days: int = 30,
             v["tokens"] = int(v["tokens"])
             if isinstance(v.get("agents"), set):
                 v["agents"] = len(v["agents"])
+    for v in by_stage.values():
+        v["cost"] = round(v["cost"], 2)
+        v["tokens"] = int(v["tokens"])
 
     pool = conn.execute(
         """SELECT COALESCE(SUM(limit_tokens),0) AS lim, COALESCE(SUM(used_tokens),0) AS used
@@ -177,9 +234,18 @@ def overview(conn: sqlite3.Connection, days: int = 30,
     return {
         "days": days,
         "currency": "CNY",
-        "totals": {"tokens": int(total_tokens), "cost": round(total_cost, 2),
+        "totals": {"tokens": int(total_tokens) + int(overhead_tokens),
+                   "cost": round(total_cost + overhead_cost, 2),
+                   "task_tokens": int(total_tokens),
+                   "task_cost": round(total_cost, 2),
+                   "overhead_tokens": int(overhead_tokens),
+                   "overhead_cost": round(overhead_cost, 2),
                    "runs": len(runs), "agents": len(by_agent),
-                   "avg_run_cost": round(total_cost / len(runs), 2) if runs else 0},
+                   "avg_run_cost": (round((total_cost + overhead_cost) / len(runs), 2)
+                                    if runs else 0)},
+        "overhead": {"tokens": int(overhead_tokens), "cost": round(overhead_cost, 2),
+                     "source": "budget_events.kind='stage_overhead'",
+                     "by_stage": sorted(by_stage.values(), key=lambda x: -x["cost"])},
         "by_agent": sorted(by_agent.values(), key=lambda x: -x["cost"]),
         "by_dept": sorted(by_dept.values(), key=lambda x: -x["cost"]),
         "by_model": sorted(by_model.values(), key=lambda x: -x["cost"]),

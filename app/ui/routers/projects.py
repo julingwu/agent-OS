@@ -16,7 +16,7 @@ from fastapi import (APIRouter, Cookie, Depends, File, Header, HTTPException, Qu
 from pydantic import BaseModel, Field
 
 from ...audit import write_audit
-from ...db import connect as db_connect, db_path, get_conn
+from ...db import connect as db_connect, db_path, get_conn, spawn_bg_thread
 from ...engine import dsh_adapter
 from ... import tenant, tenancy
 from .. import intel, store
@@ -96,7 +96,9 @@ def create_project_route(payload: ProjectCreate, oa_ui: str | None = Depends(_to
             finally:
                 c2.close()
 
-        threading.Thread(target=_worker, daemon=True, name=f"oa-pipe-{pid}").start()
+        # v5.4.2 §79：统一派发口负责「绑定 owner_db + 登记线程」，用例 teardown
+        # 靠 wait_for_bg_threads() 排队清，线程不会再活到下一个用例。
+        spawn_bg_thread(_worker, name=f"oa-pipe-{pid}", db=owner_db)
 
         proj = conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()
         stages = conn.execute("SELECT * FROM project_stages WHERE project_id=? ORDER BY seq ASC", (pid,)).fetchall()
@@ -554,7 +556,7 @@ def project_resume(project_id: str, payload: ProjectResumeIn | None = None,
         finally:
             c2.close()
 
-    threading.Thread(target=_worker, daemon=True, name="oa-resume").start()
+    spawn_bg_thread(_worker, name="oa-resume", db=owner_db)
     if asked is None:                    # 旧调用方：返回结构保持完全一致
         return {"ok": True, "project_id": project_id, "resuming": keys}
     return {"ok": True, "project_id": project_id, "resuming": keys,

@@ -94,7 +94,9 @@ def _dispatch(tenant_id: str, notify_id: str, event: str, body: str) -> None:
     if os.environ.get("NOTIFY_SYNC") == "1":
         deliver()
         return
-    threading.Thread(target=deliver, daemon=True, name="oa-notify").start()
+    # v5.4.2 §79：投递线程走统一派发口——绑定入队时的库，并登记进测试排空屏障。
+    from .db import spawn_bg_thread
+    spawn_bg_thread(deliver, name="oa-notify", db=owner_db)
 
 
 def push_event(conn, *, pid: str, event: str, body: str,
