@@ -1,32 +1,40 @@
-# OA Agent · M0
+# OA Agent · M0 — Agent OS
 
-一句话建任务 → 生成判据 → 执行 → L0/L1/L2 验收 → 审计回放。外壳是 FastAPI + SQLite，执行器是 DSH headless 子进程（或 mock）。
+一句话下需求 → 拆阶段与 WBS → 生成可执行判据 → 双内核执行 → L0/L1/L2 分层验收 → 审计回放 → 经验沉淀。
+外壳是 FastAPI + SQLite（WAL 单写），前端是 React + Vite（可选 Tauri 桌面壳）。
+
+当前版本 **v5.4.2**：649 条自动化用例，连续两轮全量 + 一个干净 checkout 复跑全部通过。
 
 ## 界面
 
-本版保留任务优先的专业工作台、可筛选任务中心、响应式布局和安全产物预览，新增工具与邮件配置、经验审核、强制交付规则和项目修改后恢复。
+> 截图取自 v5.4.2 桌面端（1600×950 视口），数据为合成演示数据。
 
-新版吸收内容、修复和验证范围见 [3.2.1 整合说明](docs/RELEASE_V32_INTEGRATION.md)，工具接入见 [外部工具说明](docs/EXTENSIONS.md)。原工作台发布记录见 [工作台发布说明](docs/RELEASE_WORKSPACE_UI.md)；本地运行和隔离回归步骤见 [工作空间使用说明](docs/UI_WORKSPACE.md)。
-
-| 新工作台（合成测试数据） | 移动端任务中心 |
+| 赛博指挥舱：阶段流水线一览 | 总装流水线：单项目阶段推进 |
 |---|---|
-| <img src="docs/screenshots/workspace-desktop.png" width="620"> | <img src="docs/screenshots/workspace-mobile.png" width="240"> |
+| <img src="docs/screenshots/v5/cyberdeck.png" width="620"> | <img src="docs/screenshots/v5/projects.png" width="620"> |
 
-以下为原有管理功能展示：
-
-| CEO 调度台：一句话拆成项目 + 群 | 群聊里的任务卡与判据 |
+| 任务中心：任务 / 判据 / 运行记录 | FinOps：token 折算人民币与预算池 |
 |---|---|
-| <img src="docs/screenshots/dispatch.png" width="420"> | <img src="docs/screenshots/task-card.png" width="420"> |
+| <img src="docs/screenshots/v5/tasks.png" width="620"> | <img src="docs/screenshots/v5/finops.png" width="620"> |
 
-| FinOps 人民币看板 | 离线评测回归 |
+| 组织经验治理：待审 / 生效 / 已驳回，支持分组批量审核 | 评测中心：离线回归与判据覆盖 |
 |---|---|
-| <img src="docs/screenshots/finops.png" width="420"> | <img src="docs/screenshots/evals.png" width="420"> |
+| <img src="docs/screenshots/v5/experience.png" width="620"> | <img src="docs/screenshots/v5/evals.png" width="620"> |
 
-| 分层组织经验（驳回 / 共识 / 否决 自动沉淀） |
-|---|
-| <img src="docs/screenshots/experience.png" width="620"> |
+v5.x 相比 3.x 的主要变化：
 
-> 截图取自 v2.4.0 桌面端（Tauri 壳 + 本地 FastAPI 底座），数据为演示用。
+- **分层验收**：L0 规则自动判定 / L1 人工签批（必须给 evidence_snippet）/ L2 沙箱脚本真实执行，
+  三层证据全部落库，**模型不能自评通过**。
+- **双内核执行**：`NativeKernel`（进程内工具调用，带真模型双模）与 ACP（JSON-RPC 子进程）可切换，
+  `task_runs.runner` 记录真实内核，不靠猜。
+- **租户与法人实体隔离**：项目、任务、运行、产物、经验、评测集按 `tenant_id` 物理过滤。
+- **FinOps 双口径**：任务消耗（`task_runs.usage_tokens`）与阶段 overhead（立项/研讨/WBS/复盘等
+  `llm.complete` 调用）分列统计，阶段 80% 预算检查同时覆盖两者。
+- **经验闭环**：驳回 / 共识 / 否决 / 复盘自动沉淀，人工审核转正，注入前做标记剥离防「套娃污染」。
+- **可复现的稳定性**：后台线程绑定发起时的数据库并登记排空，测试之间不互相踩库。
+
+其它文档：[设计缺陷台账](DESIGN_GAPS.md) · [部署](DEPLOY.md) · [工具接入](docs/EXTENSIONS.md) ·
+[封版记录 v5.4.2](SEAL_v5.4.2.md)
 
 ## 快速开始
 

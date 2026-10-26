@@ -51,8 +51,9 @@ _seal_*
 .tmp*/
 
 # 测试/截图证据目录：浏览器冒烟产物常回显内网地址、Cookie 与企微链接
+# v5.4.2：只忽略仓库根的临时截图目录，不要误伤 docs/screenshots/ 里的说明图
+/screenshots/
 *_evidence/
-screenshots/
 playwright-report/
 test-results/
 docs/evidence/

@@ -31,7 +31,9 @@ export function Login({ onDone }) {
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
         <h2>Agent OS</h2>
-        <div className="sub">登录你的 AI 工作空间，开始与团队协作。</div>
+        <div className="sub">
+          一句话下需求，剩下的交给它：拆阶段、生判据、跑执行、分层验收、留证据。
+        </div>
         <div className="field">
           <label>身份 ID</label>
           <input value={id} onChange={(e) => setId(e.target.value)} placeholder="ID-xxxxxxxxxxxx" autoFocus />
@@ -398,7 +400,11 @@ export function AboutModal({ onClose }) {
     <div className="mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>关于 Agent OS</h3>
-        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "5.1.0"}</span></div>
+        <p className="hint" style={{ marginTop: 0 }}>
+          一句话下需求 → 拆阶段与 WBS → 生成可执行判据 → 双内核执行 →
+          L0/L1/L2 分层验收 → 审计回放与经验沉淀。模型不能自评通过。
+        </p>
+        <div className="row"><span>版本</span><div className="spacer" /><span className="mono">v{info?.version || "5.4.2"}</span></div>
         <div className="row"><span>引擎</span><div className="spacer" /><span className="mono">{info?.engine || "DSH (ACP) + FastAPI"}</span></div>
         <div className="row"><span>外壳</span><div className="spacer" /><span className="mono">{info?.shell || "Tauri 2 / React 18"}</span></div>
         <div className="row"><span>冻结基线</span><div className="spacer" /><span className="mono">{info?.frozen_baseline || "v1.0.0"}</span></div>
