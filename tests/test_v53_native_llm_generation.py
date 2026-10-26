@@ -227,6 +227,8 @@ def test_llm_loop_generates_task_specific_artifacts(conn, monkeypatch):
     srv, mock = _start_mock(script)
     try:
         monkeypatch.setenv("M0_NATIVE_MODE", "llm")
+        # v5.4.1：llm.chat/complete 现在统一受阀门约束；本用例要验真 HTTP，显式放开
+        monkeypatch.setenv("M0_LLM_MODE", "live")
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
         monkeypatch.setenv("LLM_URL", f"http://127.0.0.1:{srv.server_address[1]}/v1/chat")
         runner_native.execute_native(
@@ -302,6 +304,8 @@ def test_llm_failure_falls_back_to_template(conn, monkeypatch):
                               "usage": {"prompt_tokens": 10, "completion_tokens": 5}}])
     try:
         monkeypatch.setenv("M0_NATIVE_MODE", "llm")
+        # v5.4.1：llm.chat/complete 现在统一受阀门约束；本用例要验真 HTTP，显式放开
+        monkeypatch.setenv("M0_LLM_MODE", "live")
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
         monkeypatch.setenv("LLM_URL", f"http://127.0.0.1:{srv.server_address[1]}/v1/chat")
         runner_native.execute_native(

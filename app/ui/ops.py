@@ -18,7 +18,7 @@ from . import store
 log = logging.getLogger("ui.ops")
 router = APIRouter(prefix="/ui", tags=["ui-ops"])
 
-VERSION = "5.4.0"
+VERSION = "5.4.1"
 
 
 def _ident(oa_ui: str | None = Cookie(default=None),

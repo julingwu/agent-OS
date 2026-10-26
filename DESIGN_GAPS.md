@@ -780,3 +780,71 @@ conn.execute("UPDATE acceptance_criteria SET state='passed', note='flow_stage_ac
 **如何避免重踩**：短路开关必须同时打上**可识别的标记**（这里已做：runner / checksum / actor 三处），
 并在指标查询里显式过滤。报告里凡是出现「全绿 / 1.00 / 零驳回」，都要附带当时的环境变量快照
 与 runner 分布 —— 否则你测的不是系统，是 stub。
+
+## §77 `llm.complete()` 没有离线阀门，测试会偷偷真调模型（v5.4.1，已修复）
+
+**现象**：v5.4.0 封版时从 tag 拉干净 checkout 复跑全量，得到 `628 passed / 1 failed`，
+而本机是 `629 全绿`。失败的是 `test_multi_tag_pulls_one_role_per_tag`（`KeyError: 'T1'`）。
+
+**物理根因**：`M0_MOCK_LLM` 只在 `runner_native._native_mode()` 里生效，`app/llm.py` 的
+`chat()` 与 `complete()` **都没有阀门**，只要环境里有 key 就真发 HTTP。而
+`app/main.py` 在 import 时调 `config.load_env()`，用 `os.environ.setdefault` 把开发者本机
+`.env` 灌进进程环境 —— 只要有一个用例先 import 了 `app.main`，`DEEPSEEK_API_KEY` 就留到
+session 结束。于是 `flows.classify()` 真的走了一次 DeepSeek，靠返回的
+`software + secondary=content` 才拼出复合流、才产生 WBS。干净 checkout 上没有 `.env`
+→ 离线词表命中 `content` → `FLOW-ANALYSIS` → 没有 WBS → 用例失败。
+
+**危害不止是红绿**：跑一次测试就是一次真实计费调用，而且「测试是否通过」取决于这台机器上
+有没有 `.env` —— 这是最坏的一种不确定性，因为它只在别人机器上炸。
+
+**修法**：
+- `app/llm.py` 新增统一阀门 `_llm_mode() / is_offline()`，`chat()` 与 `complete()` 共用，
+  优先级与 `_native_mode()` 一致：**显式 `M0_LLM_MODE` > `M0_MOCK_LLM` > 有 key 才联网**。
+  要真联调必须显式 `M0_LLM_MODE=live`（`tests/test_v53_native_llm_generation.py` 的两条
+  真 HTTP 用例已按此改写）。
+- 同一个函数里顺手补上 **usage 采集**：`complete()` 以前把 response 里的 `usage` 整个丢掉，
+  所有走它的路径（意图分类、立项书/研讨/WBS/复盘文档）在 FinOps 上一律记 0，是成本黑洞。
+  现在 `complete_with_usage()` 返回 `(text, usage)`，`complete()` 保留原签名并在成功时
+  `_record_usage()`；需要记账的调用方用 `set_usage_sink()` 注册接收器。
+- `conftest.py` 在 `app.main` 被 import 之前把 `config.load_env` 换成 no-op，测试环境完全
+  由 conftest 决定，不再读开发者 `.env`。
+
+**仍未解决（如实记录）**：`complete()` 的 usage 现在能取到并累计，但**没有落到
+`task_runs.usage_tokens`** —— 调用它的路径（意图分类、文档生成）手上没有 run_id，
+项目级开销目前无处记账。要真正闭环，需要一个项目/阶段级的 overhead 账本，
+这轮没有做，别以为已经闭环。
+
+**如何避免重踩**：任何「封装外部付费调用」的模块，阀门必须装在被封装的那一层，
+而不是调用方。装在调用方，第 2 个调用方出现的当天就会漏。测试的确定性要求必须写成
+「干净 checkout 上也能过」，不能只写在本地 README 里。
+
+## §78 经验标题的注入套娃（v5.4.1，已修复）
+
+**现象**：生产库里出现这样的经验标题：
+
+```
+驳回：开发最小可用版本…需求 失败的原因是什么
+【组织经验（自动注入）】
+- [决策否决] 任何 Agent
+```
+
+**物理根因**：召回的经验会被拼成「… 【组织经验（自动注入）】 - [决策否决] …」塞进下一轮
+prompt，而任务标题又是从这个 prompt 里截出来的（`flows`/`task_generator` 取需求首行）。
+于是经验标题带着上一轮的注入尾巴，下一轮沉淀时又把这个尾巴抄进去 —— 每一轮都在标题里
+再套一层，长度和噪音单调增长。
+
+**修法**：在**唯一写入口** `experience.add()` 上做剥离（不依赖各 caller 自觉）：
+- `strip_injected_title()`：标题截断到第一个注入标记之前（标题本身在前面，截断不丢信息）；
+- `strip_injected_content()`：正文里把「标记 → 同一段内的 `《…》` 闭合」整段挖掉，
+  保留「未通过判据：…」这类真正有用的信息（直接截断会把有用信息一起丢掉）；
+- `experience.edit()` 这条人工写入口同样剥离。
+标记清单含历史半截形态（`【组织经验（自动注入)`）与 `【项目上游已交付结论与上下文】`。
+
+**存量清洗**：生产库 465 条经验里，`pending 17` 与 `approved 12` **实测 0 条**带尾巴；
+只有 3 条早已 `rejected` 的仍带（正是 v5.4.0 驳回的那批）。只截断这 3 条的 `title`、
+**不动 content** —— v5.4.0 的审计 payload 里存了 `content_sha256`，改正文会让那份审计失真。
+每条写 `ai_audit_logs(action='experience_title_scrubbed')` 并保留 `original_title`。
+
+**如何避免重踩**：凡是「把 A 的内容拼进 prompt、再从 prompt 里截出 B」的链路，
+B 的写入口必须做标记剥离；套娃不会自己停，它只会越来越长。
+

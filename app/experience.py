@@ -157,6 +157,58 @@ def _tags(text: str) -> list[str]:
     return tags[:8]
 
 
+# ---------------------------------------------------------------- 标题注入套娃（v5.4.1）
+# 召回的经验会被拼成「… 【组织经验（自动注入）】 - [决策否决] …」塞进下一轮 prompt，
+# 而任务标题又是从这个 prompt 里截出来的。于是经验标题带着上一轮的注入尾巴，
+# 下一轮再沉淀时又把这个尾巴抄进去 —— 生产库里已经长成这样：
+#   驳回：开发最小可用版本…需求 失败的原因是什么  【组织经验（自动注入）】 - [决策否决] 任何 Agent
+# 这里在唯一写入口 add() 上做剥离：标题截断到第一个注入标记之前，正文里把标记到
+# 《…》闭合之间的那段挖掉（保留「未通过判据：…」这类真正有用的信息）。
+INJECTION_MARKERS = (
+    "【组织经验（自动注入）】",
+    "【组织经验(自动注入)】",
+    "【组织经验（自动注入)",          # 历史数据里存在被截断的半截标记
+    "【项目上游已交付结论与上下文】",
+    "【决策否决】",
+)
+
+
+def _first_marker(text: str) -> int:
+    cut = -1
+    for marker in INJECTION_MARKERS:
+        i = text.find(marker)
+        if i != -1 and (cut == -1 or i < cut):
+            cut = i
+    return cut
+
+
+def strip_injected_title(title: str | None) -> str:
+    """标题只保留注入标记之前的部分（标题本身在最前面，截断不丢信息）。"""
+    s = (title or "").strip()
+    cut = _first_marker(s)
+    if cut != -1:
+        s = s[:cut]
+    return s.rstrip(" \t\r\n　-—·，,、；;")
+
+
+def strip_injected_content(content: str | None) -> str:
+    """正文里挖掉注入段：标记到同一段内的 《…》 闭合为止；没有闭合就截到行尾。"""
+    s = content or ""
+    while True:
+        cut = _first_marker(s)
+        if cut == -1:
+            return s
+        close = s.find("》", cut)
+        nl = s.find("\n", cut)
+        if close != -1 and (nl == -1 or close < nl):
+            s = s[:cut] + s[close + 1:]        # 连同注入段一起丢掉，保留闭合符
+        elif nl != -1:
+            s = s[:cut] + s[nl:]
+        else:
+            s = s[:cut]
+        s = s.replace("  》", "》").replace(" 》", "》")
+
+
 def add(conn, *, kind: str, title: str, content: str, tags: list[str] | None = None,
         source_type: str = "", source_id: str = "", project_id: str | None = None,
         task_id: str | None = None, entity: str = "LE-GROUP-HQ",
@@ -164,6 +216,9 @@ def add(conn, *, kind: str, title: str, content: str, tags: list[str] | None = N
         redline_terms: str | list[str] | None = None,
         tenant_id: str | None = None, actor: str | dict | None = None) -> dict:
     ensure(conn)
+    # 唯一写入口：先剥离注入尾巴，再落库（不依赖各 caller 自觉）
+    title = strip_injected_title(title)
+    content = strip_injected_content(content)
     entity, tenant_id = _scope(conn, entity, tenant_id)
     if mandatory:
         _reviewer(conn, actor, entity, tenant_id)
@@ -717,6 +772,11 @@ def edit(conn, exp_id: str, changes: dict, *, actor: str,
     values = {k: v for k, v in changes.items() if k in allowed}
     if not values:
         return dict(row)
+    # 人工编辑同样是写入口，注入尾巴一样要剥
+    if "title" in values:
+        values["title"] = strip_injected_title(values["title"])
+    if "content" in values:
+        values["content"] = strip_injected_content(values["content"])
     if isinstance(values.get("redline_terms"), list):
         values["redline_terms"] = ",".join(values["redline_terms"])
     if "tags" in values:
