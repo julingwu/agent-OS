@@ -77,3 +77,42 @@ _main_db_file()`；三条断言在 `tests/test_v54_l1_human_gate_strict.py`。
 2. DoD 指标改为两层口径：自动化送审率 `(awaiting_accept + completed) / total`、
    终态交付率 `completed / total`。v5.3 的 `1.0000` 不再复现，是设计意图而非退化。
 3. 15 条研讨共识与 2 条真实失败经验仍为 `pending`，等人工审阅。
+
+## 五、封版核验抓到的两个真缺陷（已修，第 5 个提交）
+
+封版时没有只信「本地 629 全绿」，而是从 tag 拉了一份**干净 checkout** 复跑全量，
+结果 **628 passed / 1 failed**。追下去是两个此前一直藏着的问题：
+
+1. **测试不是自洽的**：`app/main.py` 在 import 时调用 `config.load_env()`，它用
+   `os.environ.setdefault` 把开发者本机 `.env` 灌进进程环境。于是只要某个用例先 import 了
+   `app.main`，`DEEPSEEK_API_KEY` 就留在 `os.environ` 里直到整个 session 结束。
+2. **`app/llm.py` 的 `complete()` 没有 mock 开关**：只有 `chat()` 侧受 `M0_MOCK_LLM` 约束，
+   `complete()` 只要有 key 就真发 HTTP。所以
+   `tests/test_m15_dispatcher.py::test_multi_tag_pulls_one_role_per_tag`
+   在本机是真的调了一次 DeepSeek（返回 `software` + `secondary=content`），靠这次**真实
+   网络调用**才拼出复合流、才产生 WBS；干净 checkout 上没有 key → 离线词表命中
+   `content` → `FLOW-ANALYSIS` → 没有 WBS → `KeyError: 'T1'`。
+
+也就是说：**此前的「全绿」是借了开发者 `.env` 的光，而且过程中有真实计费调用。**
+
+修法：
+- `conftest.py`：在 `app.main` 被 import 之前把 `config.load_env` 换成 no-op，
+  测试环境完全由 conftest 决定，不读开发者 `.env`（生产路径不受影响）。
+- `tests/test_m15_dispatcher.py`：把意图分类钉死为 `software + secondary=content`。
+  该用例要验的是复合流的 WBS 组合（T1=dev、T2=content 且 T2 依赖 T1），不是模型分类能力；
+  钉死之后不再依赖网络，也不再随本机有没有 `.env` 变色。
+
+核验（两次独立、环境不同）：
+
+| 环境 | 结果 |
+|---|---|
+| 本地工作树（有 `.env`，但已不再读取） | `629 passed, 1 warning in 415.86s`，exit 0 |
+| 干净 checkout（detached tag，**无 `.env`**） | `629 passed, 1 warning in 393.64s`，exit 0 |
+
+这一条比 626/629 这个数字本身更重要：**数字只有在别人机器上也能复现才算数。**
+
+**尚未修的部分（如实记录）**：`app/llm.py` 的 `complete()` 仍然没有 mock 开关。
+测试侧已通过不加载 `.env` 切断风险，但产品代码里只要环境有 key 就会真发请求——
+如果将来有测试再次 import 了会读 key 的路径，同类问题会以另一种形式回来。
+建议下一轮给 `complete()` 补上与 `chat()` 一致的 mock 闸，或加一个显式的
+`M0_LLM_MODE=off` 总开关。

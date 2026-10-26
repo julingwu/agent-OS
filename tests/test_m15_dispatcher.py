@@ -80,8 +80,19 @@ def test_role_library_create_instantiates_employee(conn):
     assert roles.instantiate(conn, role["id"], "LE-GROUP-HQ") == emp
 
 
-def test_multi_tag_pulls_one_role_per_tag(conn):
-    """开发+文案的复合需求 → WBS 里既有开发 T1 也有文案 T2，且 T2 依赖 T1。"""
+def test_multi_tag_pulls_one_role_per_tag(conn, monkeypatch):
+    """开发+文案的复合需求 → WBS 里既有开发 T1 也有文案 T2，且 T2 依赖 T1。
+
+    意图分类在这里被钉死为「软件为主流程、内容为副流程」：真实分类会调模型，
+    而 app/llm.py 的 complete() 没有 mock 开关——只要环境里有 key 就真发 HTTP。
+    那样这条用例会随「本机有没有 .env」时绿时红（干净 checkout 上必红），
+    而本用例要验的是复合流的 WBS 组合，不是模型分类能力。
+    """
+    from app import flows
+    monkeypatch.setattr(flows, "classify", lambda text: {
+        "task_type": "software", "confidence": 0.95,
+        "reason": "test-forced: 开发 + 文案复合需求",
+        "secondary": "content", "how": "test"})
     res = dispatcher.route(conn, "帮我开发一个算账工具，顺便写篇公众号宣传一下")
     assert "dev" in res["tags"] and "content" in res["tags"], res
     rows = {r["code"]: r for r in conn.execute(

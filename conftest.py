@@ -31,3 +31,14 @@ _SAFE_TEST_DEFAULTS = {
 for _k, _v in _SAFE_TEST_DEFAULTS.items():
     os.environ[_k] = _v
 
+# ---------------------------------------------------------------- 测试必须与 .env 隔离
+# app/main.py 在 import 时调用 config.load_env()，它用 os.environ.setdefault 把开发者本机
+# 的 DEEPSEEK_API_KEY / 企微 / OCTO 等灌进进程环境。后果有两个，都不可接受：
+#   1) 部分用例会真的走网络 —— app/llm.py 的 complete() 没有 mock 开关，只要有 key 就发
+#      HTTP，跑一次测试就是一次真实计费调用，且结果不可复现；
+#   2) 「测试是否通过」会取决于这台机器上有没有 .env —— 干净 checkout 上必红。
+# 在 app.main 被 import 之前把 load_env 变成 no-op，测试环境完全由本文件决定。
+import app.config as _config  # noqa: E402  (sys.path 已在上面就位)
+
+_config.load_env = lambda *_a, **_k: {}
+
