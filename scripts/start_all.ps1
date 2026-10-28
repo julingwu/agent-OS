@@ -1,4 +1,4 @@
-﻿# One-click start for the oaagent stack (Windows / PowerShell).
+# One-click start for the oaagent stack (Windows / PowerShell).
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1
 #   ... -SkipOcto        skip the Octo docker stack
@@ -172,7 +172,8 @@ $rows += @{ n = "oaagent  /health"; u = "http://127.0.0.1:8077/health" }
 if (Test-Path (Join-Path $Root "vendor\octo-deployment\docker")) {
     $rows += @{ n = "watch    /octo/watch"; u = "http://127.0.0.1:8077/octo/watch?token=" + (Get-EnvValue "OCTO_SIM_TOKEN") }
 }
-$rows += @{ n = "console  /app/"; u = "http://127.0.0.1:8077/app/" }
+$rows += @{ n = "workspace  /ui/"; u = "http://127.0.0.1:8077/ui/" }
+$rows += @{ n = "cyberdeck  /app/"; u = "http://127.0.0.1:8077/app/" }
 foreach ($r in $rows) {
     $ok = $false
     try { $resp = Invoke-WebRequest -Uri $r.u -UseBasicParsing -TimeoutSec 6; $ok = $resp.StatusCode -eq 200 } catch { }
@@ -185,7 +186,8 @@ try {
 } catch { Say "approval poller: cannot query (is the service up?)" }
 
 Say "=========================================================="
-Say "  元公司赛博全息指挥舱已就绪！"
-Say "  控制台访问: http://127.0.0.1:8077/app/"
+Say "  🚀 AgentOS 服务已就绪！"
+Say "  【主工作台】: http://127.0.0.1:8077/ (AI 助手协作与电脑操控)
+Say "  【赛博指挥舱】: http://127.0.0.1:8077/app/ (项目流水线与研讨会)"
 Say "=========================================================="
 Say "done. logs in data\logs"

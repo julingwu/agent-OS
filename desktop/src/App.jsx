@@ -463,7 +463,16 @@ function MainApp({ onLogout }) {
       );
     };
     window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    const onMsg = (e) => {
+      if (e.data?.type === "SWITCH_TO_CHAT") {
+        setView("chat");
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("message", onMsg);
+    };
   }, []);
   const [fullscreen, setFullscreen] = useState(false);
   const [controlMode, setControlMode] = useState(false);

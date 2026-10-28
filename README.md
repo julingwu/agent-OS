@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🤖 AgentOS (OA Agent) · 次世代企业级自主智能体操作系统
+# 🤖 AgentOS (OA Agent) · 次世代企业级自主智能体协作操作系统
 
-**多端全双工协同 · 43 类行业岗位角色 · 动态技能组合 · 桌面原生执行桥 · 金融级安全信道 · 自备主机私有化**
+**多端全双工协同 · 43 类行业岗位角色 · 动态技能组合 · 桌面原生操控流 · 金融级安全信道 · 自备主机私有化**
 
 <p align="center">
   <img src="https://img.shields.io/badge/Version-v5.4.3%20%7C%20v1.0-blue.svg?style=flat-square" alt="Version">
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  一句话下达业务需求 ➔ 智能拆解阶段与 WBS 任务 ➔ 生成可执行判据 ➔ 双内核精准调度 ➔ L0/L1/L2 分层严格验收 ➔ 组织经验自动沉淀
+  一句话下达业务需求 ➔ 43 岗 AI 助手协同 ➔ 实时接管操作电脑 ➔ 智能拆解 WBS 任务 ➔ L0/L1/L2 严苛验收 ➔ 组织经验自动沉淀
 </p>
 
 ---
@@ -23,72 +23,88 @@
 
 ## 📑 目录导航
 
-- [✨ 核心设计理念](#-核心设计理念)
+- [✨ 双舱协同架构：主工作台与指挥舱](#-双舱协同架构主工作台与指挥舱)
 - [🖼️ 界面全景与真实运行效果](#️-界面全景与真实运行效果)
-  - [1. 43 类标准化角色库与岗位定制](#1-43-类标准化角色库与岗位定制)
-  - [2. 动态技能库与智能助手赋能](#2-动态技能库与智能助手赋能)
-  - [3. 跨端全双工协同（Windows 桌面端 + Android 移动端）](#3-跨端全双工协同windows-桌面端--android-移动端)
-  - [4. 结构化高危审批卡与目录白名单硬阻断](#4-结构化高危审批卡与目录白名单硬阻断)
-  - [5. 桌面原生抓屏与无损视觉闭环](#5-桌面原生抓屏与无损视觉闭环)
+  - [1. 核心主工作台（登录后主界面）](#1-核心主工作台登录后主界面)
+  - [2. 赛博全息指挥舱（工程总装第二舱）](#2-赛博全息指挥舱工程总装第二舱)
+  - [3. 43 类细分行业角色库 × 12 工业级特化技能](#3-43-类细分行业角色库--12-工业级特化技能)
 - [🏛️ 系统架构全景拓扑](#️-系统架构全景拓扑)
 - [🚀 六大核心技术支柱](#-六大核心技术支柱)
 - [⚖️ 执行内核与 FinOps 预算管控](#️-执行内核与-finops-预算管控)
-- [🏁 快速开始与部署指南](#-快速开始与部署指南)
+- [🏁 快速开始与访问指南](#-快速开始与访问指南)
 - [🛡️ 质量保证与测试套件](#️-质量保证与测试套件)
 - [📂 仓库工程结构](#-仓库工程结构)
 
 ---
 
-## ✨ 核心设计理念
+## ✨ 双舱协同架构：主工作台与指挥舱
 
-传统的 AI Agent 系统往往停留在“网页聊天框内套 Prompt”的玩具阶段，面临**无法触达本地物理设备**、**缺乏权限与目录安全管控**、**跨端协同脱节**、**模型自评自嗨缺乏可验证判据**等工业级痛点。
+传统的 AI 框架要么是“单调的聊天框”，要么是“复杂的后台流水线看板”，割裂了人机对话协作与宏观工程交付。
 
-**AgentOS** 采用**第一性原理**从底层重构企业级智能体运行基座：
-1. **角色即岗位，技能即装备**：内建 43 类深度行业角色，助手创建自动继承专属岗位 Prompt 与基础工具集，详情支持按需动态扩展与跨角色技能借调。
-2. **多端状态一致性（Continuum）**：电脑端下达任务，手机端即时查看与追加；手机端在通勤碎片时间发起的长链路任务，电脑桌面无缝接管并调度原生环境。
-3. **安全严苛护栏（Guardrails First）**：绝不放任大模型裸奔执行危险命令。结构化变更预览审批卡 + 目录白名单硬隔离 + L0/L1/L2 证据留痕验收，彻底筑牢企业数字资产底线。
-4. **金融级真实安全信道（Enterprise TLS）**：自建两级私有 CA 链与 443 端口 DER CRL 实时吊销点，完美适配 Windows Schannel 底层安全机制，彻底摒弃 `--ignore-certificate-errors` 的妥协做法。
-5. **算力与数据主权去中心化（BYOH）**：账号与计算主机解耦，企业或个人自带 VPS，实现“一人一机、各用各服、数据主权完全私有”。
+**AgentOS** 采用独特的**双舱协同架构**，各司其职又无缝秒级跳转：
 
----
+```mermaid
+flowchart LR
+    subgraph CoreWorkspace ["【第一主舱】AI 团队协同工作台 (默认主界面)"]
+        Chat["💬 多助手多轮对话<br/>(小万、小财等 43 岗位)"]
+        Stream["🖥️ 实时桌面操控推流<br/>(低延迟视频流 + 键鼠接管)"]
+        RolesConfig["🎭 岗位角色与技能配置<br/>(自带基础技能 + 自定义扩充)"]
+        Memory["🧠 长期记忆自学沉淀"]
+    end
 
-## 🖼️ 界面全景与指挥舱视图
+    subgraph CyberDeck ["【第二切换舱】赛博全息指挥舱 (总装发射台)"]
+        Launch["🚀 CEO 战略指令发射台"]
+        Pipelines["⚙️ 标准 9 阶段软件工程流水线"]
+        Octo["🪐 OCTO 4 轮研讨会智能推演"]
+        FinOpsDeck["💎 晶石吸纳演练与算力消耗"]
+        MCPEx["🔌 万界 MCP 交易所"]
+    end
 
-> 界面均采用无侵入式自研组件与现代化响应式设计，严守数据隔离与合规红线。
-
-| 赛博指挥舱：阶段流水线一览 | 总装流水线：单项目推进与交付 |
-|:---:|:---:|
-| <img src="docs/screenshots/v5/cyberdeck.png" width="560" alt="赛博指挥舱"> | <img src="docs/screenshots/v5/projects.png" width="560" alt="项目流水线"> |
-
-| 任务中心：判据制定与执行留痕 | FinOps：Token 折算与预算熔断池 |
-|:---:|:---:|
-| <img src="docs/screenshots/v5/tasks.png" width="560" alt="任务中心"> | <img src="docs/screenshots/v5/finops.png" width="560" alt="FinOps 预算"> |
-
-| 经验沉淀：组织经验自动汇聚与转正 | 评测中心：离线回归与判据全量覆盖 |
-|:---:|:---:|
-| <img src="docs/screenshots/v5/experience.png" width="560" alt="经验中心"> | <img src="docs/screenshots/v5/evals.png" width="560" alt="评测中心"> |
-
----
-
-### 🛡️ 结构化审批卡与护栏样式规范
-
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│  ⚠️ 高风险操作审批 (Risk Level: HIGH)                                  │
-├────────────────────────────────────────────────────────────────────────┤
-│  操作类型: local_write                                                 │
-│  目标路径: C:\Users\Admin\Documents\report.txt (4 行 / 120 字节)       │
-│  变更摘要: 正在向本地白名单目录写入数据分析汇总报告                    │
-├────────────────────────────────────────────────────────────────────────┤
-│  [变更预览]                                                            │
-│  + # 季度经营分析数据汇总                                               │
-│  + Total Revenue: ¥1,280,000 (+14.2% YoY)                              │
-├────────────────────────────────────────────────────────────────────────┤
-│  [ local_allow_dirs 校验通过: 白名单放行 ]   [ 🚫 拒绝 ]   [ ✅ 允许执行 ] │
-└────────────────────────────────────────────────────────────────────────┘
+    CoreWorkspace -- "左下角一键展开「赛博指挥舱」" --> CyberDeck
+    CyberDeck -- "顶部/侧边栏一键「← 返回主工作台」" --> CoreWorkspace
 ```
-* **风险徽标判定**：系统根据操作危险度标注低/中/高风险，杜绝盲批；
-* **目录白名单硬拦截**：未在 `local_allow_dirs` 登记的系统路径（如 `C:\Windows\Temp`）服务端直接静默阻断，无需弹窗。
+
+1. **核心主工作台（登录后默认主界面 · 图 1）**：
+   * **业务日常协作核心**：用户登录系统后进入的默认核心界面。
+   * **多角色 AI 团队直聊**：左侧展示团队所有助手（如小万、小财、技术架构师、法务顾问），支持一对一专聊、多 Agent 群聊。
+   * **右侧实时电脑视窗与控制（Computer-Use）**：原生推流电脑屏幕，随时查看 Agent 正在电脑上干什么，支持一键“取得控制权”直接操作。
+   * **角色与技能自由定制**：新建助手时从 43 个行业角色预设挑选，自动联动职责与基础技能，详情面板可随时扩充或剔除技能。
+2. **赛博全息指挥舱（工程总装第二舱 · 图 2）**：
+   * **宏观项目总装中枢**：主工作台左下角点击【赛博指挥舱】即可瞬时展开。
+   * **复杂软件工程流水线**：9 阶段工程流水线、4 轮研讨会推演、沙盘演练、MCP 工具市场与 FinOps 晶石开销。
+   * **双向无缝切回**：指挥舱顶部常驻【← 返回 AI 团队主工作台】按钮，左侧“我的工作空间”随时一键回归对话。
+
+---
+
+## 🖼️ 界面全景与真实运行效果
+
+### 1. 核心主工作台（登录后主界面）
+> 43 岗 AI 助手团队、多轮上下文会话、右侧原生电脑操控流推流与接管、岗位技能自定义增删。
+
+<div align="center">
+  <img src="docs/screenshots/v5/workspace_main.png" width="920" alt="核心主工作台（登录后主界面）">
+</div>
+
+### 2. 赛博全息指挥舱（工程总装第二舱）
+> CEO 战略指令发射台、9 阶段工程流水线、OCTO 研讨会推演、沙盘演练、万界 MCP 交易所。随时点击顶部 `← 返回对话` 切回主工作台。
+
+<div align="center">
+  <img src="docs/screenshots/v5/cyberdeck.png" width="920" alt="赛博全息指挥舱">
+</div>
+
+---
+
+### 3. 43 类细分行业角色库 × 12 工业级特化技能
+
+系统数据库内建 43 类标准化企业岗位人设，并出厂预植 12 项开箱即用的工业级执行流程技能（按需直接赋能助手）：
+
+| 行业领域 | 代表性预设角色 (共 43 类) | 预置特化技能示例 (DEFAULT_GLOBAL_SKILLS) |
+|---|---|---|
+| **技术研发** | 技术架构师、后端全栈专家、前端体验工程师、DevOps 运维总监 | **代码质量与安全审计**、**SQL慢查询与索引优化**、**架构评审与边界设计**、**系统健康巡检与探活** |
+| **项目与敏捷** | 敏捷项目经理、敏捷教练 (Scrum Master)、技术文档工程师 | **敏捷项目燃尽与风险复盘**、**周报三段式提炼**、**Git提交规范提炼** |
+| **商业与决策** | 战略投资总监 (小财)、行业研究分析师、商业分析师 | **第一性原理决策推演**、**电商竞品差评与痛点挖掘** |
+| **财税法合规** | 增值税合规顾问、企业法务合规官、劳动法顾问 | **增值税与财务合规审核**、**中英双向专业术语翻译** |
+| **市场与运营** | 爆款内容操盘手 (小万)、社媒增长专家、新媒体文案 | **爆款文案多平台适配**、**竞品痛点提炼** |
 
 ---
 
@@ -97,9 +113,9 @@
 ```mermaid
 flowchart TB
     subgraph ClientLayer ["客户端层 (Client Layer - Tauri 2 Multi-Target)"]
-        WinClient["🖥️ Windows 桌面端<br/>(Win32 原生桥 / GDI 抓屏 / 独立进程组)"]
-        MobileClient["📱 Android 移动端<br/>(原生 APK / 内置私有 CA 策略 / 响应式抽屉)"]
-        WebClient["🌐 现代浏览器端<br/>(CyberDeck 赛博指挥舱 / 移动端自适应)"]
+        WinClient["🖥️ Windows 桌面端 (AgentOS.exe)<br/>(Tauri 2 原生封装 / GDI 抓屏 / 独立进程组)"]
+        WebClient["🌐 现代浏览器 Web 端 (/ui/)<br/>(React 响应式单页应用 / 双舱秒级跳转)"]
+        MobileClient["📱 Android / 鸿蒙移动端<br/>(原生 APK / 安全区与抽屉自适应)"]
     end
 
     subgraph SecurityLayer ["安全与合规网关 (Enterprise Security Gateway)"]
@@ -110,14 +126,14 @@ flowchart TB
 
     subgraph CoreEngine ["核心调度与执行引擎 (Core Agent Engine)"]
         FastAPI["⚡ 高性能调度中枢 (FastAPI)"]
-        DB[(🗄️ SQLite WAL 引擎<br/>租户物理级字段过滤 / 排空防死锁)]
+        DB[(🗄️ SQLite WAL 引擎<br/>bot_skills / 43角色库 / 租户数据物理隔离)]
         Supervisor["⏱️ W4 进程 Supervisor<br/>(独立日志落盘 / 跨重启 recover_interrupted 自动愈合)"]
         DualKernel["⚙️ 执行内核切换器<br/>(NativeKernel 进程内直驱 vs ACP 子进程 JSON-RPC)"]
     end
 
     subgraph CapabilityLayer ["智能体角色与能力资产 (Personas & Capabilities)"]
         Roles["🎭 43 类行业岗位角色库<br/>(研/产/销/运/管/财/法 全矩阵预置人设)"]
-        Skills["🧰 统一动态技能库<br/>(系统自检 / 窗口聚焦 / 自动化巡检 / 跨角色借调)"]
+        Skills["🧰 12 项工业级特化技能库<br/>(决策推演 / 代码审计 / 财税合规 / 周报复盘)"]
         MCPBridge["🔌 MCP 协议桥接<br/>(标准外部工具接入 / 多生态模型扩展)"]
     end
 
@@ -139,41 +155,37 @@ flowchart TB
 
 ## 🚀 六大核心技术支柱
 
-### 1. 43 类行业岗位角色库 × 动态技能组合系统
-* **拒绝千篇一律的通用对话**：系统内置 43 个细分行业角色标准定义，涵盖技术研发、跨境电商、财税合规、内容运营、敏捷项目、销售商务等。
-* **岗位创建即赋能**：新建助手时选择角色，系统自动为其初始化岗位核心 Prompt、能力标签与专属基础技能（持久化于 `bot_skills` 表）。
-* **自由扩展与跨角色借调**：助手详情面板支持直观增删技能，提供本角色推荐技能库，并支持从其它 42 个角色中按需借调专属技能。
+### 1. 核心工作台即主入口，多 Agent 智能协同
+* **拒绝千篇一律的通用对话**：系统内置 43 个细分行业角色标准定义，登录即直达多 Agent 协作主界面。
+* **岗位创建即赋能**：新建助手时挑选角色，系统自动为其初始化核心 Prompt、能力标签与专属基础技能。
+* **自由扩展与跨角色赋能**：助手详情面板支持直观增删技能，提供本角色推荐技能库，并支持从其它角色中按需借调。
 
-### 2. 全双工跨端协同（Windows Desktop + Android Mobile）
-* **Tauri 2 统一架构**：桌面与移动端共享同一套响应式 React 前端，桌面端编译为轻量 Win32 原生可执行文件，移动端直接输出原生 Android APK。
-* **移动端抽屉自适应交互**：手机端内置顶部导航、双向侧滑抽屉（`☰` 历史会话管理 + `⚙` 助手人设与技能调优），适配移动端虚拟键盘与底部安全区（Safe-Area）。
-* **多端任务连续体**：无论在电脑端还是手机端下达指令，任务状态、阶段进度、产物引用均全网秒级同步，支持 PC 端发起、手机端外出审阅批复。
-
-### 3. 桌面原生执行桥（Desktop Native Bridge）
-* **Win32 深度硬件交互**：通过 Windows API 实现前台活动窗口枚举与聚焦、多屏坐标计算。
+### 2. 桌面原生执行桥（Desktop Native Bridge）与实时视窗
+* **实时桌面推流**：主工作台右侧直接挂载桌面画面，随时观察 Agent 执行操作；
+* **Win32 深度硬件交互**：通过 Windows API 实现前台活动窗口枚举与聚焦、多屏坐标计算；
 * **超轻量原生抓屏**：利用 Win32 GDI 配合纯 Rust `png` 无损压缩算法抓屏，381ms 极速生成，规避重量级依赖。
-* **W4 进程 Supervisor**：
-  * 支持 POSIX `setsid` 与 Windows `CREATE_NEW_PROCESS_GROUP` 隔离会话；
-  * 日志独立写盘至 `<workspace>/logs/<id>.log`，坚决不使用 PIPE 避免管道未读死锁；
-  * 服务启动时自动执行 `recover_interrupted`，将遗留进程标识为 `lost`，杜绝孤儿进程与假死状态。
+
+### 3. 去中心化自备主机（BYOH - Bring Your Own Host）
+* **数据主权私有化**：服务端主机与平台账号物理解耦。企业与个人用户自备 Linux VPS 或本地服务器，数据主权完全私有。
+* **一键单行脚本拉起**：在服务器终端执行一行 curl 命令即可完成环境准备与服务守护进程注册。
+* **客户端多实例管理**：客户端内置动态服务器切换器与 Ping 延迟探活，一键在“官方节点”、“自备云机”与“局域网实例”间切换。
 
 ### 4. 企业级严格护栏与人机共治（Guardrails & HITL）
 * **三层可信验收标准**：
   * **L0 规则自动判定**：语法校验、状态码检查、格式匹配；
   * **L1 人工签批强制留痕**：审批人必须填写 `evidence_snippet` 凭据，**严禁大模型自评通过**；
   * **L2 沙箱脚本真实执行**：在隔离沙箱中跑自动化判据脚本，真实退出码作为唯一通过证据。
-* **结构化高危审批卡**：直观展示操作对象人话摘要、目标窗口、写入内容前缀、增减字符量与高危操作原文，消灭“盲批”隐患。
+* **结构化高危审批卡**：直观展示操作对象人话摘要、目标路径、增减字符量与变更原文预览，消灭“盲批”隐患。
 * **目录白名单硬阻断**：服务端全局配置 `local_allow_dirs`，越界路径静默拦截拒绝，不给任何越权穿透机会。
 
-### 5. 金融级真证书安全链（Enterprise TLS / CDP / CRL 吊销）
+### 5. 全双工跨端协同（Windows Desktop + Web + Android Mobile）
+* **Tauri 2 统一架构**：桌面与移动端共享同一套响应式 React 前端，桌面端编译为轻量 Win32 原生可执行文件，移动端直接输出原生 Android APK。
+* **移动端抽屉自适应交互**：手机端内置顶部导航、双向侧滑抽屉，全面适配鸿蒙与 Android 主流机型分辨率与 Safe-Area 避让。
+
+### 6. 金融级真证书安全链（Enterprise TLS / CDP / CRL 吊销）
 * **拒绝任何不安全的妥协**：客户端彻底移除 `--ignore-certificate-errors` 启动参数。
 * **2 级自建私有 CA 体系**：RSA 4096 位根证书（有效期 10 年）+ RSA 2048 位叶证书（有效期 397 天），SAN 覆盖全内网与公网 IP。
 * **适配 Windows Schannel 强吊销检查**：叶证书内嵌 CDP（CRL 分发点），配合 Nginx 443 端口发布 DER 格式 CRL 吊销列表，经真实吊销演练验证，完全通过 Schannel 与 curl 的严格握手校验。
-
-### 6. 去中心化自备主机（BYOH - Bring Your Own Host）
-* **数据主权私有化**：服务端主机与平台账号物理解耦。企业与个人用户自备 Linux VPS 或本地服务器，无需将企业机密数据集中存放在公有云。
-* **极简一键拉起**：支持反向拉取架构，用户在服务器终端执行一行安装脚本即可完成环境准备与容器拉起。
-* **客户端多实例管理**：客户端内置动态服务器切换器，一键无缝在“官方开发机”、“企业专属云”与“局域网私有机”之间平滑切换。
 
 ---
 
@@ -192,46 +204,42 @@ flowchart TB
 
 ---
 
-## 🏁 快速开始与部署指南
+## 🏁 快速开始与访问指南
 
-### 1. 启动服务端 (FastAPI)
+### 1. 服务端一键拉起 (Linux VPS / 自备服务器)
 
-```powershell
-# 1. 准备 Python 虚拟环境与依赖
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+在您的自备服务器上直接执行单行脚本，自动完成环境安装、自签证书、systemd 守护进程与服务启动：
 
-# 2. 生成会话加密密钥并写入 .env
-$secret = python -c "import secrets; print(secrets.token_hex(32))"
-Copy-Item .env.example .env
-(Get-Content .env) -replace "UI_SESSION_SECRET=.*", "UI_SESSION_SECRET=$secret" | Set-Content .env
-
-# 3. 初始化超级管理员令牌并启动服务
-python tools/auth_admin.py issue --name admin --role ceo
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8077
+```bash
+curl -sSL https://raw.githubusercontent.com/julingwu/agent-OS/mainline/scripts/setup_server.sh | bash
 ```
 
-### 2. 编译并运行 Windows 桌面端
+### 2. Windows 本地一键启动
 
 ```powershell
-cd desktop
-npm install
-
-# 编译前端静态产物并生成 Tauri Windows 客户端
-npm run build:tauri
-npx tauri build --no-bundle
-# 生成产物：desktop/src-tauri/target/release/agentos-desktop.exe
+# 运行一键全栈启动脚本
+powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1
 ```
 
-### 3. 云端一键构建 Android 移动端 APK
+启动完成后，系统提供两个标准访问入口：
 
-无需在本地配置繁杂的 Android Studio 与 NDK 工具链，代码仓库已内置 **GitHub Actions** 自动化移动构建流水线：
+* **【核心主工作台】（登录默认主界面）**：**`http://127.0.0.1:8077/`**（或 `http://127.0.0.1:8077/ui/`）
+  * 包含 43 岗 AI 助手、多轮协作会话、右侧桌面实时流控制、技能配置。
+* **【赛博全息指挥舱】（工程总装第二舱）**：**`http://127.0.0.1:8077/app/`**
+  * 包含 9 阶段软件工程流水线、OCTO 研讨沙盘、MCP 交易所，顶部常驻【← 返回主工作台】。
 
-1. 将代码推送到 GitHub 仓库；
-2. 访问 GitHub 仓库页面 ➔ **Actions** ➔ 选择 **Build Android APK (Tauri 2 Mobile)**；
-3. 点击 **Run workflow**，流水线将自动完成 Rust 交叉编译、私有根 CA 安全策略注入与 Gradle 原生打包；
-4. 在构建完成的页面底部 **Artifacts** 区域即可一键下载 `AgentOS-Android-APK` 安装包使用。
+### 3. Windows 原生桌面客户端 (`AgentOS.exe`)
+
+双击桌面上的 `AgentOS.exe` 即可直接使用：
+* 离线内置完整前端包，无需预先启动浏览器；
+* 内置主机管理器，支持在官方节点、自备主机、本地开发机之间自由切换并实时探活 Ping 延迟；
+* 点击左下角【赛博指挥舱】可随时切入工程视图，点击右上角【← 返回对话】秒级回到工作台。
+
+### 4. Android / 鸿蒙移动端 APK
+
+代码仓库已配置 **GitHub Actions** 自动化移动构建流水线：
+* 访问 GitHub 仓库 ➔ **Actions** ➔ **Build Android APK (Tauri 2 Mobile)** ➔ 下载最新的 Artifacts 安装包；
+* 手机端自适应主流机型分辨率，提供双向侧滑抽屉与安全区沉浸式体验。
 
 ---
 
@@ -268,7 +276,7 @@ npx tauri build --no-bundle
 
 ```text
 oaagent-m0/
-├── app/                      # 后端核心业务层
+├── app/                      # 后端核心业务层 (FastAPI + SQLite WAL)
 │   ├── agent/                # 循环 Agent 核心与工具调用链
 │   ├── api_v1/               # v1 统一对外 API (Bot/会话/设备/流式/角色/技能)
 │   ├── computer/             # 桌面操控与交互抽象层
@@ -277,24 +285,20 @@ oaagent-m0/
 │   ├── processes.py          # W4 跨平台进程 Supervisor
 │   ├── rbac.py               # 租户隔离与角色权限访问控制
 │   └── events.py             # 全局流式事件总线 (SSE/WebSocket)
-├── desktop/                  # 跨平台客户端 (Tauri 2 多目标架构)
-│   ├── src/                  # React + Vite 响应式前端 (自适应桌面与手机)
-│   ├── src-tauri/            # Rust 宿主内核 (Win32 本地桥 / Android 移动入口)
-│   └── ca.crt                # 预签发私有根证书 (自动注入移动端 APK)
-├── deploy/                   # 部署与运维配置
-│   ├── tls/                  # 两级私有 CA 根生成与 CRL 吊销发布脚本
-│   └── nginx.conf            # Nginx 443 SSL 反向代理与证书分发配置
-├── docs/                     # 设计文档与媒体资源
-│   ├── screenshots/          # 系统最新真机全景截图画廊
-│   └── design/               # TLS.md / 护栏设计 / 架构规格说明书
-├── tests/                    # 89 个全面回归测试套件 (822 条用例)
-├── tools/                    # 运维与管理员辅助工具 (auth_admin.py 等)
-└── .github/workflows/        # GitHub Actions CI/CD 自动化流水线
-    └── build-android.yml     # Android 原生 APK 云端打包流水线
+├── desktop/                  # 核心主工作台前端 (Tauri 2 客户端 + Web 宿主)
+│   ├── src/                  # React + Vite 响应式主界面 (图 1: 对话/电脑操控/43角色/技能)
+│   └── src-tauri/            # Tauri 2 原生封装 (Windows exe / Android APK)
+├── web/                      # 赛博全息指挥舱前端 (图 2: 总装流水线/研讨沙盘/MCP交易所)
+├── ui_dist/                  # 服务端托管的主工作台静态构建包 (对应 /ui/)
+├── deploy/                   # 部署与运维配置 (Nginx 反代 / TLS 自签 CA)
+├── docs/screenshots/v5/      # 系统最新真机截图 (workspace_main.png / cyberdeck.png)
+├── scripts/                  # 一键启动脚本 (start_all.ps1 / setup_server.sh)
+├── tests/                    # 89 个全面回归测试套件 (823 条用例)
+└── .github/workflows/        # GitHub Actions 自动化打包流水线 (Android APK)
 ```
 
 ---
 
 <div align="center">
-  <sub>AgentOS · 次世代企业级自主智能体操作系统 · 保障数据主权与物理安全底线</sub>
+  <sub>AgentOS · 次世代企业级自主智能体协作操作系统 · 双舱协同 · 保障数据主权与物理安全底线</sub>
 </div>

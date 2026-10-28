@@ -298,8 +298,18 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
           <span className="brand-mark"><Icon name="spark" /></span>
           <span className="brand-copy"><b>Agent OS</b><small>AI WORKSPACE</small></span>
         </div>
-        <div className="workspace-switcher">
-          <Icon name="org" /><div><b>我的工作空间</b><small>AI 团队协作</small></div>
+        <div
+          className="workspace-switcher"
+          onClick={() => {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage({ type: "SWITCH_TO_CHAT" }, "*");
+            }
+            window.location.href = "/ui/";
+          }}
+          style={{ cursor: "pointer" }}
+          title="点击返回 AI 团队主工作台（对话与电脑协作）"
+        >
+          <Icon name="org" /><div><b>我的工作空间</b><small>← 返回 AI 团队主界面</small></div>
           <span className="spacer" /><Icon name="chevron" />
         </div>
         <div className="nav-section-label">工作空间</div>
@@ -397,6 +407,35 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
               {chats.map((c) => (<option value={c.id} key={c.id}>{c.employee_name || c.title}</option>))}
             </select>
           )}
+          <a
+            href="/ui/"
+            className="btn-return-workspace"
+            onClick={(e) => {
+              if (window.parent && window.parent !== window) {
+                e.preventDefault();
+                window.parent.postMessage({ type: "SWITCH_TO_CHAT" }, "*");
+              }
+            }}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "5px 14px",
+              borderRadius: "6px",
+              background: "rgba(99, 102, 241, 0.18)",
+              border: "1px solid rgba(99, 102, 241, 0.5)",
+              color: "#c7d2fe",
+              textDecoration: "none",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+              marginRight: "12px",
+              boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
+            }}
+            title="返回 AgentOS 主界面（43角色助手对话、实时电脑桌面操控、技能赋予）"
+          >
+            ← 返回 AI 团队主工作台
+          </a>
           <span className="connection-label"><span className="live-dot" /> 本地工作空间</span>
           <button className="icon-btn" title="使用帮助" aria-label="使用帮助" onClick={() => setShowHelp(true)}>
             <Icon name="help" />
