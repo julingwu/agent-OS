@@ -17,6 +17,15 @@
   一句话下达业务需求 ➔ 43 岗 AI 助手协同 ➔ 实时接管操作电脑 ➔ 智能拆解 WBS 任务 ➔ L0/L1/L2 严苛验收 ➔ 组织经验自动沉淀
 </p>
 
+<p align="center">
+  <a href="https://github.com/julingwu/agent-OS/raw/mainline/releases/AgentOS.exe">
+    <img src="https://img.shields.io/badge/下载客户端-AgentOS.exe%20(6.16MB)-6366f1?style=for-the-badge&logo=windows&logoColor=white" alt="Download Windows Client" />
+  </a>
+  <a href="https://193.112.172.223/ui/AgentOS.exe">
+    <img src="https://img.shields.io/badge/云端极速镜像-AgentOS.exe-10b981?style=for-the-badge&logo=cloud&logoColor=white" alt="Cloud Download Mirror" />
+  </a>
+</p>
+
 ---
 
 </div>
@@ -230,7 +239,12 @@ powershell -ExecutionPolicy Bypass -File scripts\start_all.ps1
 
 ### 3. Windows 原生桌面客户端 (`AgentOS.exe`)
 
-双击桌面上的 `AgentOS.exe` 即可直接使用：
+> 💡 **绿色免安装单文件**：仅 6.16 MB，解压或直接双击运行，内置全套 Web 宿主与 Tauri 2 运行时，告别繁琐安装与环境配置。
+
+* 📥 **GitHub 仓库直链下载**：[AgentOS.exe (点击直链下载)](https://github.com/julingwu/agent-OS/raw/mainline/releases/AgentOS.exe)
+* 🚀 **云端高速下载镜像**：[https://193.112.172.223/ui/AgentOS.exe](https://193.112.172.223/ui/AgentOS.exe)
+
+**核心特性**：
 * 离线内置完整前端包，无需预先启动浏览器；
 * 内置主机管理器，支持在官方节点、自备主机、本地开发机之间自由切换并实时探活 Ping 延迟；
 * 点击左下角【赛博指挥舱】可随时切入工程视图，点击右上角【← 返回对话】秒级回到工作台。
@@ -285,6 +299,7 @@ oaagent-m0/
 │   ├── processes.py          # W4 跨平台进程 Supervisor
 │   ├── rbac.py               # 租户隔离与角色权限访问控制
 │   └── events.py             # 全局流式事件总线 (SSE/WebSocket)
+├── releases/                 # 免安装绿色发布包 (AgentOS.exe 桌面客户端)
 ├── desktop/                  # 核心主工作台前端 (Tauri 2 客户端 + Web 宿主)
 │   ├── src/                  # React + Vite 响应式主界面 (图 1: 对话/电脑操控/43角色/技能)
 │   └── src-tauri/            # Tauri 2 原生封装 (Windows exe / Android APK)
