@@ -772,6 +772,18 @@ function MainApp({ onLogout }) {
     return () => window.removeEventListener("click", clear);
   }, []);
 
+  // 点击外部自动收起底部账户菜单
+  useEffect(() => {
+    if (!showMenu) return;
+    const onOutside = (e) => {
+      if (!e.target.closest(".sidebar-foot")) {
+        setShowMenu(false);
+      }
+    };
+    window.addEventListener("pointerdown", onOutside);
+    return () => window.removeEventListener("pointerdown", onOutside);
+  }, [showMenu]);
+
   /* ---------------- 动作 ---------------- */
   const send = async () => {
     const text = draft.trim();
@@ -1248,16 +1260,42 @@ function MainApp({ onLogout }) {
         <button className="connect-apps" onClick={() => setModal("apps")}>＋ 连接应用</button>
         <button className="connect-apps deck-btn" onClick={openWorkbench}>▦ 赛博指挥舱</button>
         <div className="sidebar-foot">
-          <button className="foot-btn" onClick={() => setShowMenu((v) => !v)}>◍ 账户</button>
           {showMenu && (
-            <div className="account-menu">
-              <div className="account-line">{getConn()?.baseUrl}</div>
-              <button onClick={() => { setShowMenu(false); setSettingsTab("general"); setModal("settings"); }}>设置</button>
-              <button onClick={() => { setShowMenu(false); setSettingsTab("vault"); setModal("settings"); openVault(); }}>保险库</button>
-              <button onClick={() => { setShowMenu(false); setSettingsTab("general"); setModal("settings"); generatePairCode(); }}>添加设备（配对码）</button>
-              <button onClick={() => { setShowMenu(false); openWorkbench(); }}>打开项目工作台（赛博指挥舱）</button>              <button className="danger" onClick={onLogout}>退出登录</button>
+            <div className="account-menu" role="menu">
+              <div className="account-line" title={getConn()?.baseUrl}>
+                <span className="account-server-dot" />
+                <span className="account-server-text">{getConn()?.baseUrl || "未连接"}</span>
+              </div>
+              <button onClick={() => { setShowMenu(false); setSettingsTab("general"); setModal("settings"); }}>
+                <span className="menu-icon">⚙</span>
+                <span>设置</span>
+              </button>
+              <button onClick={() => { setShowMenu(false); setSettingsTab("vault"); setModal("settings"); openVault(); }}>
+                <span className="menu-icon">🔒</span>
+                <span>保险库</span>
+              </button>
+              <button onClick={() => { setShowMenu(false); setSettingsTab("general"); setModal("settings"); generatePairCode(); }}>
+                <span className="menu-icon">📱</span>
+                <span>添加设备（配对码）</span>
+              </button>
+              <button onClick={() => { setShowMenu(false); openWorkbench(); }}>
+                <span className="menu-icon">▦</span>
+                <span>打开项目工作台（赛博指挥舱）</span>
+              </button>
+              <button className="danger" onClick={onLogout}>
+                <span className="menu-icon">⏻</span>
+                <span>退出登录</span>
+              </button>
             </div>
           )}
+          <button
+            className={`foot-btn ${showMenu ? "active" : ""}`}
+            onClick={() => setShowMenu((v) => !v)}
+            title="账户设置"
+          >
+            <span className="foot-btn-left">◍ 账户</span>
+            <span className="foot-arrow">{showMenu ? "▾" : "▴"}</span>
+          </button>
         </div>
       </aside>
 
