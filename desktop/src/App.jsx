@@ -891,7 +891,7 @@ function MainApp({ onLogout }) {
     try {
       const res = await api("/v1/legacy-sso/ticket", { method: "POST" });
       const base = (getConn()?.baseUrl || "").replace(/\/$/, "");
-      setWorkbenchSrc(`${base}/app/?sso=${encodeURIComponent(res.ticket)}`);
+      setWorkbenchSrc(`${base}/app/?sso=${encodeURIComponent(res.ticket)}&_t=${Date.now()}`);
       setView("workbench");
     } catch (e) {
       setError(String(e.message || e));
@@ -2014,13 +2014,18 @@ function NewBotModal({ onSubmit, onClose }) {
     }
   };
 
-  const industries = Array.from(new Set(roles.map((r) => r.industry || "通用")));
+  const PREFERRED_INDUSTRY_ORDER = ["文学与创作", "自媒体与创作", "个人智库", "研发", "金融", "市场", "设计", "法务", "运营", "通用"];
+  const rawIndustries = Array.from(new Set(roles.map((r) => r.industry || "通用")));
+  const industries = [
+    ...PREFERRED_INDUSTRY_ORDER.filter((ind) => rawIndustries.includes(ind)),
+    ...rawIndustries.filter((ind) => !PREFERRED_INDUSTRY_ORDER.includes(ind)),
+  ];
 
   return (
     <div className="modal-mask" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>新建 Bot</h3>
-        <label>选择角色预设（从 43 个专业角色库选择）</label>
+        <label>{roles.length ? `选择角色预设（从 ${roles.length} 个专业角色库选择）` : "选择角色预设（从专业角色库选择）"}</label>
         <select value={selectedRoleId} onChange={(e) => onPickRole(e.target.value)}>
           <option value="">-- 自定义空白角色 --</option>
           {industries.map((ind) => (

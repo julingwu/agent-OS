@@ -303,8 +303,9 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
           onClick={() => {
             if (window.parent && window.parent !== window) {
               window.parent.postMessage({ type: "SWITCH_TO_CHAT" }, "*");
+            } else {
+              window.location.href = "/ui/";
             }
-            window.location.href = "/ui/";
           }}
           style={{ cursor: "pointer" }}
           title="点击返回 AI 团队主工作台（对话与电脑协作）"
@@ -432,7 +433,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
               marginRight: "12px",
               boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
             }}
-            title="返回 AgentOS 主界面（43角色助手对话、实时电脑桌面操控、技能赋予）"
+            title="返回 AgentOS 主界面（角色助手对话、实时电脑桌面操控、技能赋予）"
           >
             ← 返回 AI 团队主工作台
           </a>

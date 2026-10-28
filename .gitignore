@@ -6,7 +6,7 @@
 .venv/
 __pycache__/
 *.pyc
-data/
+/data/
 workspace/
 docs/raw/
 docs/runs/
@@ -77,3 +77,6 @@ deploy/tls/*.crt
 .agentos-shots/
 build/
 desktop/src-tauri/target/
+
+# Allow role seed data to be tracked
+!app/data/roles_seed.json
