@@ -1412,7 +1412,7 @@ function MainApp({ onLogout }) {
             </div>
           )}
           {activity.length > 0 && (
-            <details className="activity" open={status === "thinking"}>
+            <details className="activity" open={status === "thinking" || status === "failed"}>
               <summary>本轮过程（{activity.length}）</summary>
               {activity.map((a) => (
                 <div key={a.id} className={`activity-row ${a.state}`}>
@@ -2419,7 +2419,7 @@ function stateLabel(s) {
   return { running: "进行中", ok: "成功", fail: "失败", waiting: "等你回复" }[s] || s;
 }
 function statusText(s) {
-  return { idle: "空闲", thinking: "正在思考", needs_human: "需要你确认" }[s] || s;
+  return { idle: "空闲", thinking: "正在思考", needs_human: "需要你确认", failed: "执行中断（可继续）" }[s] || s;
 }
 function join(base, name) {
   return base ? `${base}/${name}` : name;

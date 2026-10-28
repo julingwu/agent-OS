@@ -4,6 +4,7 @@
 失败一律返回 None，由调用方回落到模板 —— 文档生成不能把项目卡死。
 """
 from __future__ import annotations
+import time
 
 import contextvars
 import json
@@ -110,6 +111,19 @@ def _record_usage(kind: str, usage: dict) -> None:
             pass
 
 
+
+def _fix_assistant_reasoning_content(messages: list[dict]) -> list[dict]:
+    fixed = []
+    for m in messages:
+        if m.get("role") == "assistant":
+            m_copy = dict(m)
+            if "reasoning_content" not in m_copy or m_copy["reasoning_content"] is None:
+                m_copy["reasoning_content"] = ""
+            fixed.append(m_copy)
+        else:
+            fixed.append(m)
+    return fixed
+
 def chat(messages: list[dict], *, tools: list[dict] | None = None,
          max_tokens: int = 4000, temperature: float = 0.3,
          timeout: float = 180.0, model: str | None = None) -> dict | None:
@@ -122,7 +136,7 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
     key = _key()
     if not key or is_offline():
         return None
-    body: dict = {"model": model or _model(), "messages": messages,
+    body: dict = {"model": model or _model(), "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens}
     if tools:
         body["tools"] = tools
@@ -130,27 +144,44 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     last_err: Exception | None = None
     for trust_env in (False, True):
-        try:
-            with httpx.Client(timeout=timeout, trust_env=trust_env) as c:
-                r = c.post(_url(), json=body, headers=headers)
-            if r.status_code != 200:
-                last_err = RuntimeError(f"http_{r.status_code}: {r.text[:200]}")
-                continue
-            data = r.json()
-            choice = (data.get("choices") or [{}])[0]
-            msg = choice.get("message") or {}
-            usage = data.get("usage") or {}
-            return {
-                "message": msg,
-                "usage": {
-                    "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                    "completion_tokens": int(usage.get("completion_tokens") or 0),
-                },
-                "finish_reason": choice.get("finish_reason"),
-            }
-        except Exception as exc:                       # noqa: BLE001
-            last_err = exc
-            continue
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=timeout, trust_env=trust_env) as c:
+                    r = c.post(_url(), json=body, headers=headers)
+                if r.status_code != 200:
+                    text = r.text[:400]
+                    if r.status_code == 400 and "reasoning_content" in text.lower():
+                        body["messages"] = _fix_assistant_reasoning_content(body["messages"])
+                        continue
+                    if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
+                        time.sleep(1.5)
+                        continue
+                    last_err = RuntimeError(f"http_{r.status_code}: {text[:200]}")
+                    break
+                data = r.json()
+                choice = (data.get("choices") or [{}])[0]
+                msg = choice.get("message") or {}
+                if "reasoning_content" in msg or "reasoning" in msg:
+                    msg.setdefault("reasoning_content", msg.get("reasoning_content") or msg.get("reasoning"))
+                usage = data.get("usage") or {}
+                return {
+                    "message": msg,
+                    "usage": {
+                        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                        "completion_tokens": int(usage.get("completion_tokens") or 0),
+                    },
+                    "finish_reason": choice.get("finish_reason"),
+                }
+            except Exception as exc:                       # noqa: BLE001
+                last_err = exc
+                err_str = str(exc).lower()
+                if "reasoning_content" in err_str:
+                    body["messages"] = _fix_assistant_reasoning_content(body["messages"])
+                    continue
+                if any(code in err_str for code in ("429", "500", "502", "503", "504")) and attempt < 2:
+                    time.sleep(1.5)
+                    continue
+                break
     if last_err is not None:
         raise RuntimeError(f"llm_call_failed: {last_err}") from last_err
     return None
@@ -171,7 +202,7 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
     if not key or is_offline():
         raise RuntimeError("llm_offline")
 
-    body: dict = {"model": model or _model(), "messages": messages,
+    body: dict = {"model": model or _model(), "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens,
                   "stream": True, "stream_options": {"include_usage": True}}
     if tools:
@@ -179,62 +210,97 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
         body["tool_choice"] = "auto"
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
-    content_parts: list[str] = []
-    calls: dict[int, dict] = {}
-    usage: dict = {}
-    finish: str | None = None
+    max_attempts = 3
+    last_err: Exception | None = None
 
-    with httpx.Client(timeout=timeout) as c:
-        with c.stream("POST", _url(), json=body, headers=headers) as r:
-            if r.status_code != 200:
-                text = r.read().decode("utf-8", "replace")[:200]
-                raise RuntimeError(f"http_{r.status_code}: {text}")
-            for line in r.iter_lines():
-                if not line:
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                chunk_raw = line[5:].strip()
-                if chunk_raw == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(chunk_raw)
-                except json.JSONDecodeError:
-                    continue
-                if chunk.get("usage"):
-                    usage = chunk["usage"]
-                for choice in chunk.get("choices") or []:
-                    finish = choice.get("finish_reason") or finish
-                    delta = choice.get("delta") or {}
-                    piece = delta.get("content")
-                    if piece:
-                        content_parts.append(piece)
-                        yield "delta", piece
-                    for tc in delta.get("tool_calls") or []:
-                        idx = int(tc.get("index") or 0)
-                        slot = calls.setdefault(
-                            idx, {"id": "", "type": "function",
-                                  "function": {"name": "", "arguments": ""}})
-                        if tc.get("id"):
-                            slot["id"] = tc["id"]
-                        fn = tc.get("function") or {}
-                        if fn.get("name"):
-                            slot["function"]["name"] = fn["name"]
-                        if fn.get("arguments"):
-                            slot["function"]["arguments"] += fn["arguments"]
+    for attempt in range(max_attempts):
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        calls: dict[int, dict] = {}
+        usage: dict = {}
+        finish: str | None = None
+        started_yielding = False
 
-    message: dict = {"content": "".join(content_parts) or None}
-    if calls:
-        message["tool_calls"] = [calls[i] for i in sorted(calls)]
-        for i, slot in enumerate(message["tool_calls"]):
-            if not slot["id"]:
-                slot["id"] = f"call_stream_{i}"
+        try:
+            with httpx.Client(timeout=timeout) as c:
+                with c.stream("POST", _url(), json=body, headers=headers) as r:
+                    if r.status_code != 200:
+                        text = r.read().decode("utf-8", "replace")[:400]
+                        if r.status_code == 400 and "reasoning_content" in text.lower():
+                            body["messages"] = _fix_assistant_reasoning_content(body["messages"])
+                            continue
+                        if r.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
+                            time.sleep(1.5)
+                            continue
+                        raise RuntimeError(f"http_{r.status_code}: {text[:200]}")
 
-    recorded = {"prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                "completion_tokens": int(usage.get("completion_tokens") or 0)}
-    _record_usage("agent", recorded)
+                    for line in r.iter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        chunk_raw = line[5:].strip()
+                        if chunk_raw == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(chunk_raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if chunk.get("usage"):
+                            usage = chunk["usage"]
+                        for choice in chunk.get("choices") or []:
+                            finish = choice.get("finish_reason") or finish
+                            delta = choice.get("delta") or {}
+                            r_piece = delta.get("reasoning_content") or delta.get("reasoning")
+                            if r_piece:
+                                reasoning_parts.append(r_piece)
+                            piece = delta.get("content")
+                            if piece:
+                                content_parts.append(piece)
+                                started_yielding = True
+                                yield "delta", piece
+                            for tc in delta.get("tool_calls") or []:
+                                idx = int(tc.get("index") or 0)
+                                slot = calls.setdefault(
+                                    idx, {"id": "", "type": "function",
+                                          "function": {"name": "", "arguments": ""}})
+                                if tc.get("id"):
+                                    slot["id"] = tc["id"]
+                                fn = tc.get("function") or {}
+                                if fn.get("name"):
+                                    slot["function"]["name"] = fn["name"]
+                                if fn.get("arguments"):
+                                    slot["function"]["arguments"] += fn["arguments"]
 
-    yield "final", {"message": message, "usage": recorded, "finish_reason": finish}
+            message: dict = {"content": "".join(content_parts) or None}
+            if reasoning_parts:
+                message["reasoning_content"] = "".join(reasoning_parts)
+            if calls:
+                message["tool_calls"] = [calls[i] for i in sorted(calls)]
+                for i, slot in enumerate(message["tool_calls"]):
+                    if not slot["id"]:
+                        slot["id"] = f"call_stream_{i}"
+
+            recorded = {"prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                        "completion_tokens": int(usage.get("completion_tokens") or 0)}
+            _record_usage("agent", recorded)
+
+            yield "final", {"message": message, "usage": recorded, "finish_reason": finish}
+            return
+
+        except Exception as exc:
+            last_err = exc
+            if started_yielding or attempt >= max_attempts - 1:
+                raise
+            err_str = str(exc).lower()
+            if "reasoning_content" in err_str:
+                body["messages"] = _fix_assistant_reasoning_content(body["messages"])
+                continue
+            if any(code in err_str for code in ("429", "500", "502", "503", "504")):
+                time.sleep(1.5)
+                continue
+            raise
+
+    if last_err is not None:
+        raise last_err
 
 
 def complete_with_usage(prompt: str, system: str | None = None, *,

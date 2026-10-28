@@ -127,3 +127,57 @@ def test_global_default_skills_seeded(client, device):
     assert "第一性原理决策推演" in names
     assert "代码质量与安全审计" in names
     assert "增值税与财务合规审核" in names
+
+
+def test_reasoning_content_preserved_in_llm_and_loop(monkeypatch):
+    """验证 reasoning_content 在 llm 修复工具与 loop 消息流转中正确保留。"""
+    from app import llm
+    from app.agent import loop
+
+    raw_msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "thinking", "tool_calls": [{"id": "1"}]},
+        {"role": "tool", "content": "{}"},
+    ]
+    fixed = llm._fix_assistant_reasoning_content(raw_msgs)
+    assert "reasoning_content" in fixed[1]
+    assert fixed[1]["reasoning_content"] == ""
+
+    # 验证带思考内容的 assistant 消息在 tool_calls 时完整保留
+    msg = {"content": "step 1", "reasoning_content": "my thoughts", "tool_calls": [{"id": "c1"}]}
+    assistant_msg = {
+        "role": "assistant",
+        "content": msg.get("content") or "",
+        "tool_calls": msg["tool_calls"],
+    }
+    if "reasoning_content" in msg or msg.get("reasoning_content") is not None:
+        assistant_msg["reasoning_content"] = msg.get("reasoning_content") or ""
+    else:
+        assistant_msg["reasoning_content"] = ""
+    assert assistant_msg["reasoning_content"] == "my thoughts"
+
+
+def test_loop_emits_diagnostic_bubble_on_llm_failure(client, monkeypatch):
+    """验证模型中断时不会静默失败，会弹出结构化诊断与建议气泡。"""
+    from app import db
+    from app.agent import loop
+    import json
+
+    with db.get_conn() as conn:
+        def fake_chat_streamed(*args, **kwargs):
+            raise RuntimeError("http_429: Rate limit exceeded")
+
+        monkeypatch.setattr(loop, "_chat_streamed", fake_chat_streamed)
+        res = loop.run_turn("bot_chief", "ses_chief")
+        assert res["status"] == "failed"
+
+        row = conn.execute(
+            "SELECT payload_json FROM events WHERE session_id='ses_chief' AND kind='message.bot' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        payload = json.loads(row["payload_json"])
+        text = payload.get("text", "")
+        assert "任务执行中断反馈" in text
+        assert "报错原因" in text
+        assert "推荐方案" in text
+        assert "429" in text

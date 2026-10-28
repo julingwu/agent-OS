@@ -34,7 +34,7 @@ def _jail(path: str | None) -> pathlib.Path:
     return target
 
 
-def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 60) -> dict:
+def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict:
     if not cmd.strip():
         raise ToolError("empty command")
     low = cmd.lower()
@@ -46,7 +46,7 @@ def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 60) -> dict:
     try:
         proc = subprocess.run(cmd, shell=True, cwd=str(workdir),
                               capture_output=True, text=True,
-                              timeout=max(1, min(int(timeout_s), 600)))
+                              timeout=max(1, min(int(timeout_s), 900)))
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timeout after {timeout_s}s"}
     stdout = (proc.stdout or "")[:MAX_OUTPUT]
@@ -110,7 +110,7 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
     """
     args = args or {}
     if name == "exec":
-        return _run_exec(str(args.get("cmd", "")), args.get("cwd"), args.get("timeout_s", 60))
+        return _run_exec(str(args.get("cmd", "")), args.get("cwd"), args.get("timeout_s", 180))
     if name == "fs_list":
         return _fs_list(args.get("path"))
     if name == "fs_read":

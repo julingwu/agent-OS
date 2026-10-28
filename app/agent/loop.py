@@ -28,7 +28,7 @@ from .. import events as ev
 from .. import llm
 from . import memory_writer, tools
 
-MAX_STEPS = 14
+MAX_STEPS = 30
 HISTORY_EVENTS = 24
 MAX_HOPS = 3
 MAX_GROUP_TARGETS = 3
@@ -227,6 +227,34 @@ def _last_user_text(conn, session_id: str) -> str:
     return ""
 
 
+
+def _diagnose_error(err_str: str) -> tuple[str, str]:
+    err_lower = err_str.lower()
+    if "reasoning_content" in err_lower:
+        return (
+            "深度思考模式（Thinking Mode）多步工具调用上下文校验异常",
+            "系统已自动启用思考链参数修复，您可以直接发送「继续」从当前断点接着执行；或将该助手的模型切换为非思考模式的快速模型。"
+        )
+    if "timeout" in err_lower or "timedout" in err_lower:
+        return (
+            "模型响应或长耗时任务执行超时",
+            "任务计算量较大（如长音频转写/大文件处理），建议直接回复「继续」（已完成的文件不会重复处理），或将任务拆分为分批执行。"
+        )
+    if "429" in err_lower or "rate" in err_lower:
+        return (
+            "上游模型 API 触发并发或频率限制 (HTTP 429)",
+            "请稍等 10~30 秒后回复「继续」，或在右侧详情栏切换备用模型。"
+        )
+    if any(k in err_lower for k in ("401", "403", "api_key", "unauthorized", "quota")):
+        return (
+            "模型 API 密钥无效、额度耗尽或权限不足",
+            "请前往左下角「账户 -> 设置 / 保险库」检查 API Key 配置与账户余额。"
+        )
+    return (
+        f"模型接口或执行链路中断（{err_str[:120]}）",
+        "您可以直接发送「继续」让助手基于当前工作区已有成果接着往下做；若反复出现，可尝试切换其他模型。"
+    )
+
 def run_turn(bot_id: str, session_id: str, *, db_path: str | None = None,
              hops: int = 0, task_hint: str | None = None) -> dict:
     """执行一轮对话。同步函数，调用方负责放到后台线程。"""
@@ -258,6 +286,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
 
     total_prompt = total_completion = 0
     status, final_text = "done", ""
+    executed_steps_summary: list[str] = []
 
     for step in range(MAX_STEPS):
         try:
@@ -265,11 +294,21 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                                   session_id=session_id, turn_id=turn_id,
                                   model=model)
         except Exception as exc:                       # noqa: BLE001 - 模型失败要有兜底
+            err_str = str(exc)
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="error",
                   turn_id=turn_id, payload={
-                      "code": "LLM_FAILED", "message": str(exc)[:300],
+                      "code": "LLM_FAILED", "message": err_str[:300],
                       "retriable": True, "step": step})
-            status, final_text = "failed", ""
+            status = "failed"
+            friendly_reason, friendly_advice = _diagnose_error(err_str)
+            recent_tools = "、".join(executed_steps_summary[-4:]) if executed_steps_summary else "无工具调用"
+            final_text = (
+                f"⚠️ **任务执行中断反馈**\n\n"
+                f"- **已执行进度**：本轮已完成 {step} 步工具调用（{recent_tools}）\n"
+                f"- **报错原因**：{friendly_reason}\n"
+                f"- **底层详情**：`{err_str[:240]}`\n"
+                f"- **推荐方案**：{friendly_advice}"
+            )
             break
 
         if resp is None:
@@ -289,9 +328,19 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
             final_text = (msg.get("content") or "").strip()
             break
 
-        # assistant 的 tool_calls 必须原样回填，否则下一轮工具结果无法对齐
-        messages.append({"role": "assistant", "content": msg.get("content"),
-                         "tool_calls": tool_calls})
+        # assistant 的 tool_calls 必须原样回填，同时保留或补充 reasoning_content 字段，
+        # 兼容 DeepSeek / 火山方舟等思考模型在多步工具调用下的上下文校验
+        assistant_msg: dict = {
+            "role": "assistant",
+            "content": msg.get("content") or "",
+            "tool_calls": tool_calls,
+        }
+        if "reasoning_content" in msg or msg.get("reasoning_content") is not None:
+            assistant_msg["reasoning_content"] = msg.get("reasoning_content") or ""
+        else:
+            assistant_msg["reasoning_content"] = ""
+        messages.append(assistant_msg)
+
         for call in tool_calls:
             fn = (call.get("function") or {})
             name = fn.get("name") or "unknown"
@@ -313,6 +362,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                 ok = bool(result.get("ok", True)) and not result.get("status")
             except tools.ToolError as exc:
                 result, ok = {"ok": False, "error": str(exc)}, False
+            executed_steps_summary.append(f"{name} ({'成功' if ok else '失败'})")
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="tool.result",
                   turn_id=turn_id, payload={
                       "call_id": call_id, "ok": ok,
@@ -332,18 +382,29 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
             break
 
     if status == "done" and not final_text:
-        # 工具步数用尽时，别丢一句"没有产出"——强制模型用不带工具的一轮做收尾总结
+        # 工具步数用尽时，强制模型用不带工具的一轮做收尾总结并提示用户回复「继续」
         try:
             wrap = llm.chat(
                 messages + [{"role": "user", "content":
-                             "（工具步数已用尽）不要再调用工具，直接用 3-5 句总结："
-                             "你实际做了什么、每步结果如何、还有什么没完成。"}],
+                             f"（已达到单轮安全上限 {MAX_STEPS} 步）请不要再调用任何工具，"
+                             "直接用清晰条目总结：1. 已完成的具体成果；2. 正在进行/卡住的环节；3. 后续执行建议。"}],
                 tools=None, temperature=0.2, model=model)
             final_text = ((wrap or {}).get("message") or {}).get("content", "").strip()
         except Exception:  # noqa: BLE001 - 收尾失败不该吞掉整轮
             final_text = ""
         if not final_text:
-            final_text = "（本轮工具步数用尽，没能收尾；可以让我继续，我会从断点接着做）"
+            recent_steps = "、".join(executed_steps_summary[-5:]) if executed_steps_summary else "多项工具调用"
+            final_text = (
+                f"⚠️ **已达到单轮最大执行步数（{MAX_STEPS} 步）**\n\n"
+                f"- **已完成进度**：本轮已调用完成：{recent_steps}。\n"
+                "- **后续操作**：为防止工具死循环与算力过度消耗，系统已安全暂停；"
+                "成果均已保存在工作区，您可以直接回复「**继续**」，我会从当前断点无缝接着往下执行。"
+            )
+        else:
+            final_text = (
+                f"{final_text}\n\n"
+                f"💡 *（注：本轮已达到单轮安全上限 {MAX_STEPS} 步。您可以直接回复「**继续**」接着向下执行）*"
+            )
     if final_text:
         _emit(conn, bot_id=bot_id, session_id=session_id, kind="message.bot",
               turn_id=turn_id, payload={"text": final_text})
