@@ -30,12 +30,9 @@ def _auth(d):
 
 
 # ---------------------------------------------------------------- 外部接入目录
-def test_integrations_lists_dsh_im(client, device):
-    items = client.get("/v1/integrations", headers=_auth(device)).json()["items"]
-    entry = next(i for i in items if i["id"] == "dsh-im")
-    assert "飞书" in entry["channels"] and "Telegram" in entry["channels"]
-    assert any("dsh plugin" in c["cmd"] for c in entry["install"])
-    assert entry["links"]["github"].endswith("dsh-im")
+def test_integrations_list(client, device):
+    res = client.get("/v1/integrations", headers=_auth(device)).json()
+    assert isinstance(res.get("items"), list)
 
 
 # ---------------------------------------------------------------- 本地桥

@@ -121,39 +121,10 @@ def list_models(device: dict = Depends(require_device)) -> dict:
 
 
 # ---------------------------------------------------------------- 外部接入目录
-_DSH_IM = {
-    "id": "dsh-im",
-    "name": "dsh-im · IM 机器人",
-    "tagline": "通过扫码或机器人凭据把 IM 机器人接入 DeepSeek Harness（8+ 渠道）",
-    "description": (
-        "Connect IM bots to DeepSeek Harness via QR code or credentials (8 channels). "
-        "一个插件、一个设置入口，统一管理内置 IM 渠道；每个渠道支持接入多个机器人，"
-        "各机器人的连接状态、工作区、模型和会话绑定彼此独立。"
-    ),
-    "channels": ["飞书", "微信", "钉钉", "企业微信", "企业微信应用", "QQ",
-                 "Slack", "Telegram", "Discord", "WhatsApp", "iMessage", "Matrix"],
-    "install": [
-        {"label": "npm 稳定版（推荐）",
-         "cmd": "dsh plugin --profile web add -w @xmanrui/dsh-im"},
-        {"label": "GitHub 源码版",
-         "cmd": "dsh plugin --profile web add github:xmanrui/dsh-im"},
-    ],
-    "links": {
-        "github": "https://github.com/xmanrui/dsh-im",
-        "guide": "https://dshbase.com/zh/plugins/dsh-im/",
-    },
-    "notes": [
-        "安装后重启 DSH，打开「设置 → IM机器人」，按页面引导扫码或填写凭据。",
-        "凭据只提交给本机 Harness 并写入受保护存储，不会回传本服务器。",
-        "每个机器人可独立设置工作区、模型、思考强度和会话绑定。",
-    ],
-}
-
-
 @router.get("/integrations")
 def list_integrations(device: dict = Depends(require_device)) -> dict:
-    """外部接入目录：目前是 dsh-im（IM 机器人）。连接应用页/MCP 管理后续单独做。"""
-    return {"items": [_DSH_IM]}
+    """外部接入目录：连接应用页/MCP 管理后续单独做。"""
+    return {"items": []}
 
 
 # ---------------------------------------------------------------- 保险库

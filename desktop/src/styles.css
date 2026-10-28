@@ -952,28 +952,7 @@ input, textarea { font: inherit; }
   word-break: break-all; white-space: pre-wrap;
 }
 
-/* IM 机器人（dsh-im） */
-.channel-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip {
-  padding: 3px 10px; border-radius: 999px;
-  border: 1px solid rgba(56, 232, 255, 0.3);
-  color: var(--cyan); font-size: 11px;
-}
-.install-row {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px;
-  background: var(--panel-2); margin-bottom: 6px;
-}
-.install-label { font-size: 11px; color: var(--sub); width: 100%; }
-.install-cmd {
-  flex: 1; font-family: ui-monospace, Consolas, monospace;
-  font-size: 11px; color: #cfe6ff; word-break: break-all;
-}
-.im-steps, .im-notes { padding-left: 18px; margin: 4px 0; }
-.im-steps li, .im-notes li { margin: 3px 0; }
-.link-row { display: flex; gap: 14px; margin-top: 6px; }
-.link-row a { color: var(--cyan); font-size: 12px; text-decoration: none; }
-.link-row a:hover { text-decoration: underline; }
+
 
 
 

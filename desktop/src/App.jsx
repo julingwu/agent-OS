@@ -1967,9 +1967,6 @@ function AppsModal({ onClose }) {
           这里将用于管理外部平台的 MCP 连接（工具服务器、SaaS、数据源、团队应用），
           可以在这里查看连接状态、权限和可用工具。当前版本先保留入口，功能在后续构建中补齐。
         </p>
-        <p className="hint">
-          IM 机器人接入不在这一页：请到「设置 → IM 机器人」（基于 dsh-im）。
-        </p>
         <div className="modal-actions">
           <button className="primary" onClick={onClose}>知道了</button>
         </div>
@@ -2004,7 +2001,7 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
     <div className="modal-mask" onClick={onClose}>
       <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="settings-nav">
-          {[["general", "通用"], ["computer", "电脑"], ["im", "IM 机器人"], ["vault", "保险库"]].map(([id, label]) => (
+          {[["general", "通用"], ["computer", "电脑"], ["vault", "保险库"]].map(([id, label]) => (
             <button key={id} className={tab === id ? "settings-tab on" : "settings-tab"} onClick={() => setTab(id)}>
               {label}
             </button>
@@ -2094,73 +2091,9 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
             </>
           )}
           {tab === "vault" && <VaultPane items={vault} onReload={onOpenVault} />}
-          {tab === "im" && <ImPane integrations={integrations} />}
         </div>
       </div>
     </div>
-  );
-}
-
-/* ============================== IM 机器人（dsh-im） ============================== */
-function ImPane({ integrations }) {
-  const [copied, setCopied] = useState("");
-  const dsh = (integrations || []).find((i) => i.id === "dsh-im");
-  if (!dsh) {
-    return (
-      <>
-        <h3>IM 机器人</h3>
-        <p className="hint">服务端还没有提供接入目录（/v1/integrations 为空）。</p>
-      </>
-    );
-  }
-  const copy = (cmd) => {
-    try {
-      navigator.clipboard?.writeText(cmd);
-      setCopied(cmd);
-      setTimeout(() => setCopied(""), 1500);
-    } catch {
-      /* ignore */
-    }
-  };
-  return (
-    <>
-      <h3>{dsh.name}</h3>
-      <p className="hint">{dsh.tagline}</p>
-      <p className="hint">{dsh.description}</p>
-
-      <div className="block-title">支持的渠道</div>
-      <div className="channel-chips">
-        {dsh.channels.map((c) => <span key={c} className="chip">{c}</span>)}
-      </div>
-
-      <div className="block-title">安装（在运行 DSH 的机器上执行）</div>
-      {(dsh.install || []).map((item) => (
-        <div key={item.cmd} className="install-row">
-          <div className="install-label">{item.label}</div>
-          <code className="install-cmd">{item.cmd}</code>
-          <button className="mini-btn" onClick={() => copy(item.cmd)}>
-            {copied === item.cmd ? "已复制" : "复制"}
-          </button>
-        </div>
-      ))}
-
-      <div className="block-title">安装之后</div>
-      <ol className="hint im-steps">
-        <li>重启 DSH，打开「设置 → IM机器人」</li>
-        <li>按页面引导扫码，或填写机器人凭据</li>
-        <li>每个机器人可单独设置工作区 / 模型 / 会话</li>
-      </ol>
-
-      <div className="block-title">说明</div>
-      <ul className="hint im-notes">
-        {dsh.notes.map((n) => <li key={n}>{n}</li>)}
-      </ul>
-
-      <div className="link-row">
-        <a href={dsh.links?.guide} target="_blank" rel="noreferrer">安装与配置指南</a>
-        <a href={dsh.links?.github} target="_blank" rel="noreferrer">GitHub 仓库</a>
-      </div>
-    </>
   );
 }
 
