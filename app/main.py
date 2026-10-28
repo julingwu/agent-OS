@@ -19,6 +19,20 @@ from .config import load_env
 load_env()
 
 from .api import decisions, memory, relay, reports, tasks, verbs
+from .api_v1 import bots as v1_bots
+from .api_v1 import bot_memory as v1_bot_memory
+from .api_v1 import routines as v1_routines
+from .api_v1 import skills as v1_skills
+from .api_v1 import processes as v1_processes
+from .api_v1 import artifacts as v1_artifacts
+from .api_v1 import computer as v1_computer
+from .api_v1 import legacy_sso as v1_legacy_sso
+from .api_v1 import local as v1_local
+from .api_v1 import misc as v1_misc
+from .api_v1 import pairing as v1_pairing
+from .api_v1 import search as v1_search
+from .api_v1 import stream as v1_stream
+from .api_v1 import workspace as v1_workspace
 from .octo import api as octo_api
 from .ui import api as ui_api
 from .ui import admin as ui_admin
@@ -44,6 +58,11 @@ async def lifespan(app: FastAPI):
         bus.set_loop(asyncio.get_running_loop())
     except Exception:
         pass
+    try:
+        from . import local_bridge as _local_bridge
+        _local_bridge.set_loop(asyncio.get_running_loop())
+    except Exception:
+        pass
     from . import flows, mcp, mailer, notify, pipeline
     from .wecom import robot
     with connect() as conn:
@@ -59,6 +78,27 @@ async def lifespan(app: FastAPI):
     # Background threads must never start under pytest: they would leak across
     # tests and poll the real corp with the developer's credentials.
     _under_test = bool(os.environ.get("PYTEST_CURRENT_TEST"))
+    try:
+        from . import routines as _routines, skills as _skills
+        with connect() as _c:
+            _routines.ensure(_c)
+            _skills.ensure(_c)
+        if os.environ.get("ROUTINE_SCHEDULER", "1") == "1" and not _under_test:
+            _routines.start_scheduler(float(os.environ.get("ROUTINE_TICK", "20")))
+    except Exception as _exc:                    # noqa: BLE001
+        print(f"[routine] scheduler not started: {_exc}")
+    _processes = None
+    try:
+        from . import processes as _processes_mod
+        _processes = _processes_mod
+        with connect() as _c:
+            _processes.ensure(_c)
+            # 上次服务端遗留的 running 行必须在启动时收尾，否则永远卡在 running
+            _processes.recover_interrupted(_c)
+        if os.environ.get("PROCESS_SUPERVISOR", "1") == "1" and not _under_test:
+            _processes.start_supervisor(float(os.environ.get("PROCESS_TICK", "15")))
+    except Exception as _exc:                    # noqa: BLE001
+        print(f"[processes] supervisor not started: {_exc}")
     try:
         with connect() as _c:
             ui_store.ensure(_c)
@@ -81,6 +121,13 @@ async def lifespan(app: FastAPI):
         except Exception as exc:                 # noqa: BLE001
             print(f"[octo] runner not started: {exc}")
     yield
+    try:
+        from . import routines as _routines
+        _routines.stop_scheduler()
+    except Exception:
+        pass
+    if _processes is not None:
+        _processes.stop_supervisor()             # 只停 tick 线程，绝不杀子进程
     if os.environ.get("WECOM_WATCHER", "0") == "1":
         wecom_watcher.stop()
 
@@ -97,6 +144,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(verbs.router)
+app.include_router(v1_stream.router)
+app.include_router(v1_bots.router)
+app.include_router(v1_computer.router)
+app.include_router(v1_workspace.router)
+app.include_router(v1_search.router)
+app.include_router(v1_misc.router)
+app.include_router(v1_pairing.router)
+app.include_router(v1_legacy_sso.router)
+app.include_router(v1_local.router)
+app.include_router(v1_bot_memory.router)
+app.include_router(v1_routines.router)
+app.include_router(v1_skills.router)
+app.include_router(v1_processes.router)
+app.include_router(v1_artifacts.router)
 app.include_router(tasks.router)
 app.include_router(decisions.router)
 app.include_router(memory.router)
@@ -111,11 +172,16 @@ app.include_router(ui_ops.router, dependencies=[Depends(ui_access.request_access
 app.include_router(ui_extensions.router)
 app.include_router(ui_governance.router, dependencies=[Depends(ui_access.request_access)])
 app.include_router(ui_housekeeping.router, dependencies=[Depends(ui_access.request_access)])
-app.include_router(mcp_bridge_api.router)
+app.include_router(mcp_bridge_api.router, dependencies=[Depends(ui_access.request_access)])
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 _UI_DIST = pathlib.Path(__file__).resolve().parent.parent / "web" / "dist"
 if _UI_DIST.exists():
     app.mount("/app", StaticFiles(directory=str(_UI_DIST), html=True), name="ui")
+
+# v1 桌面端界面（desktop/ 构建产物），浏览器可直接预览，也是 exe 的内嵌前端
+_UI_V1_DIST = pathlib.Path(__file__).resolve().parent.parent / "ui_dist"
+if _UI_V1_DIST.exists():
+    app.mount("/ui", StaticFiles(directory=str(_UI_V1_DIST), html=True), name="ui-v1")
 
 
 @app.websocket("/ws/metacorp")
@@ -164,8 +230,18 @@ def health() -> dict:
 
 
 @app.get("/")
-def dashboard() -> FileResponse:
-    """Chairman/scheduling workbench (SPA)."""
+def dashboard():
+    """根路径进入新版工作台（未构建时回落到旧工作台）。"""
+    from fastapi.responses import RedirectResponse
+
+    if _UI_V1_DIST.exists():
+        return RedirectResponse(url="/ui/", status_code=302)
+    return FileResponse(str(STATIC / "dashboard.html"), media_type="text/html")
+
+
+@app.get("/legacy")
+def legacy_dashboard():
+    """旧版董事长/调度工作台（登录后才用，不在登录页暴露入口）。"""
     return FileResponse(str(STATIC / "dashboard.html"), media_type="text/html")
 
 

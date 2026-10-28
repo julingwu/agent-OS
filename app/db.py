@@ -279,6 +279,10 @@ def init_db(path: str | None = None) -> None:
         experience.ensure(conn)
         from . import evals
         evals.ensure(conn)
+        from . import events as events_v1
+        events_v1.ensure(conn)
+        from .api_v1 import seed as v1_seed
+        v1_seed.ensure(conn)
         added_tenants = _migrate(conn)
         _backfill_tenants(conn, added_tenants)
         conn.execute("UPDATE wecom_pushes SET created_at = CURRENT_TIMESTAMP"

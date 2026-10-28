@@ -97,7 +97,7 @@ def test_m4_5_report_filters(env):
 
 # --------------------------------------------------------------- workbench
 def test_m4_6_workbench_page_served(env):
-    page = env["client"].get("/")
+    page = env["client"].get("/legacy")
     assert page.status_code == 200
     for needle in ("董事长看板", "调度看板", "任务详情", "X-OA-Sig"):
         assert needle in page.text

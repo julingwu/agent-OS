@@ -298,7 +298,12 @@ def test_m0_12_design_gaps_recorded():
 
 # --------------------------------------------------------------- M0-13
 def test_m0_13_review_page(client):
-    dash = client.get("/")
+    # v1：根路径重定向到新版工作台；旧工作台挪到 /legacy（登录后的管理入口）
+    root = client.get("/", follow_redirects=False)
+    assert root.status_code == 302
+    assert root.headers["location"] == "/ui/"
+
+    dash = client.get("/legacy")
     assert dash.status_code == 200
     assert "工作台" in dash.text
     assert "cdn" not in dash.text.lower()

@@ -18,6 +18,8 @@ _SAFE_TEST_DEFAULTS = {
     "OCTO_RUNNER": "0",
     "OCTO_AUTORUN": "0",
     "UI_CRON": "0",
+    # v1 事件/Agent：测试里不自动触发模型回合（会起后台线程 + 打网络）。
+    "AGENT_AUTORUN": "0",
     # v5.3：NativeKernel 默认双模。测试一律走确定性模板分支——
     # 秒级、零外网、可复现；要用真模型必须在用例里显式 monkeypatch 这两个变量。
     "M0_NATIVE_MODE": "template",
@@ -41,4 +43,7 @@ for _k, _v in _SAFE_TEST_DEFAULTS.items():
 import app.config as _config  # noqa: E402  (sys.path 已在上面就位)
 
 _config.load_env = lambda *_a, **_k: {}
+
+# 避免 pytest 递归进工作区扫描生成代码中的测试
+collect_ignore_glob = ["workspace/*"]
 
