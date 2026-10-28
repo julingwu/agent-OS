@@ -1,5 +1,8 @@
+#[cfg(windows)]
 use std::path::Path;
+#[cfg(windows)]
 use std::process::{Command, Stdio};
+#[cfg(windows)]
 use std::time::Duration;
 
 #[cfg(windows)]
@@ -19,7 +22,9 @@ mod gui {
 
 use serde_json::{json, Value};
 use tauri::{Manager, WebviewWindowBuilder};
+#[cfg(windows)]
 use tungstenite::client::IntoClientRequest;
+#[cfg(windows)]
 use tungstenite::Message;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -34,6 +39,7 @@ pub fn run() {
     }
     // 端到端自检：`--selftest-bridge <base_url> <token> [max_calls]`
     // 不启动界面直接连本地桥，由测试端下发 tool_call，验证 artifact 上传链路。
+    #[cfg(windows)]
     if let Some(pos) = cli.iter().position(|a| a == "--selftest-bridge") {
         let base = cli.get(pos + 1).cloned().unwrap_or_default();
         let token = cli.get(pos + 2).cloned().unwrap_or_default();
@@ -99,6 +105,7 @@ pub fn run() {
 
 /// 前端登录后调用：把服务器地址 + 设备令牌交给本地桥，建立出站连接。
 /// 断线自动重连（5 秒间隔），保证网络抖动后本地能力自己恢复。
+#[cfg(windows)]
 #[tauri::command]
 fn local_bridge_start(base_url: String, token: String) {
     std::thread::spawn(move || loop {
@@ -110,6 +117,13 @@ fn local_bridge_start(base_url: String, token: String) {
     });
 }
 
+#[cfg(not(windows))]
+#[tauri::command]
+fn local_bridge_start(_base_url: String, _token: String) {
+    // 移动端/非Windows端仅作为UI控制终端，不作为桌面本地桥执行节点
+}
+
+#[cfg(windows)]
 fn ws_url(base_url: &str, token: &str) -> String {
     let base = base_url.trim_end_matches('/');
     let scheme_swapped = if let Some(rest) = base.strip_prefix("https://") {
@@ -122,8 +136,10 @@ fn ws_url(base_url: &str, token: &str) -> String {
     format!("{scheme_swapped}/v1/device?token={token}")
 }
 
+#[cfg(windows)]
 type BridgeSocket = tungstenite::WebSocket<native_tls::TlsStream<std::net::TcpStream>>;
 
+#[cfg(windows)]
 fn connect_bridge(base_url: &str, token: &str) -> Result<BridgeSocket, String> {
     let url = ws_url(base_url, token);
     let parsed = url::Url::parse(&url).map_err(|e| format!("url: {e}"))?;
@@ -145,6 +161,7 @@ fn connect_bridge(base_url: &str, token: &str) -> Result<BridgeSocket, String> {
     Ok(socket)
 }
 
+#[cfg(windows)]
 fn send_hello(socket: &mut BridgeSocket) -> Result<(), String> {
     let hello = json!({"t": "hello", "caps": ["exec", "fs", "info", "gui", "screenshot"], "platform": std::env::consts::OS});
     socket
@@ -152,6 +169,7 @@ fn send_hello(socket: &mut BridgeSocket) -> Result<(), String> {
         .map_err(|e| format!("hello: {e}"))
 }
 
+#[cfg(windows)]
 fn run_bridge(base_url: &str, token: &str) -> Result<(), String> {
     let mut socket = connect_bridge(base_url, token)?;
     send_hello(&mut socket)?;
@@ -184,6 +202,7 @@ fn run_bridge(base_url: &str, token: &str) -> Result<(), String> {
 ///
 /// 顺序不能反：服务端要靠 call_id 找到这次调用挂靠的会话，调用一结束上下文就被回收。
 /// 返回值是给自检用的调用摘要。
+#[cfg(windows)]
 fn serve_tool_call(socket: &mut BridgeSocket, value: &Value) -> Result<Value, String> {
     let call_id = value.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
     let tool = value.get("tool").and_then(|v| v.as_str()).unwrap_or("");
@@ -238,6 +257,7 @@ fn serve_tool_call(socket: &mut BridgeSocket, value: &Value) -> Result<Value, St
 /// 端到端自检：`--selftest-bridge <base_url> <token>`
 /// 不启动界面，直接连服务端 `/v1/device`，由测试端下发 tool_call，
 /// 把每条调用（含 artifact 的字节数 / b64 长度）写成 JSON，验证 exe 侧链路是否通。
+#[cfg(windows)]
 fn selftest_bridge(base_url: &str, token: &str, max_calls: usize) -> Value {
     let mut out = json!({"ok": false, "base_url": base_url, "calls": [], "errors": []});
     let mut socket = match connect_bridge(base_url, token) {
@@ -292,6 +312,7 @@ fn selftest_bridge(base_url: &str, token: &str, max_calls: usize) -> Value {
     out
 }
 
+#[cfg(windows)]
 fn handle_call(tool: &str, args: &Value) -> (bool, Value) {
     if let Some(result) = gui::handle(tool, args) {
         return result;
@@ -324,10 +345,12 @@ fn handle_call(tool: &str, args: &Value) -> (bool, Value) {
 
 /// 单条 artifact 的原始字节上限：uvicorn 的 ws 帧默认 16MB，base64 会放大 4/3，
 /// 再加上 JSON 头 ~300B。超过就不推了（宁可让用户看到元数据，也不要把桥撑断）。
+#[cfg(windows)]
 const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
 /// 工具产生本地文件时，把字节单独推一条 {"t":"artifact",...}。
 /// 事件 payload 上限 8KB（app/events.py MAX_PAYLOAD_BYTES），图片绝不能内联进 tool_result。
+#[cfg(windows)]
 fn artifact_message(call_id: &str, tool: &str, payload: &Value) -> Option<Value> {
     if tool != "local_screenshot" {
         return None;
@@ -356,6 +379,7 @@ fn artifact_message(call_id: &str, tool: &str, payload: &Value) -> Option<Value>
 }
 
 /// 手写 base64：只为这一处需求引一个 crate 不值得（依赖越少，打包越稳）。
+#[cfg(windows)]
 fn base64_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
@@ -380,6 +404,7 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
+#[cfg(windows)]
 fn local_info() -> Value {
     let env = |k: &str| std::env::var(k).unwrap_or_default();
     json!({
@@ -392,6 +417,7 @@ fn local_info() -> Value {
     })
 }
 
+#[cfg(windows)]
 fn local_list(path: &str) -> (bool, Value) {
     let target = Path::new(path);
     let entries = match std::fs::read_dir(target) {
@@ -410,6 +436,7 @@ fn local_list(path: &str) -> (bool, Value) {
     (true, json!({"path": path, "items": items}))
 }
 
+#[cfg(windows)]
 fn local_read(path: &str, max_bytes: u64) -> (bool, Value) {
     let data = match std::fs::read(path) {
         Ok(d) => d,
@@ -423,6 +450,7 @@ fn local_read(path: &str, max_bytes: u64) -> (bool, Value) {
     (true, json!({"path": path, "content": text, "bytes": data.len()}))
 }
 
+#[cfg(windows)]
 fn local_write(path: &str, content: &str) -> (bool, Value) {
     let target = Path::new(path);
     if let Some(parent) = target.parent() {
@@ -434,6 +462,7 @@ fn local_write(path: &str, content: &str) -> (bool, Value) {
     }
 }
 
+#[cfg(windows)]
 fn local_exec(cmd: &str, cwd: Option<&str>, timeout_s: u64) -> (bool, Value) {
     if cmd.trim().is_empty() {
         return (false, json!({"error": "empty command"}));
