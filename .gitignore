@@ -26,6 +26,7 @@ desktop/node_modules/
 desktop/dist/
 desktop/dist-tauri/
 desktop/src-tauri/target/
+desktop/src-tauri/.cargo/
 desktop/src-tauri/gen/android/
 
 # v4.0: 本地发版产物（安装包/免安装 exe）不入库，避免公开仓带二进制与内嵌构建路径

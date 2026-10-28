@@ -31,7 +31,26 @@ use tungstenite::Message;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let log_path = std::env::temp_dir().join("agentos_boot.log");
+    let append_log = |msg: &str| {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            let _ = writeln!(f, "{}", msg);
+        }
+    };
+
+    append_log("--- AgentOS booting ---");
+
+    std::panic::set_hook(Box::new(|info| {
+        let path = std::env::temp_dir().join("agentos_boot.log");
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            let _ = writeln!(f, "[PANIC] {info}");
+        }
+    }));
+
     let cli: Vec<String> = std::env::args().collect();
+    append_log(&format!("Args: {:?}", cli));
     // 无窗口自检（不启动 Tauri）：`agentos-desktop.exe --selftest-screenshot`
     // 用来在真机上验证 GDI 抓屏 + PNG 编码是否可用，结果写 %TEMP%\agentos\shots\selftest.json
     #[cfg(windows)]
@@ -61,6 +80,15 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 let data_dir = app.path().app_local_data_dir().ok();
+                let log_path = std::env::temp_dir().join("agentos_boot.log");
+                let append_setup = |msg: &str| {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+                        let _ = writeln!(f, "[setup] {}", msg);
+                    }
+                };
+                append_setup(&format!("data_dir: {:?}", data_dir));
+
                 let mut builder = WebviewWindowBuilder::new(
                     app,
                     "main",
@@ -69,10 +97,7 @@ pub fn run() {
                 .title("AgentOS")
                 .inner_size(1320.0, 860.0);
 
-                // 证书：服务器已换成自建 CA 签发的证书链（叶证书带 CDP，nginx 发布 CRL），
-                // 客户端走 Windows 信任存储正常校验 —— 正常启动**不带**任何跳过证书校验的参数。
-                // 兜底：AGENTOS_IGNORE_CERT=1 时临时跳过（仅排障用，别长期开）。
-                // AGENTOS_DEBUG_PORT=1 时才开 CDP，正常使用不暴露调试端口。
+                // 证书与调试参数
                 #[cfg(target_os = "windows")]
                 {
                     let mut browser_args: Vec<String> = Vec::new();
@@ -86,20 +111,39 @@ pub fn run() {
                         let args = browser_args.join(" ");
                         builder = builder.additional_browser_args(&args);
                     }
-                    if let Some(dir) = &data_dir {
-                        builder = builder.data_directory(dir.join("webview2"));
-                    }
                 }
 
                 match builder.build() {
-                    Ok(_) => {}
-                    Err(err) => eprintln!("[boot] window error: {err}"),
+                    Ok(_) => append_setup("window created successfully"),
+                    Err(err) => {
+                        append_setup(&format!("WINDOW ERROR: {err}, attempting fallback window..."));
+                        let fallback_dir = std::env::temp_dir().join("agentos_wv2_fresh");
+                        let _ = std::fs::create_dir_all(&fallback_dir);
+                        let fallback_builder = WebviewWindowBuilder::new(
+                            app,
+                            "main",
+                            tauri::WebviewUrl::App("index.html".into()),
+                        )
+                        .title("AgentOS")
+                        .inner_size(1320.0, 860.0)
+                        .data_directory(fallback_dir);
+
+                        match fallback_builder.build() {
+                            Ok(_) => append_setup("fallback window created successfully"),
+                            Err(e2) => append_setup(&format!("FALLBACK WINDOW ERROR: {e2}")),
+                        }
+                    }
                 }
             }
             Ok(())
         })
         .run(tauri::generate_context!());
     if let Err(err) = result {
+        let log_path = std::env::temp_dir().join("agentos_boot.log");
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            let _ = writeln!(f, "[tauri error] {err}");
+        }
         eprintln!("[boot] tauri run error: {err}");
     }
 }
