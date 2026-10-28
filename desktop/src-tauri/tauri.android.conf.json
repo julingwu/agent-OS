@@ -1,0 +1,10 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "AgentOS",
+        "url": "index.html"
+      }
+    ]
+  }
+}

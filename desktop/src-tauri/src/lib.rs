@@ -21,7 +21,9 @@ mod gui {
 }
 
 use serde_json::{json, Value};
-use tauri::{Manager, WebviewWindowBuilder};
+use tauri::Manager;
+#[cfg(desktop)]
+use tauri::WebviewWindowBuilder;
 #[cfg(windows)]
 use tungstenite::client::IntoClientRequest;
 #[cfg(windows)]
@@ -56,44 +58,43 @@ pub fn run() {
     let result = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![local_bridge_start])
         .setup(|app| {
-            let data_dir = app.path().app_local_data_dir().ok();
-            let mut builder = WebviewWindowBuilder::new(
-                app,
-                "main",
-                tauri::WebviewUrl::App("index.html".into()),
-            )
-            .title("AgentOS");
-
             #[cfg(desktop)]
             {
-                builder = builder.inner_size(1320.0, 860.0);
-            }
+                let data_dir = app.path().app_local_data_dir().ok();
+                let mut builder = WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .title("AgentOS")
+                .inner_size(1320.0, 860.0);
 
-            // 证书：服务器已换成自建 CA 签发的证书链（叶证书带 CDP，nginx 发布 CRL），
-            // 客户端走 Windows 信任存储正常校验 —— 正常启动**不带**任何跳过证书校验的参数。
-            // 兜底：AGENTOS_IGNORE_CERT=1 时临时跳过（仅排障用，别长期开）。
-            // AGENTOS_DEBUG_PORT=1 时才开 CDP，正常使用不暴露调试端口。
-            #[cfg(target_os = "windows")]
-            {
-                let mut browser_args: Vec<String> = Vec::new();
-                if std::env::var("AGENTOS_IGNORE_CERT").is_ok() {
-                    browser_args.push("--ignore-certificate-errors".to_string());
+                // 证书：服务器已换成自建 CA 签发的证书链（叶证书带 CDP，nginx 发布 CRL），
+                // 客户端走 Windows 信任存储正常校验 —— 正常启动**不带**任何跳过证书校验的参数。
+                // 兜底：AGENTOS_IGNORE_CERT=1 时临时跳过（仅排障用，别长期开）。
+                // AGENTOS_DEBUG_PORT=1 时才开 CDP，正常使用不暴露调试端口。
+                #[cfg(target_os = "windows")]
+                {
+                    let mut browser_args: Vec<String> = Vec::new();
+                    if std::env::var("AGENTOS_IGNORE_CERT").is_ok() {
+                        browser_args.push("--ignore-certificate-errors".to_string());
+                    }
+                    if std::env::var("AGENTOS_DEBUG_PORT").is_ok() {
+                        browser_args.push("--remote-debugging-port=9333".to_string());
+                    }
+                    if !browser_args.is_empty() {
+                        let args = browser_args.join(" ");
+                        builder = builder.additional_browser_args(&args);
+                    }
+                    if let Some(dir) = &data_dir {
+                        builder = builder.data_directory(dir.join("webview2"));
+                    }
                 }
-                if std::env::var("AGENTOS_DEBUG_PORT").is_ok() {
-                    browser_args.push("--remote-debugging-port=9333".to_string());
-                }
-                if !browser_args.is_empty() {
-                    let args = browser_args.join(" ");
-                    builder = builder.additional_browser_args(&args);
-                }
-                if let Some(dir) = &data_dir {
-                    builder = builder.data_directory(dir.join("webview2"));
-                }
-            }
 
-            match builder.build() {
-                Ok(_) => {}
-                Err(err) => eprintln!("[boot] window error: {err}"),
+                match builder.build() {
+                    Ok(_) => {}
+                    Err(err) => eprintln!("[boot] window error: {err}"),
+                }
             }
             Ok(())
         })

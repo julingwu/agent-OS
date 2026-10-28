@@ -112,29 +112,52 @@ jobs:
           </network-security-config>
           EOF
 
-          # 3. 将 networkSecurityConfig 配置注入 AndroidManifest.xml
+          # 3. 将 networkSecurityConfig 配置注入 AndroidManifest.xml (安全注入，避免重复属性)
           MANIFEST="desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml"
-          sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config" android:usesCleartextTraffic="true"/' "$MANIFEST"
+          if grep -q "android:networkSecurityConfig" "$MANIFEST"; then
+            echo "networkSecurityConfig already present"
+          else
+            sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config" /' "$MANIFEST"
+          fi
 
           echo "✅ 根证书与网络安全策略已成功注入 Android 工程"
 
       - name: Build Android APK
+        id: build_apk
         run: |
           cd desktop
           TARGET_FLAG="${{ github.event.inputs.target || 'aarch64' }}"
           if [ "$TARGET_FLAG" = "all" ]; then
-            npx tauri android build --apk --debug
+            npx tauri android build --apk --debug --verbose 2>&1 | tee ../android_build.log
           else
-            npx tauri android build --apk --debug --target aarch64
+            npx tauri android build --apk --debug --target aarch64 --verbose 2>&1 | tee ../android_build.log
           fi
 
+      - name: Output build failure diagnosis
+        if: failure()
+        run: |
+          echo "### ❌ Android Build Failure Details" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          tail -n 120 android_build.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -n 120 android_build.log
+
+      - name: Upload Build Log Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-log
+          path: android_build.log
+
       - name: Locate and organize APK artifacts
+        if: success()
         run: |
           mkdir -p output_apk
           find desktop/src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -exec cp {} output_apk/ \;
           ls -la output_apk/
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: AgentOS-Android-APK
