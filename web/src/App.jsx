@@ -511,4 +511,25 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
   );
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+async function bootConsole() {
+  // exe/网页已经用设备令牌登录过；这里用一次性 sso 票据换工作台签名 token，
+  // 免得进 /app/ 还要再登录一次。
+  const url = new URL(location.href);
+  const ticket = url.searchParams.get("sso");
+  if (ticket) {
+    try {
+      const res = await fetch(`/v1/legacy-sso/exchange?ticket=${encodeURIComponent(ticket)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.token) localStorage.setItem("oa_token", data.token);
+      }
+    } catch {
+      /* 换票失败就退回普通登录页 */
+    }
+    url.searchParams.delete("sso");
+    history.replaceState({}, "", url.pathname + (url.search || "") + url.hash);
+  }
+  createRoot(document.getElementById("root")).render(<App />);
+}
+
+bootConsole();

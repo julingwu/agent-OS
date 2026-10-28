@@ -1,0 +1,124 @@
+name: Build Android APK (Tauri 2 Mobile)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Android Target Architecture'
+        required: true
+        default: 'aarch64'
+        type: choice
+        options:
+          - aarch64
+          - all
+  push:
+    branches:
+      - mainline
+      - master
+      - main
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/build-android.yml'
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;26.1.10909125"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, i686-linux-android
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: 'desktop/package-lock.json'
+
+      - name: Install desktop dependencies
+        run: |
+          cd desktop
+          npm install
+
+      - name: Initialize Tauri Android project
+        run: |
+          cd desktop
+          npx tauri android init --ci --skip-targets-install
+
+      - name: Inject Private Root CA & Network Security Config
+        run: |
+          RES_DIR="desktop/src-tauri/gen/android/app/src/main/res"
+          mkdir -p "$RES_DIR/raw"
+          mkdir -p "$RES_DIR/xml"
+
+          # 1. 复制自建根证书到 res/raw/ca.crt
+          cp desktop/ca.crt "$RES_DIR/raw/ca.crt"
+
+          # 2. 生成网络安全配置文件：信任内置 CA 证书与系统证书，放行 193.112.172.223 私有 HTTPS
+          cat << 'EOF' > "$RES_DIR/xml/network_security_config.xml"
+          <?xml version="1.0" encoding="utf-8"?>
+          <network-security-config>
+              <base-config cleartextTrafficPermitted="true">
+                  <trust-anchors>
+                      <certificates src="@raw/ca" />
+                      <certificates src="system" />
+                  </trust-anchors>
+              </base-config>
+              <domain-config cleartextTrafficPermitted="true">
+                  <domain includeSubdomains="true">193.112.172.223</domain>
+                  <domain includeSubdomains="true">localhost</domain>
+                  <domain includeSubdomains="true">127.0.0.1</domain>
+                  <trust-anchors>
+                      <certificates src="@raw/ca" />
+                      <certificates src="system" />
+                  </trust-anchors>
+              </domain-config>
+          </network-security-config>
+          EOF
+
+          # 3. 将 networkSecurityConfig 配置注入 AndroidManifest.xml
+          MANIFEST="desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          sed -i 's/<application/<application android:networkSecurityConfig="@xml\/network_security_config" android:usesCleartextTraffic="true"/' "$MANIFEST"
+
+          echo "✅ 根证书与网络安全策略已成功注入 Android 工程"
+
+      - name: Build Android APK
+        run: |
+          cd desktop
+          TARGET_FLAG="${{ github.event.inputs.target || 'aarch64' }}"
+          if [ "$TARGET_FLAG" = "all" ]; then
+            npx tauri android build --apk --debug
+          else
+            npx tauri android build --apk --debug --target aarch64
+          fi
+
+      - name: Locate and organize APK artifacts
+        run: |
+          mkdir -p output_apk
+          find desktop/src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -exec cp {} output_apk/ \;
+          ls -la output_apk/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentOS-Android-APK
+          path: output_apk/*.apk
+          retention-days: 14
