@@ -15,7 +15,7 @@ import subprocess
 
 from ..computer import screen
 
-WORKSPACE = pathlib.Path(os.environ.get("M0_WORKSPACE") or "/opt/agent-os/workspace")
+WORKSPACE = pathlib.Path(os.environ.get("M0_WORKSPACE") or "/opt/agent-os/workspace").resolve()
 
 MAX_OUTPUT = 8000
 BLOCKED = ("rm -rf /", "mkfs", "dd if=/dev/zero of=/dev/", ":(){ :|:& };:",
@@ -34,6 +34,19 @@ def _jail(path: str | None) -> pathlib.Path:
     return target
 
 
+def _safe_decode(data: bytes | str | None) -> str:
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data
+    for enc in ("utf-8", "gb18030"):
+        try:
+            return data.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
 def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict:
     if not cmd.strip():
         raise ToolError("empty command")
@@ -45,14 +58,16 @@ def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict:
     workdir.mkdir(parents=True, exist_ok=True)
     try:
         proc = subprocess.run(cmd, shell=True, cwd=str(workdir),
-                              capture_output=True, text=True,
+                              capture_output=True, text=False,
                               timeout=max(1, min(int(timeout_s), 900)))
+        stdout = _safe_decode(proc.stdout)[:MAX_OUTPUT]
+        stderr = _safe_decode(proc.stderr)[:MAX_OUTPUT]
+        return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
+                "stdout": stdout, "stderr": stderr}
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"timeout after {timeout_s}s"}
-    stdout = (proc.stdout or "")[:MAX_OUTPUT]
-    stderr = (proc.stderr or "")[:MAX_OUTPUT]
-    return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
-            "stdout": stdout, "stderr": stderr}
+    except Exception as exc:
+        return {"ok": False, "error": f"exec failed: {exc}"}
 
 
 def _fs_list(path: str | None = None) -> dict:
@@ -79,7 +94,10 @@ def _fs_read(path: str, max_bytes: int = 200_000) -> dict:
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
-        return {"ok": False, "error": "binary file (not utf-8)"}
+        try:
+            text = data.decode("gb18030")
+        except (UnicodeDecodeError, LookupError):
+            return {"ok": False, "error": "binary file (not utf-8/gb18030)"}
     return {"ok": True, "path": str(target.relative_to(WORKSPACE)), "content": text}
 
 

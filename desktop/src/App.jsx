@@ -524,7 +524,12 @@ function MainApp({ onLogout }) {
       setBots(b.items);
       setSessions(s.items);
       setRolePresets(ro.items || []);
+      const curActive = activeRef.current || (s.items.length ? s.items[0].id : null);
       if (!activeRef.current && s.items.length) setActiveId(s.items[0].id);
+      const activeSession = (s.items || []).find((x) => x.id === curActive);
+      if (activeSession && activeSession.running) {
+        setStatus("thinking");
+      }
       try {
         const [cur, pa] = await Promise.all([
           api("/v1/events?since=999999999"),
@@ -568,6 +573,9 @@ function MainApp({ onLogout }) {
     if (!activeId) return;
     let cancelled = false;
     clearArtifactCache();     // 切会话时释放上一批截图的 blob（下载会走 WebView 的 HTTP 缓存）
+    setStatus("idle");
+    setActivity([]);
+    setStreamText(null);
     (async () => {
       try {
         // 消息接口只返回 message.*；图片元数据在 artifact.attached 事件里，
@@ -647,10 +655,12 @@ function MainApp({ onLogout }) {
         setActivity([]);        // 新一轮从空白开始，别把上轮的过程堆在这轮
         break;
       case "turn.ended":
+        if (e.__replay) break;
         setStatus(p.status === "done" ? "idle" : p.status || "idle");
         setStreamText(null);
         break;
       case "needs_human":
+        if (e.__replay) break;
         setActivity((prev) => [...prev, { id: e.id, tool: "needs_human", state: "waiting", summary: p.question }]);
         setStatus("needs_human");
         break;
@@ -658,6 +668,7 @@ function MainApp({ onLogout }) {
         setUsage(p.used || 0);
         break;
       case "error":
+        if (e.__replay) break;
         setActivity((prev) => [...prev, { id: e.id, tool: "error", state: "fail", summary: p.message || p.code }]);
         break;
       default:

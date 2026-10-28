@@ -44,6 +44,12 @@ def _session_lock(session_id: str) -> threading.Lock:
         return _LOCKS.setdefault(session_id, threading.Lock())
 
 
+def is_running(session_id: str) -> bool:
+    with _LOCKS_GUARD:
+        lock = _LOCKS.get(session_id)
+        return bool(lock and lock.locked())
+
+
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
@@ -260,7 +266,18 @@ def run_turn(bot_id: str, session_id: str, *, db_path: str | None = None,
     """执行一轮对话。同步函数，调用方负责放到后台线程。"""
     with _session_lock(session_id):
         with db.open_conn(db_path) as conn:
-            return _run_turn_locked(conn, bot_id, session_id, hops, task_hint)
+            try:
+                return _run_turn_locked(conn, bot_id, session_id, hops, task_hint)
+            except Exception as exc:
+                err_str = str(exc)
+                turn_id = "turn_err_" + __import__("secrets").token_hex(6)
+                _emit(conn, bot_id=bot_id, session_id=session_id, kind="error",
+                      turn_id=turn_id, payload={"code": "TURN_CRASHED", "message": err_str[:300]})
+                _emit(conn, bot_id=bot_id, session_id=session_id, kind="message.bot",
+                      turn_id=turn_id, payload={"text": f"⚠️ 系统后台处理出现异常：`{err_str[:200]}`。您可以直接发送「继续」重试。"})
+                _emit(conn, bot_id=bot_id, session_id=session_id, kind="turn.ended",
+                      turn_id=turn_id, payload={"status": "failed"})
+                return {"turn_id": turn_id, "status": "failed", "error": err_str}
 
 
 def _run_turn_locked(conn, bot_id: str, session_id: str,
@@ -360,8 +377,8 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                         turn_id=turn_id, kind=kind, payload=payload),
                 )
                 ok = bool(result.get("ok", True)) and not result.get("status")
-            except tools.ToolError as exc:
-                result, ok = {"ok": False, "error": str(exc)}, False
+            except Exception as exc:
+                result, ok = {"ok": False, "error": f"工具执行异常: {exc}"}, False
             executed_steps_summary.append(f"{name} ({'成功' if ok else '失败'})")
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="tool.result",
                   turn_id=turn_id, payload={

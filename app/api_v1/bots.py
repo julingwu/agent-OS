@@ -251,6 +251,8 @@ def bot_library(bot_id: str, path: str = "",
 
 # ---------------------------------------------------------------- 会话
 def _session_row(conn, row) -> dict:
+    from ..agent.loop import is_running
+
     members = [r["member_id"] for r in conn.execute(
         "SELECT member_id FROM session_members WHERE session_id=? ORDER BY joined_at",
         (row["id"],),
@@ -262,6 +264,7 @@ def _session_row(conn, row) -> dict:
         "id": row["id"], "kind": row["kind"], "title": row["title"],
         "admin_bot_id": row["admin_bot_id"], "members": members,
         "last_event_id": last, "created_at": row["created_at"],
+        "running": is_running(row["id"]),
     }
 
 
