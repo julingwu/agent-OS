@@ -483,6 +483,7 @@ function MainApp({ onLogout }) {
   const [models, setModels] = useState({ default: null, items: [] });
   const [localDevices, setLocalDevices] = useState([]);
   const [approvals, setApprovals] = useState([]);   // 本地操作待批准
+  const [sessionApproved, setSessionApproved] = useState({}); // session_id -> bool 全会话免审状态
   const [memories, setMemories] = useState({ items: [], total: 0 });  const [routines, setRoutines] = useState({ items: [], count: 0 });
   const [rtnTitle, setRtnTitle] = useState("");
   const [rtnPrompt, setRtnPrompt] = useState("");
@@ -603,7 +604,8 @@ function MainApp({ onLogout }) {
         return [...prev, {
           approvalId: p.approval_id, action: p.action || "本地操作",
           detail: p.detail || "", risk: p.risk || "normal",
-            preview: p.preview || null,
+          preview: p.preview || null,
+          sessionId: p.session_id || activeRef.current,
         }];
       });
       return;
@@ -898,13 +900,41 @@ function MainApp({ onLogout }) {
       .catch(() => {});
   }, []);
 
-  const decideLocal = async (approvalId, allow) => {
+  const decideLocal = async (approvalId, allow, scope = "once") => {
+    const targetApproval = approvals.find((a) => a.approvalId === approvalId);
+    const targetSess = targetApproval?.sessionId || activeId;
     try {
-      await api(`/v1/local/approvals/${approvalId}`, { method: "POST", body: { allow } });
+      await api(`/v1/local/approvals/${approvalId}`, {
+        method: "POST",
+        body: { allow, scope }
+      });
+      if (allow && scope === "session") {
+        if (targetSess) {
+          setSessionApproved((prev) => ({ ...prev, [targetSess]: true }));
+        }
+        notify("⚡ 已允许当前会话所有操作，后续操作将自动放行");
+        setApprovals((prev) => prev.filter((a) => a.sessionId !== targetSess && a.approvalId !== approvalId));
+      } else {
+        setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
+      }
+    } catch (e) {
+      setError(String(e.message || e));
+      setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
+    }
+  };
+
+  const toggleSessionAuth = async (sessionId, approved) => {
+    if (!sessionId) return;
+    try {
+      await api(`/v1/local/sessions/${sessionId}/approval`, {
+        method: "POST",
+        body: { approved }
+      });
+      setSessionApproved((prev) => ({ ...prev, [sessionId]: approved }));
+      notify(approved ? "⚡ 已开启当前会话全操作免审授权" : "已恢复逐次确认模式");
     } catch (e) {
       setError(String(e.message || e));
     }
-    setApprovals((prev) => prev.filter((a) => a.approvalId !== approvalId));
   };
 
   const reloadMemories = () => setMemoriesTick((t) => t + 1);
@@ -1107,6 +1137,20 @@ function MainApp({ onLogout }) {
   const activeBot = bots.find((b) => b.id === activeSession?.admin_bot_id) || bots[0];
   const activeBotId = activeBot?.id;
 
+  // 同步当前会话的免审授权状态
+  useEffect(() => {
+    if (!activeId) return;
+    let cancelled = false;
+    api(`/v1/local/sessions/${activeId}/approval`)
+      .then((d) => {
+        if (!cancelled && d && typeof d.approved === "boolean") {
+          setSessionApproved((prev) => ({ ...prev, [activeId]: d.approved }));
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeId]);
+
   // 详情页的例行任务 + 技能
   useEffect(() => {
     if (tab !== "details" || !activeBotId) return;
@@ -1239,6 +1283,13 @@ function MainApp({ onLogout }) {
             </div>
           </div>
           <div className="chat-head-right">
+            {activeId && sessionApproved[activeId] && (
+              <div className="session-auth-pill" title="此对话所有本地操作免确认授权中，点击可收回">
+                <span className="dot on" />
+                <span>全操作已授权</span>
+                <button className="revoke-btn" onClick={() => toggleSessionAuth(activeId, false)}>收回</button>
+              </div>
+            )}
             <div className="chat-usage">今日 {usage.toLocaleString()} tokens</div>
             <button
               className="mobile-toggle-btn"
@@ -1591,7 +1642,12 @@ function MainApp({ onLogout }) {
       {approvals.length > 0 && (
         <div className="modal-mask">
           <div className="modal approval-modal">
-            <h3>本地电脑操作请求</h3>
+            <div className="approval-modal-head">
+              <h3>本地电脑操作请求</h3>
+              <div className="approval-session-tag">
+                当前对话：{activeSession?.title || activeBot?.name || "协作会话"}
+              </div>
+            </div>
             {approvals.map((a) => (
               <div key={a.approvalId} className="approval-card">
                 <div className="approval-head">
@@ -1611,13 +1667,22 @@ function MainApp({ onLogout }) {
                 {a.preview && a.preview.kind === "type" && a.preview.excerpt ? (
                   <pre className="approval-preview">{a.preview.excerpt}</pre>
                 ) : null}
-                <div className="modal-actions">
-                  <button onClick={() => decideLocal(a.approvalId, false)}>拒绝</button>
-                  <button className="primary" onClick={() => decideLocal(a.approvalId, true)}>允许这一次</button>
+                <div className="modal-actions approval-actions">
+                  <button className="btn-reject" onClick={() => decideLocal(a.approvalId, false, "once")}>
+                    拒绝
+                  </button>
+                  <button className="btn-once" onClick={() => decideLocal(a.approvalId, true, "once")}>
+                    运行这一次
+                  </button>
+                  <button className="primary btn-session" onClick={() => decideLocal(a.approvalId, true, "session")}>
+                    ⚡ 允许当前会话所有操作
+                  </button>
                 </div>
               </div>
             ))}
-            <p className="hint">这些操作会发生在你自己的电脑上，只对这一次生效。</p>
+            <p className="hint">
+              这些操作将在您的本机执行。「允许当前会话所有操作」可避免反复确认，可在顶部状态栏随时收回。
+            </p>
           </div>
         </div>
       )}

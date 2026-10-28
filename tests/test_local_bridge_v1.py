@@ -92,6 +92,35 @@ def test_approval_endpoint_resolves_pending(client, device):
     local_bridge._approvals.pop(approval_id, None)
 
 
+def test_session_approval_scope_and_toggle(client, device):
+    session_id = "sess_test_123"
+    approval_id = "apr_sess_test"
+    local_bridge._approvals[approval_id] = {
+        "event": __import__("threading").Event(), "decision": None,
+        "session_id": session_id}
+
+    # 一键允许当前会话所有操作
+    res = client.post(f"/v1/local/approvals/{approval_id}", headers=_auth(device),
+                      json={"allow": True, "scope": "session"})
+    assert res.status_code == 200
+    assert local_bridge.is_session_approved(session_id) is True
+
+    # 再次发起审批，应当直接放行，无需 emit 任何 approval.requested 事件
+    seen = []
+    allowed = local_bridge.request_approval(
+        lambda k, p: seen.append(k), action="读取", detail="", session_id=session_id)
+    assert allowed is True
+    assert len(seen) == 0
+
+    # 手动撤回会话授权
+    res = client.post(f"/v1/local/sessions/{session_id}/approval", headers=_auth(device),
+                      json={"approved": False})
+    assert res.status_code == 200
+    assert local_bridge.is_session_approved(session_id) is False
+    local_bridge._approvals.pop(approval_id, None)
+    local_bridge.set_session_approval(session_id, False)
+
+
 def test_device_ws_rejects_bad_token(client):
     from starlette.websockets import WebSocketDisconnect
 

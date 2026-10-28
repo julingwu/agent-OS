@@ -30,6 +30,7 @@ _pending: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.Future]] = {}
 # call_id -> 本次调用产出的 artifact 元数据（截图等二进制不进事件，只存引用）
 _artifacts: dict[str, list[dict]] = {}
 _approvals: dict[str, dict] = {}           # approval_id -> {"event": Event, "decision": bool|None}
+_session_allowlist: set[str] = set()       # session_id -> 会话级免审授权白名单
 
 
 def set_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -152,16 +153,43 @@ def call(device_id: str, tool: str, args: dict,
 
 
 # ---------------------------------------------------------------- 审批
+def is_session_approved(session_id: str | None) -> bool:
+    """检查指定会话是否已被用户授予全会话免确认操作权限。"""
+    if not session_id:
+        return False
+    with _lock:
+        return session_id in _session_allowlist
+
+
+def set_session_approval(session_id: str | None, approved: bool) -> None:
+    """授予或撤回指定会话的全操作免审权限。若授予，同时自动放行该会话下当前所有挂起审批。"""
+    if not session_id:
+        return
+    with _lock:
+        if approved:
+            _session_allowlist.add(session_id)
+            for aid, meta in list(_approvals.items()):
+                if meta.get("session_id") == session_id:
+                    meta["decision"] = True
+                    meta["event"].set()
+        else:
+            _session_allowlist.discard(session_id)
+
+
 def request_approval(emit: Callable[[str, dict], None] | None, *,
                      action: str, detail: str, risk: str = "normal",
-                     preview: dict | None = None) -> bool:
+                     preview: dict | None = None,
+                     session_id: str | None = None) -> bool:
     """发一个审批事件并阻塞等待用户决定。emit 为空（测试）时默认放行。"""
     if emit is None:
         return True
+    if session_id and is_session_approved(session_id):
+        return True
+
     approval_id = "apr_" + secrets.token_hex(8)
     decision: dict[str, Any] = {"event": threading.Event(), "decision": None,
                                 "action": action, "detail": detail, "risk": risk,
-                                "preview": preview or {}}
+                                "preview": preview or {}, "session_id": session_id}
     with _lock:
         _approvals[approval_id] = decision
     try:
@@ -171,6 +199,7 @@ def request_approval(emit: Callable[[str, dict], None] | None, *,
             "detail": detail,
             "risk": risk,
             "preview": preview or {},
+            "session_id": session_id,
         })
         decision["event"].wait(timeout=APPROVAL_TIMEOUT)
         return bool(decision["decision"])
@@ -181,7 +210,8 @@ def request_approval(emit: Callable[[str, dict], None] | None, *,
             # 超时未决：告诉界面把这张卡撤掉
             try:
                 emit("approval.decided",
-                     {"approval_id": approval_id, "decision": "expired"})
+                     {"approval_id": approval_id, "decision": "expired",
+                      "session_id": session_id})
             except Exception:  # noqa: BLE001
                 pass
 
@@ -190,15 +220,20 @@ def pending() -> list[dict]:
     with _lock:
         return [{"approval_id": aid, "action": meta.get("action", ""),
                  "detail": meta.get("detail", ""), "risk": meta.get("risk", "normal"),
-                 "preview": meta.get("preview", {})}
+                 "preview": meta.get("preview", {}), "session_id": meta.get("session_id")}
                 for aid, meta in _approvals.items()]
 
 
-def resolve_approval(approval_id: str, allow: bool) -> bool:
+def resolve_approval(approval_id: str, allow: bool, scope: str = "once") -> bool:
     with _lock:
         decision = _approvals.get(approval_id)
     if decision is None:
         return False
     decision["decision"] = allow
     decision["event"].set()
+
+    if allow and scope == "session":
+        sess_id = decision.get("session_id")
+        if sess_id:
+            set_session_approval(sess_id, True)
     return True

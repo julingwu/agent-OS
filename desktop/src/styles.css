@@ -937,7 +937,25 @@ input, textarea { font: inherit; }
   color: var(--cyan); font-size: 11px;
 }
 
-/* 本地操作审批 */.approval-modal { width: 480px; }
+/* 本地操作审批 */
+.approval-modal { width: 520px; max-width: 92vw; }
+.approval-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.approval-modal-head h3 { margin: 0; font-size: 15px; }
+.approval-session-tag {
+  font-size: 11px;
+  color: var(--cyan);
+  background: rgba(56, 232, 255, 0.1);
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 232, 255, 0.25);
+}
 .approval-card {
   border: 1px solid rgba(56, 232, 255, 0.25);
   border-radius: 10px; padding: 12px;
@@ -950,6 +968,90 @@ input, textarea { font: inherit; }
   font-family: ui-monospace, Consolas, monospace;
   font-size: 11px; color: var(--sub);
   word-break: break-all; white-space: pre-wrap;
+}
+.approval-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.approval-actions .btn-reject {
+  background: rgba(255, 80, 80, 0.12);
+  color: #ff8296;
+  border: 1px solid rgba(255, 100, 100, 0.35);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.approval-actions .btn-reject:hover {
+  background: rgba(255, 80, 80, 0.22);
+}
+.approval-actions .btn-once {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  border: 1px solid var(--line);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.approval-actions .btn-once:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.approval-actions .btn-session {
+  background: linear-gradient(135deg, #0284c7, #38bdf8);
+  color: #030712;
+  font-weight: 600;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.3);
+  transition: all 0.2s;
+}
+.approval-actions .btn-session:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.5);
+}
+
+.session-auth-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 10px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 999px;
+  font-size: 11px;
+  color: #38bdf8;
+  margin-right: 6px;
+}
+.session-auth-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 6px #38bdf8;
+}
+.session-auth-pill .revoke-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: #e2e8f0;
+  cursor: pointer;
+  margin-left: 2px;
+}
+.session-auth-pill .revoke-btn:hover {
+  background: rgba(255, 90, 90, 0.35);
+  color: #ff8296;
 }
 
 

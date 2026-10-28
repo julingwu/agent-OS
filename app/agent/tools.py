@@ -100,11 +100,13 @@ def _ask_human(question: str, options: list[str] | None = None) -> dict:
             "options": options or []}
 
 
-def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None) -> dict:
+def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
+             session_id: str | None = None) -> dict:
     """执行一次工具调用。未知工具抛 ToolError（由 loop 变成 tool.result 失败）。
 
     `emit(kind, payload)` 由 Agent 循环注入，本地电脑工具用它发审批卡。
     `bot_id` 用于"记忆"这类必须知道自己是谁的工具。
+    `session_id` 用于会话级免审授权判定。
     """
     args = args or {}
     if name == "exec":
@@ -127,7 +129,7 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None) -> 
     if name == "list_routines":
         return _list_routines(bot_id)
     if name.startswith("local_"):
-        return _local_tool(name, args, emit)
+        return _local_tool(name, args, emit, session_id=session_id)
     if name == "remember":
         return _remember(bot_id, str(args.get("content", "")),
                          str(args.get("kind") or "fact"), args.get("importance", 1),
@@ -254,7 +256,7 @@ _LOCAL_RISK: dict[str, tuple[str, str]] = {
 }
 
 
-def _local_tool(name: str, args: dict, emit) -> dict:
+def _local_tool(name: str, args: dict, emit, session_id: str | None = None) -> dict:
     from .. import local_bridge
 
     enabled, need_approval = _local_policy()
@@ -274,12 +276,20 @@ def _local_tool(name: str, args: dict, emit) -> dict:
         return {"ok": False,
                 "error": "没有在线的本地电脑：打开 AgentOS 桌面端并登录后会自动连接"}
     if need_approval:
-        label, risk = _LOCAL_RISK.get(name, (name, "medium"))
-        # 摘要说人话 + 结构化的"将要发生什么"，让用户能判断，而不是盲点允许
-        detail = local_policy.describe(name, args)[:600]
-        preview = local_policy.build_preview(name, args)
-        allowed = local_bridge.request_approval(
-            emit, action=label, detail=detail, risk=risk, preview=preview)
+        if session_id and local_bridge.is_session_approved(session_id):
+            allowed = True
+        else:
+            label, risk = _LOCAL_RISK.get(name, (name, "medium"))
+            # 摘要说人话 + 结构化的"将要发生什么"，让用户能判断，而不是盲点允许
+            detail = local_policy.describe(name, args)[:600]
+            preview = local_policy.build_preview(name, args)
+            try:
+                allowed = local_bridge.request_approval(
+                    emit, action=label, detail=detail, risk=risk, preview=preview,
+                    session_id=session_id)
+            except TypeError:
+                allowed = local_bridge.request_approval(
+                    emit, action=label, detail=detail, risk=risk, preview=preview)
         if not allowed:
             return {"ok": False, "error": "用户拒绝了这次本地操作"}
     result = local_bridge.call(device_id, name, args)

@@ -305,7 +305,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                                             "call_id": call_id})
             try:
                 result = tools.dispatch(
-                    name, args, bot_id=bot_id,
+                    name, args, bot_id=bot_id, session_id=session_id,
                     emit=lambda kind, payload: _emit(
                         conn, bot_id=bot_id, session_id=session_id,
                         turn_id=turn_id, kind=kind, payload=payload),

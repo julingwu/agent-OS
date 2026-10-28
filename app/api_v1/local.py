@@ -24,6 +24,7 @@ def list_devices(device: dict = Depends(require_device)) -> dict:
 
 class ApprovalIn(BaseModel):
     allow: bool
+    scope: str = "once"  # "once" | "session"
 
 
 @router.get("/local/approvals")
@@ -36,10 +37,30 @@ def list_approvals(device: dict = Depends(require_device)) -> dict:
 @router.post("/local/approvals/{approval_id}")
 def decide_approval(approval_id: str, body: ApprovalIn,
                     device: dict = Depends(require_device)) -> dict:
-    ok = local_bridge.resolve_approval(approval_id, body.allow)
+    ok = local_bridge.resolve_approval(approval_id, body.allow, body.scope)
     if not ok:
         raise HTTPException(status_code=404, detail="approval not found or expired")
-    return {"approval_id": approval_id, "allow": body.allow}
+    return {"approval_id": approval_id, "allow": body.allow, "scope": body.scope}
+
+
+class SessionApprovalIn(BaseModel):
+    approved: bool
+
+
+@router.get("/local/sessions/{session_id}/approval")
+def get_session_approval(session_id: str,
+                         device: dict = Depends(require_device)) -> dict:
+    """查询指定会话是否处于全操作免审状态。"""
+    return {"session_id": session_id,
+            "approved": local_bridge.is_session_approved(session_id)}
+
+
+@router.post("/local/sessions/{session_id}/approval")
+def toggle_session_approval(session_id: str, body: SessionApprovalIn,
+                            device: dict = Depends(require_device)) -> dict:
+    """手动开启或收回指定会话的免确认授权。"""
+    local_bridge.set_session_approval(session_id, body.approved)
+    return {"session_id": session_id, "approved": body.approved}
 
 
 @router.websocket("/device")
