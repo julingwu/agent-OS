@@ -1,4 +1,6 @@
 #[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
 use std::path::Path;
 #[cfg(windows)]
 use std::process::{Command, Stdio};
@@ -508,6 +510,9 @@ fn local_write(path: &str, content: &str) -> (bool, Value) {
 }
 
 #[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
 fn local_exec(cmd: &str, cwd: Option<&str>, timeout_s: u64) -> (bool, Value) {
     if cmd.trim().is_empty() {
         return (false, json!({"error": "empty command"}));
@@ -515,6 +520,7 @@ fn local_exec(cmd: &str, cwd: Option<&str>, timeout_s: u64) -> (bool, Value) {
     let mut command = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.arg("/C").arg(cmd);
+        c.creation_flags(CREATE_NO_WINDOW);
         c
     } else {
         let mut c = Command::new("sh");
@@ -524,6 +530,7 @@ fn local_exec(cmd: &str, cwd: Option<&str>, timeout_s: u64) -> (bool, Value) {
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
+    command.stdin(Stdio::null());
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let child = match command.spawn() {
