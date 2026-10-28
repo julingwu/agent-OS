@@ -18,7 +18,15 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; overflow: hidden; }
+html, body, #root {
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  overflow: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
 body { background: var(--bg); color: var(--text); font-size: 14px; }
 button { font: inherit; cursor: pointer; border: none; background: none; color: inherit; }
 input, textarea { font: inherit; }
@@ -28,11 +36,16 @@ input, textarea { font: inherit; }
    ================================================================== */
 .login-root {
   position: relative;
-  height: 100vh;
+  min-height: 100vh;
+  min-height: 100dvh;
+  height: 100%;
   display: grid;
   place-items: center;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: #05060d;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) 14px calc(16px + env(safe-area-inset-bottom, 0px));
+  box-sizing: border-box;
 }
 
 .cyber-bg {
@@ -95,8 +108,11 @@ input, textarea { font: inherit; }
 .login-card {
   position: relative;
   z-index: 2;
-  width: 420px;
-  padding: 34px 32px 22px;
+  width: 92vw;
+  max-width: 440px;
+  box-sizing: border-box;
+  margin: 12px auto;
+  padding: 30px 24px 22px;
   border-radius: 18px;
   background: linear-gradient(160deg, rgba(18, 22, 40, 0.90), rgba(8, 10, 20, 0.94));
   border: 1px solid rgba(56, 232, 255, 0.28);
@@ -1075,6 +1091,7 @@ input, textarea { font: inherit; }
 
 /* ==================================================================
    移动端自适应响应式与抽屉布局 (Mobile Responsive & Off-canvas Drawers)
+   支持主流鸿蒙(HarmonyOS)、Android各类长宽比与高DPI、折叠屏及安全区
    ================================================================== */
 .chat-head-left, .chat-head-right {
   display: flex;
@@ -1088,23 +1105,100 @@ input, textarea { font: inherit; }
   display: none;
 }
 
-@media (max-width: 860px) {
+/* 主机管理选择器样式 (BYOH) */
+.host-selector-card {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: rgba(120, 140, 255, 0.05);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.host-selector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--sub);
+}
+.host-ping-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.host-ping-badge.ok { color: var(--ok); background: rgba(53, 224, 138, 0.1); }
+.host-ping-badge.err { color: var(--err); background: rgba(255, 93, 115, 0.1); }
+.host-ping-badge.wait { color: var(--warn); }
+.host-select-input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #090c1a;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+.host-select-input:focus {
+  border-color: var(--cyan);
+}
+.host-quick-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.host-mini-btn {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: rgba(56, 232, 255, 0.08);
+  border: 1px solid rgba(56, 232, 255, 0.22);
+  color: var(--cyan);
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.host-mini-btn:hover {
+  background: rgba(56, 232, 255, 0.18);
+}
+.deploy-modal-pre {
+  background: #04050a;
+  border: 1px solid var(--line);
+  padding: 10px;
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #79f2b8;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+  margin: 10px 0;
+}
+
+@media (max-width: 1024px), (pointer: coarse) and (max-width: 1280px), (hover: none) and (max-width: 1280px) {
   .mobile-toggle-btn {
-    display: inline-flex;
+    display: inline-flex !important;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
+    width: 36px;
+    height: 36px;
+    border-radius: 9px;
     border: 1px solid var(--line);
     color: var(--cyan);
     background: rgba(56, 232, 255, 0.08);
-    font-size: 15px;
+    font-size: 17px;
     cursor: pointer;
     flex-shrink: 0;
+    touch-action: manipulation;
   }
   .mobile-toggle-btn:active {
     background: rgba(56, 232, 255, 0.22);
+    transform: scale(0.96);
   }
   .app {
     display: flex !important;
@@ -1115,77 +1209,155 @@ input, textarea { font: inherit; }
     overflow: hidden !important;
   }
   .chat {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-    width: 100%;
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    width: 100% !important;
   }
   .chat-head {
-    padding: 10px 14px;
+    padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px !important;
+    min-height: calc(54px + env(safe-area-inset-top, 0px)) !important;
   }
   .chat-head .chat-title {
-    font-size: 15px;
+    font-size: 16px;
   }
   .chat-usage {
-    display: none;
+    display: none !important;
+  }
+  .messages {
+    padding: 14px 10px !important;
+    gap: 10px !important;
+  }
+  .bubble {
+    max-width: 88% !important;
+    font-size: 14.5px !important;
+    line-height: 1.55 !important;
   }
   .sidebar {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 290px;
-    max-width: 85vw;
-    z-index: 100;
-    transform: translateX(-100%);
-    transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 12px 0 36px rgba(0, 0, 0, 0.75);
+    position: fixed !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 290px !important;
+    max-width: 86vw !important;
+    z-index: 100 !important;
+    transform: translateX(-100%) !important;
+    transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: 12px 0 36px rgba(0, 0, 0, 0.75) !important;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
   }
   .sidebar.mobile-open {
-    transform: translateX(0);
+    transform: translateX(0) !important;
   }
   .panel {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    right: 0;
-    width: 330px;
-    max-width: 88vw;
-    z-index: 100;
-    transform: translateX(100%);
-    transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: -12px 0 36px rgba(0, 0, 0, 0.75);
+    position: fixed !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    right: 0 !important;
+    width: 340px !important;
+    max-width: 88vw !important;
+    z-index: 100 !important;
+    transform: translateX(100%) !important;
+    transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    box-shadow: -12px 0 36px rgba(0, 0, 0, 0.75) !important;
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
   }
   .panel.mobile-open {
-    transform: translateX(0);
+    transform: translateX(0) !important;
   }
   .sidebar-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(2, 4, 10, 0.72);
-    backdrop-filter: blur(3px);
-    z-index: 90;
+    display: block !important;
+    position: fixed !important;
+    inset: 0 !important;
+    background: rgba(2, 4, 10, 0.72) !important;
+    backdrop-filter: blur(4px) !important;
+    z-index: 90 !important;
   }
   .composer {
-    padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+    padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px)) !important;
   }
   .composer textarea {
-    font-size: 14px;
-    min-height: 42px;
-    padding: 9px 12px;
+    font-size: 15px !important;
+    min-height: 44px !important;
+    padding: 10px 12px !important;
   }
   .send-btn {
-    padding: 9px 16px;
-    font-size: 13px;
+    padding: 10px 18px !important;
+    font-size: 14px !important;
+    min-height: 42px !important;
   }
   .modal {
-    width: 94vw;
-    max-width: 440px;
-    margin: 12px;
-    padding: 16px;
-    max-height: 84vh;
+    width: 95vw !important;
+    max-width: 480px !important;
+    margin: auto !important;
+    padding: 18px 16px !important;
+    max-height: 85vh !important;
+    max-height: 85dvh !important;
   }
+}
+
+/* 显式移动端类兜底 (保证通过JS探测到的任何移动设备100%生效) */
+.app.is-mobile .mobile-toggle-btn {
+  display: inline-flex !important;
+}
+.app.is-mobile {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+.app.is-mobile .chat {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  width: 100% !important;
+}
+.app.is-mobile .chat-usage {
+  display: none !important;
+}
+.app.is-mobile .sidebar {
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  width: 290px !important;
+  max-width: 86vw !important;
+  z-index: 100 !important;
+  transform: translateX(-100%) !important;
+  transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: 12px 0 36px rgba(0, 0, 0, 0.75) !important;
+}
+.app.is-mobile .sidebar.mobile-open {
+  transform: translateX(0) !important;
+}
+.app.is-mobile .panel {
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  right: 0 !important;
+  width: 340px !important;
+  max-width: 88vw !important;
+  z-index: 100 !important;
+  transform: translateX(100%) !important;
+  transition: transform 0.24s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.75) !important;
+}
+.app.is-mobile .panel.mobile-open {
+  transform: translateX(0) !important;
+}
+.app.is-mobile .sidebar-backdrop {
+  display: block !important;
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgba(2, 4, 10, 0.72) !important;
+  backdrop-filter: blur(4px) !important;
+  z-index: 90 !important;
 }

@@ -69,14 +69,93 @@ export default function App() {
 }
 
 /* ============================== 赛博风登录页 ============================== */
+const DEFAULT_HOSTS = [
+  { name: "官方体验节点", url: "https://193.112.172.223" },
+  { name: "本地开发实例", url: "http://127.0.0.1:8077" },
+];
+
+function loadSavedHosts() {
+  try {
+    const raw = localStorage.getItem("agentos_saved_hosts");
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistSavedHosts(list) {
+  try {
+    localStorage.setItem("agentos_saved_hosts", JSON.stringify(list));
+  } catch {}
+}
+
+/* ============================== 赛博风登录页 (支持多主机自备节点 BYOH) ============================== */
 function LoginScreen({ initial, checking, notice, onRetry, onConnected }) {
-  const [mode, setMode] = useState("token");     // token | code
+  const [mode, setMode] = useState("token"); // token | code
+  const [customHosts, setCustomHosts] = useState(loadSavedHosts);
   const [url, setUrl] = useState(initial?.baseUrl || "https://193.112.172.223");
   const [tok, setTok] = useState(initial?.token || "");
   const [code, setCode] = useState("");
   const [devName, setDevName] = useState(guessDeviceName());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [ping, setPing] = useState({ state: "idle", text: "" });
+
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newHostName, setNewHostName] = useState("");
+  const [newHostUrl, setNewHostUrl] = useState("");
+  const [showDeployGuide, setShowDeployGuide] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
+
+  const allHosts = [...DEFAULT_HOSTS, ...customHosts];
+
+  const pingHost = async (target) => {
+    const base = (target || url).trim().replace(/\/+$/, "");
+    if (!base) return;
+    setPing({ state: "wait", text: "探活中…" });
+    const start = performance.now();
+    try {
+      const res = await fetch(`${base}/v1/health`);
+      const cost = Math.round(performance.now() - start);
+      if (res.ok) {
+        setPing({ state: "ok", text: `在线 ${cost}ms` });
+      } else {
+        setPing({ state: "err", text: `响应异常 (${res.status})` });
+      }
+    } catch {
+      setPing({ state: "err", text: "未连通 / 证书未信任" });
+    }
+  };
+
+  const saveNewHost = () => {
+    const name = newHostName.trim();
+    let u = newHostUrl.trim().replace(/\/+$/, "");
+    if (!name || !u) return;
+    if (!u.startsWith("http://") && !u.startsWith("https://")) {
+      u = `https://${u}`;
+    }
+    const next = [...customHosts.filter((h) => h.url !== u), { name, url: u }];
+    setCustomHosts(next);
+    persistSavedHosts(next);
+    setUrl(u);
+    setShowAddModal(false);
+    setNewHostName("");
+    setNewHostUrl("");
+    pingHost(u);
+  };
+
+  const removeHost = (targetUrl) => {
+    const next = customHosts.filter((h) => h.url !== targetUrl);
+    setCustomHosts(next);
+    persistSavedHosts(next);
+  };
+
+  const copyDeployCmd = () => {
+    const cmd = "curl -sSL https://raw.githubusercontent.com/julingwu/agent-OS/mainline/scripts/setup_server.sh | bash";
+    navigator.clipboard?.writeText(cmd).catch(() => {});
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 2000);
+  };
 
   const submit = async () => {
     if (busy) return;
@@ -117,7 +196,7 @@ function LoginScreen({ initial, checking, notice, onRetry, onConnected }) {
       const msg = String(e.message || e);
       setErr(
         msg.includes("Failed to fetch")
-          ? "连不上服务器：先在浏览器打开一次该地址并接受自签证书"
+          ? "连不上服务器：若是自备云主机，请先在浏览器打开一次该地址接受证书"
           : msg
       );
     } finally {
@@ -139,12 +218,12 @@ function LoginScreen({ initial, checking, notice, onRetry, onConnected }) {
         <div className="login-brand">
           <span className="brand-mark">◢◤</span>
           <h1>AGENT&nbsp;OS</h1>
-          <p className="brand-sub">自托管 AI 团队 · 连接你的电脑</p>
+          <p className="brand-sub">自托管 AI 团队 · 连接你的专属主机</p>
         </div>
 
         <div className="login-status">
           <span className={`pulse ${checking ? "on" : ""}`} />
-          {checking ? "正在验证已有会话…" : "等待连接 · 节点自托管"}
+          {checking ? "正在验证已有会话…" : "自备算力主机 · 数据完全私有"}
         </div>
 
         {notice && (
@@ -153,6 +232,50 @@ function LoginScreen({ initial, checking, notice, onRetry, onConnected }) {
             <button type="button" onClick={onRetry}>重试连接</button>
           </div>
         )}
+
+        {/* 主机管理卡片 (BYOH) */}
+        <div className="host-selector-card">
+          <div className="host-selector-head">
+            <span>🌐 接入主机实例</span>
+            {ping.state !== "idle" && (
+              <span className={`host-ping-badge ${ping.state}`}>
+                ● {ping.text}
+              </span>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: "6px" }}>
+            <select
+              className="host-select-input"
+              value={allHosts.some((h) => h.url === url) ? url : "custom"}
+              onChange={(e) => {
+                if (e.target.value !== "custom") {
+                  setUrl(e.target.value);
+                  pingHost(e.target.value);
+                }
+              }}
+            >
+              {allHosts.map((h) => (
+                <option key={h.url} value={h.url}>
+                  {h.name} ({h.url})
+                </option>
+              ))}
+              <option value="custom">-- 自定义自备主机 --</option>
+            </select>
+          </div>
+
+          <div className="host-quick-actions">
+            <button type="button" className="host-mini-btn" onClick={() => pingHost(url)}>
+              ⚡ 测速探活
+            </button>
+            <button type="button" className="host-mini-btn" onClick={() => setShowAddModal(true)}>
+              ＋ 存为自备主机
+            </button>
+            <button type="button" className="host-mini-btn" onClick={() => setShowDeployGuide(true)}>
+              📖 部署我的VPS
+            </button>
+          </div>
+        </div>
 
         <div className="login-modes">
           <button className={mode === "token" ? "login-mode on" : "login-mode"}
@@ -164,13 +287,17 @@ function LoginScreen({ initial, checking, notice, onRetry, onConnected }) {
         <label className="field">
           <span>服务器地址</span>
           <input value={url} spellCheck={false} placeholder="https://IP 或 https://你的域名"
-            onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+            onChange={(e) => {
+              setUrl(e.target.value);
+              setPing({ state: "idle", text: "" });
+            }}
+            onKeyDown={(e) => e.key === "Enter" && submit()} />
         </label>
 
         {mode === "token" ? (
           <label className="field">
             <span>设备令牌</span>
-            <input value={tok} spellCheck={false} type="password" placeholder="配对后获得的 token"
+            <input value={tok} spellCheck={false} type="password" placeholder="配对或安装输出的 token"
               onChange={(e) => setTok(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
           </label>
         ) : (
@@ -184,7 +311,7 @@ function LoginScreen({ initial, checking, notice, onRetry, onConnected }) {
             </label>
             <label className="field">
               <span>这台设备的名字</span>
-              <input value={devName} spellCheck={false} placeholder="比如：办公室台式机"
+              <input value={devName} spellCheck={false} placeholder="比如：我的手机"
                 onChange={(e) => setDevName(e.target.value)} />
             </label>
           </>
@@ -194,11 +321,81 @@ function LoginScreen({ initial, checking, notice, onRetry, onConnected }) {
         <button className="enter-btn" onClick={submit} disabled={busy}>
           {busy ? "连接中…" : mode === "code" ? "配 对 并 进 入" : "进 入"}
         </button>
-        <div className="login-foot"><span>v1.0</span><span>数据只存你自己的服务器</span></div>
+        <div className="login-foot">
+          <span>v1.0 (Mobile Ready)</span>
+          <span>数据只存你的专属服务器</span>
+        </div>
       </div>
 
+      {/* 弹窗：添加自定义自备主机 */}
+      {showAddModal && (
+        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>＋ 登记我的自备云主机</h3>
+            </div>
+            <p className="hint">
+              保存后可直接在登录页的主机下拉框中快速切换，无需重复输入地址。
+            </p>
+            <label className="field">
+              <span>主机名称 / 备注</span>
+              <input
+                value={newHostName}
+                placeholder="例如：我的腾讯云 VPS / 办公室工作站"
+                onChange={(e) => setNewHostName(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>主机访问地址</span>
+              <input
+                value={newHostUrl}
+                placeholder="https://123.45.67.89:8077 或 https://my-agent.com"
+                onChange={(e) => setNewHostUrl(e.target.value)}
+              />
+            </label>
+            <div className="modal-actions">
+              <button onClick={() => setShowAddModal(false)}>取消</button>
+              <button className="primary" onClick={saveNewHost}>保存实例</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 弹窗：一键部署我的自备云主机指南 */}
+      {showDeployGuide && (
+        <div className="modal-overlay" onClick={() => setShowDeployGuide(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>🚀 一键部署你的专属服务器 (BYOH)</h3>
+            </div>
+            <p className="hint">
+              在任意干净的 Ubuntu / Debian / CentOS 云服务器终端中粘贴并运行以下单行命令：
+            </p>
+            <pre className="deploy-modal-pre">
+              curl -sSL https://raw.githubusercontent.com/julingwu/agent-OS/mainline/scripts/setup_server.sh | bash
+            </pre>
+            <div style={{ textAlign: "center", marginBottom: "12px" }}>
+              <button
+                type="button"
+                className="tool-btn"
+                style={{ padding: "6px 14px", display: "inline-block", color: copyFeedback ? "var(--ok)" : "var(--cyan)" }}
+                onClick={copyDeployCmd}
+              >
+                {copyFeedback ? "✅ 已复制到剪贴板！" : "📋 复制一键部署命令"}
+              </button>
+            </div>
+            <p className="hint" style={{ fontSize: "11px", lineHeight: "1.5" }}>
+              * 脚本将自动准备环境、配置守护进程与安全秘钥，并在执行完毕后直接打印出该服务器的<b>连接地址</b>与<b>管理令牌</b>，填入本客户端即可立即连接！
+            </p>
+            <div className="modal-actions">
+              <button className="primary" onClick={() => setShowDeployGuide(false)}>知道了</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="login-hint">
-        配对码在"已登录的设备 → 账户 → 添加设备"里生成，5 分钟内有效、用一次即废。
+        配对码在“已登录的设备 → 账户 → 添加设备”里生成，5 分钟内有效、用一次即废。
       </div>
     </div>
   );
@@ -250,6 +447,24 @@ function MainApp({ onLogout }) {
   const [settingsTab, setSettingsTab] = useState("general");
   const [showMobileSidebar, setShowMobileSidebar] = useState(false);
   const [showMobilePanel, setShowMobilePanel] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return (
+      window.innerWidth <= 1024 ||
+      /Android|iPhone|iPad|iPod|HarmonyOS|Mobile/i.test(navigator.userAgent)
+    );
+  });
+
+  useEffect(() => {
+    const onResize = () => {
+      setIsMobile(
+        window.innerWidth <= 1024 ||
+        /Android|iPhone|iPad|iPod|HarmonyOS|Mobile/i.test(navigator.userAgent)
+      );
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const [fullscreen, setFullscreen] = useState(false);
   const [controlMode, setControlMode] = useState(false);
   const [settings, setSettings] = useState(null);
@@ -920,7 +1135,7 @@ function MainApp({ onLogout }) {
   }
 
   return (
-    <div className="app">
+    <div className={`app ${isMobile ? "is-mobile" : ""}`}>
       {(showMobileSidebar || showMobilePanel) && (
         <div
           className="sidebar-backdrop"

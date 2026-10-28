@@ -6,7 +6,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Version-v5.4.3%20%7C%20v1.0-blue.svg?style=flat-square" alt="Version">
-  <img src="https://img.shields.io/badge/Automated%20Tests-822%20Passed%20(100%25)-success.svg?style=flat-square" alt="Tests">
+  <img src="https://img.shields.io/badge/Automated%20Tests-823%20Passed%20(100%25)-success.svg?style=flat-square" alt="Tests">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Android%20%7C%20Web-orange.svg?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/Roles%20Library-43%20Standardized%20Personas-purple.svg?style=flat-square" alt="Roles">
   <img src="https://img.shields.io/badge/Security-TLS%201.3%20%2B%20CDP%2FCRL%20%2B%20Hard%20Guardrails-red.svg?style=flat-square" alt="Security">
@@ -258,9 +258,9 @@ npx tauri build --no-bundle
 ........................................................................ [ 87%]
 ........................................................................ [ 96%]
 ...............................                                          [100%]
-822 passed, 2 warnings in 57.34s
+823 passed, 1 warning in 461.40s
 ```
-> **100% 通过（822 passed）**，无一挂起，无一报错。
+> **100% 通过（823 passed）**，无一挂起，无一报错。
 
 ---
 

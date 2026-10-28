@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  agentos:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: agentos-server
+    restart: unless-stopped
+    ports:
+      - "8077:8077"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DB_PATH=/app/data/oa.db
+      - M0_WORKSPACE=/app/workspace
+    volumes:
+      - ../data:/app/data
+      - ../workspace:/app/workspace
+      - ../logs:/app/logs

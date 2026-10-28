@@ -114,3 +114,16 @@ def test_messages_pagination_with_since(client, device):
     after = client.get("/v1/sessions/ses_chief/messages",
                        params={"since": ids[0]}, headers=_auth(device)).json()
     assert [m["text"] for m in after["items"]] == ["m1", "m2"]
+
+
+def test_global_default_skills_seeded(client, device):
+    """验证系统级全局特化技能库默认预置就绪。"""
+    res = client.get("/v1/skills", headers=_auth(device))
+    assert res.status_code == 200
+    data = res.json()
+    assert data["count"] >= 10
+    names = {s["name"] for s in data["items"]}
+    assert "周报三段式" in names
+    assert "第一性原理决策推演" in names
+    assert "代码质量与安全审计" in names
+    assert "增值税与财务合规审核" in names
