@@ -739,12 +739,6 @@ function MainApp({ onLogout }) {
     api("/v1/computer").then((d) => setComputerState(d.state)).catch(() => {});
   }, [tab, fullscreen]);
 
-  /* ---------------- 详情 / 资料库 ---------------- */
-  useEffect(() => {
-    const botId = bots[0]?.id || "bot_chief";
-    if (tab === "details") api(`/v1/bots/${botId}/details`).then(setDetails).catch((e) => setError(String(e.message)));
-    if (tab === "library") api(`/v1/bots/${botId}/library`).then(setLibrary).catch((e) => setError(String(e.message)));
-  }, [tab, bots, libPath]);
 
   /* ---------------- 快捷键 ---------------- */
   useEffect(() => {
@@ -1111,6 +1105,7 @@ function MainApp({ onLogout }) {
     try {
       await api(`/v1/bots/${id}`, { method: "DELETE" });
       setCtx(null);
+      if (activeBotId === id) setActiveId(null);
       await loadBasics();
       notify("已删除 Bot");
     } catch (e) {
@@ -1146,8 +1141,58 @@ function MainApp({ onLogout }) {
   }, [messages, activity]);
 
   const activeSession = sessions.find((s) => s.id === activeId);
-  const activeBot = bots.find((b) => b.id === activeSession?.admin_bot_id) || bots[0];
+  const activeBot =
+    bots.find(
+      (b) =>
+        b.id === activeSession?.admin_bot_id ||
+        (activeSession?.members && activeSession.members.includes(b.id))
+    ) || bots[0];
   const activeBotId = activeBot?.id;
+
+  // 详情与资料库：切换当前 Bot 或 Tab 时，加载对应当前 Bot 的数据
+  useEffect(() => {
+    if (!activeBotId) return;
+    let cancelled = false;
+    setDetails(null);
+    setLibPath("");
+    setPreview(null);
+    if (tab === "details") {
+      api(`/v1/bots/${activeBotId}/details`)
+        .then((d) => { if (!cancelled) setDetails(d); })
+        .catch((e) => { if (!cancelled) setError(String(e.message)); });
+    }
+    if (tab === "library") {
+      api(`/v1/bots/${activeBotId}/library`)
+        .then((l) => { if (!cancelled) setLibrary(l); })
+        .catch((e) => { if (!cancelled) setError(String(e.message)); });
+    }
+    return () => { cancelled = true; };
+  }, [tab, activeBotId]);
+
+  // 选择 Bot 即直接进入该 Bot 的单聊会话（一个 Bot 对应一个独立会话）
+  const selectBot = async (b) => {
+    if (!b?.id) return;
+    let s = sessions.find(
+      (x) =>
+        x.admin_bot_id === b.id ||
+        (x.kind === "direct" && x.members?.includes(b.id))
+    );
+    if (!s) {
+      try {
+        s = await api("/v1/sessions", {
+          method: "POST",
+          body: { kind: "direct", bot_ids: [b.id], title: `和 ${b.name} 的对话` },
+        });
+        await loadBasics();
+      } catch (err) {
+        console.error("Auto create session failed", err);
+      }
+    }
+    if (s) {
+      setActiveId(s.id);
+    }
+    setShowMobileSidebar(false);
+  };
 
   // 同步当前会话的免审授权状态
   useEffect(() => {
@@ -1220,12 +1265,8 @@ function MainApp({ onLogout }) {
         <div className="bot-list">
           {bots.map((b) => (
             <button key={b.id}
-              className={`bot-item ${activeSession?.admin_bot_id === b.id ? "active" : ""}`}
-              onClick={() => {
-                const s = sessions.find((x) => x.admin_bot_id === b.id);
-                if (s) setActiveId(s.id);
-                setShowMobileSidebar(false);
-              }}
+              className={`bot-item ${activeBotId === b.id && (!activeSession || activeSession.kind !== "group") ? "active" : ""}`}
+              onClick={() => selectBot(b)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setCtx({ x: e.clientX, y: e.clientY, kind: "bot", id: b.id, label: b.name });
@@ -1235,27 +1276,31 @@ function MainApp({ onLogout }) {
                 <span className="bot-name">{b.name}</span>
                 <span className="bot-sub">{b.role || "assistant"}</span>
               </span>
-              <span className={`dot ${status}`} />
+              <span className={`dot ${activeBotId === b.id ? status : "idle"}`} />
             </button>
           ))}
         </div>
 
-        <div className="section-label">会话</div>
-        <div className="session-list">
-          {sessions.map((s) => (
-            <button key={s.id} className={`session-item ${s.id === activeId ? "active" : ""}`}
-              onClick={() => {
-                setActiveId(s.id);
-                setShowMobileSidebar(false);
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setCtx({ x: e.clientX, y: e.clientY, kind: "session", id: s.id, label: s.title });
-              }}>
-              {s.kind === "group" ? "◇ " : ""}{s.title || s.id}
-            </button>
-          ))}
-        </div>
+        {sessions.filter((s) => s.kind === "group").length > 0 && (
+          <>
+            <div className="section-label">群聊</div>
+            <div className="session-list">
+              {sessions.filter((s) => s.kind === "group").map((s) => (
+                <button key={s.id} className={`session-item ${s.id === activeId ? "active" : ""}`}
+                  onClick={() => {
+                    setActiveId(s.id);
+                    setShowMobileSidebar(false);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setCtx({ x: e.clientX, y: e.clientY, kind: "session", id: s.id, label: s.title });
+                  }}>
+                  ◇ {s.title || s.id}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <button className="connect-apps" onClick={() => setModal("apps")}>＋ 连接应用</button>
         <button className="connect-apps deck-btn" onClick={openWorkbench}>▦ 赛博指挥舱</button>
@@ -1411,7 +1456,7 @@ function MainApp({ onLogout }) {
               <span className="avatar big">{activeBot?.name?.slice(0, 1) || "?"}</span>
               <div>
                 <div className="detail-name">{details?.name || activeBot?.name}</div>
-                <div className="detail-role">{details?.role || "assistant"}</div>
+                <div className="detail-role">{details?.role || activeBot?.role || "assistant"}</div>
               </div>
             </div>
             <div className="kv model-row">
@@ -1427,9 +1472,9 @@ function MainApp({ onLogout }) {
               </select>
             </div>
             <div className="kv"><span>今日用量</span><b>{(details?.usage_today_tokens || 0).toLocaleString()} tokens</b></div>
-            <div className="kv"><span>会话</span><b>{details?.sessions?.length || 0}</b></div>
+            <div className="kv"><span>会话</span><b>{details?.sessions?.length || 1}</b></div>
             <div className="block-title">人格</div>
-            <p className="persona">{details?.persona || "—"}</p>
+            <p className="persona">{details?.persona || activeBot?.persona || "—"}</p>
 
             <div className="block-title">
               长期记忆 <span className="mem-count">{memories.total || 0}</span>
@@ -1627,7 +1672,7 @@ function MainApp({ onLogout }) {
 
       {modal === "search" && (
         <SearchModal onClose={() => setModal(null)} bots={bots} sessions={sessions}
-          onPickBot={(id) => { const s = sessions.find((x) => x.admin_bot_id === id); if (s) setActiveId(s.id); setModal(null); }}
+          onPickBot={(id) => { const b = bots.find((x) => x.id === id); if (b) selectBot(b); setModal(null); }}
           onPickSession={(id) => { setActiveId(id); setModal(null); }}
           onAction={(a) => {
             if (a === "newbot") setModal("newbot");
@@ -1769,7 +1814,7 @@ function MainApp({ onLogout }) {
   );
 
   function openLibraryPath(path) {
-    const botId = bots[0]?.id || "bot_chief";
+    const botId = activeBotId || bots[0]?.id || "bot_chief";
     setLibPath(path);
     setPreview(null);
     api(`/v1/bots/${botId}/library?path=${encodeURIComponent(path)}`)
