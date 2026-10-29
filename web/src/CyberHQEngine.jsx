@@ -10,7 +10,6 @@ const CyberHQEngine = forwardRef(function CyberHQEngine({
   projectList = [],
   activeProjectId = "",
   onCreateTask = () => {},
-  onSwitchStudio = () => {},
   onOpenExchange = () => {},
   onNavigateTab = () => {},
 }, ref) {
@@ -45,9 +44,6 @@ const CyberHQEngine = forwardRef(function CyberHQEngine({
     const bridge = {
       onCreateTask: (taskData) => {
         if (onCreateTask) onCreateTask(taskData);
-      },
-      onSwitchStudio: () => {
-        if (onSwitchStudio) onSwitchStudio();
       },
       onOpenExchange: () => {
         if (onOpenExchange) onOpenExchange();

@@ -2,45 +2,8 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "./api.js";
-import CyberStageDrawer from "./CyberStageDrawer.jsx";
 import CyberHQEngine from "./CyberHQEngine.jsx";
-import CyberStudio3D from "./CyberStudio3D.jsx";
 import "./cyber_factorio.css";
-
-const STAGE_KEYS = [
-  { key: "intake", name: "接需求", code: "01", color: "#00F0FF", desc: "需求录入与意图识别" },
-  { key: "charter", name: "立项界标", code: "02", color: "#00F0FF", desc: "实体绑定与预算上限" },
-  { key: "workshop", name: "4轮研讨会", code: "03", color: "#FF6B00", desc: "提案-质询-修订-表决 & Loop Guard" },
-  { key: "wbs", name: "黑板拆解", code: "04", color: "#00F0FF", desc: "DAG 依赖与共享黑板上下文" },
-  { key: "build", name: "生产装配", code: "05", color: "#00F0FF", desc: "AI 员工代码与物料装配机械臂" },
-  { key: "test", name: "脉冲激光质检", code: "06", color: "#00FF9D", desc: "L0红线 / L1评审 / L2沙箱断言" },
-  { key: "accept", name: "验收网关", code: "07", color: "#00F0FF", desc: "多角色签章与合规通行许可" },
-  { key: "release", name: "出货港", code: "08", color: "#00F0FF", desc: "Bundle.zip 交付归档与一键打包" },
-  { key: "retro", name: "紫晶金库", code: "09", color: "#A855F7", desc: "组织避坑经验沉淀与 Prompt 反哺" },
-];
-
-const PRESET_DIRECTIVES = [
-  {
-    icon: "🚀",
-    label: "单文件FinOps计算器(实盘)",
-    prompt: "开发一个单文件零依赖的「赛博元公司 FinOps 算力成本与ROI计算器」网页（index.html）。要求：1. 采用深色霓虹科技风格，支持拖动滑块输入每日任务数、单任务Token消耗、模型单价与人工替代时薪，实时动态计算每日人民币开销与月度净节省金额；2. 页面底部附带产品说明文案，严禁出现任何新广告法极限词（确保100%通过L0合规网关）；3. 必须同步编写一个确定性验收脚本（test_check.py 或 node 脚本），自动校验 index.html 文件存在、包含核心计算公式函数且无语法错误，供 L2 激光质检门自动断言通过，最终打包输出至 Release。",
-  },
-  {
-    icon: "⚡",
-    label: "企业级Web中后台系统",
-    prompt: "基于 React 与 FastAPI 极速构建企业级 Web 中后台系统，包含用户认证、RBAC 权限控制与自动化测试套件",
-  },
-  {
-    icon: "📊",
-    label: "全网行业竞品深度调研",
-    prompt: "针对 AI Agent 行业竞争态势执行深度调研，输出包含技术架构对标、市场占有率与盈利模式的完整洞察分析研报",
-  },
-  {
-    icon: "🛡️",
-    label: "广告法全量红线安全审计",
-    prompt: "对近期交付的所有落地页宣传文案与物料执行全量广告法审计，严格排查并剔除所有国家级、最优秀、100%等极限违规用词",
-  },
-];
 
 export default function CyberFactorioDeck({
   me,
@@ -52,35 +15,13 @@ export default function CyberFactorioDeck({
   onOpenAddMember,
   pendingCount = 0,
 }) {
-  // Studio Switcher: "hq" (🏢 智能总部 HQ, default) or "neko" (🐾 Neko-01 潮玩工坊)
-  const [studioMode, setStudioMode] = useState("hq");
-
   const [wsConnected, setWsConnected] = useState(false);
-  // 100% 真实状态绑定：初始全为 pending
-  const [stagesState, setStagesState] = useState({
-    intake: "pending",
-    charter: "pending",
-    workshop: "pending",
-    wbs: "pending",
-    build: "pending",
-    test: "pending",
-    accept: "pending",
-    release: "pending",
-    retro: "pending",
-  });
-  // 100% 真实 KPI：新项目初始如实显示 0
   const [totalRmb, setTotalRmb] = useState(0.0);
   const [totalTokens, setTotalTokens] = useState(0);
   const [crystalsCount, setCrystalsCount] = useState(0);
   const [budgetAlert80, setBudgetAlert80] = useState(false);
   const [alertData, setAlertData] = useState(null);
-  const [flyingCrystals, setFlyingCrystals] = useState([]);
-  const [latestEvent, setLatestEvent] = useState({
-    type: "SYSTEM_READY",
-    time_iso: new Date().toLocaleTimeString(),
-    data: { message: "HQ 智能总部 3D 引擎就绪，实时总线已接入" }
-  });
-  const [selectedStage, setSelectedStage] = useState(null);
+
   const [showExchangeModal, setShowExchangeModal] = useState(false);
   const [exchangeTab, setExchangeTab] = useState("export");
   const [exchangePacks, setExchangePacks] = useState([]);
@@ -95,42 +36,9 @@ export default function CyberFactorioDeck({
   const [projectList, setProjectList] = useState([]);
   const [projectDetail, setProjectDetail] = useState(null);
 
-  // Dual-engine kernel mode state
-  const [kernelMode, setKernelMode] = useState("auto_failover");
-
-  // Camera preset view in Neko studio
-  const [cameraPreset, setCameraPreset] = useState("overview");
-
-  // CEO command bar state
-  const [ceoDirective, setCeoDirective] = useState("");
-  const [selectedFlow, setSelectedFlow] = useState("FLOW-SOFTWARE");
-  const [isDispatching, setIsDispatching] = useState(false);
-  const [dispatchSuccessMsg, setDispatchSuccessMsg] = useState("");
-  const [isListening, setIsListening] = useState(false);
-
   const socketRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
-  const speechRecognitionRef = useRef(null);
-  const inputRef = useRef(null);
   const hqRef = useRef(null);
-
-  // Trigger purple crystal particle flying animation
-  const triggerCrystalDrop = useCallback((data) => {
-    const id = Date.now() + Math.random();
-    const newParticle = {
-      id,
-      startX: window.innerWidth * 0.45,
-      startY: window.innerHeight * 0.6,
-      targetX: window.innerWidth * 0.2,
-      targetY: 80,
-    };
-    setFlyingCrystals((prev) => [...prev, newParticle]);
-    setCrystalsCount((prev) => prev + 1);
-
-    setTimeout(() => {
-      setFlyingCrystals((prev) => prev.filter((p) => p.id !== id));
-    }, 1200);
-  }, []);
 
   // Fetch project list
   const loadProjects = useCallback(async (preferId) => {
@@ -156,9 +64,6 @@ export default function CyberFactorioDeck({
       const res = await api.getProjectDetail?.(pid);
       if (res) {
         setProjectDetail(res);
-        if (res.stages_state) {
-          setStagesState((prev) => ({ ...prev, ...res.stages_state }));
-        }
         if (typeof res.total_rmb === "number") setTotalRmb(res.total_rmb);
         if (typeof res.total_tokens === "number") setTotalTokens(res.total_tokens);
         if (typeof res.crystals_count === "number") setCrystalsCount(res.crystals_count);
@@ -168,7 +73,7 @@ export default function CyberFactorioDeck({
     }
   }, []);
 
-  // Real-time WebSocket connection
+  // Real-time WebSocket connection to /ui/ws
   const connectWebSocket = useCallback(() => {
     if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
       return;
@@ -193,19 +98,11 @@ export default function CyberFactorioDeck({
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          setLatestEvent({
-            type: payload.type || "TELEMETRY_PULSE",
-            time_iso: new Date().toLocaleTimeString(),
-            data: payload
-          });
 
-          // Forward to HQ 3D Engine live feed & Chief speech
+          // Forward event to HQ 3D Engine live feed & Chief speech
           hqRef.current?.pushBackendEvent(payload);
 
           if (payload.type === "TELEMETRY_UPDATE" || payload.type === "STAGE_STATE_CHANGE") {
-            if (payload.stages_state) {
-              setStagesState((prev) => ({ ...prev, ...payload.stages_state }));
-            }
             if (typeof payload.total_rmb === "number") setTotalRmb(payload.total_rmb);
             if (typeof payload.total_tokens === "number") setTotalTokens(payload.total_tokens);
             if (typeof payload.crystals_count === "number") setCrystalsCount(payload.crystals_count);
@@ -214,10 +111,6 @@ export default function CyberFactorioDeck({
           if (payload.type === "BUDGET_PAUSE_80" || payload.type === "BUDGET_ALERT_80") {
             setBudgetAlert80(true);
             setAlertData(payload);
-          }
-
-          if (payload.type === "EXPERIENCE_CRYSTAL_DROPPED") {
-            triggerCrystalDrop(payload);
           }
 
           if (payload.type === "APPROVAL_REQUIRED") {
@@ -242,7 +135,7 @@ export default function CyberFactorioDeck({
       setWsConnected(false);
       reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
     }
-  }, [activeProjectId, triggerCrystalDrop]);
+  }, [activeProjectId]);
 
   useEffect(() => {
     connectWebSocket();
@@ -274,7 +167,7 @@ export default function CyberFactorioDeck({
     }
   }, [showExchangeModal]);
 
-  // Launch new project from HQ Task Modal or CEO Command Bar
+  // Real Cloud Task Dispatch from HQ Task Modal
   const handleCreateTaskFromHQ = async (taskData) => {
     try {
       const res = await api.createProject({
@@ -300,71 +193,6 @@ export default function CyberFactorioDeck({
     }
   };
 
-  // Launch new project from CEO Command Bar in Neko mode
-  const handleDispatchDirective = async () => {
-    const promptText = ceoDirective.trim();
-    if (!promptText || isDispatching) return;
-
-    setIsDispatching(true);
-    setDispatchSuccessMsg("");
-
-    try {
-      const autoName = promptText.length > 25 ? `${promptText.slice(0, 24)}...` : promptText;
-      const res = await api.createProject({
-        name: autoName,
-        requirement: promptText,
-        flow: selectedFlow || "FLOW-SOFTWARE",
-      });
-
-      const newId = res.id || res.project_id;
-      setActiveProjectId(newId);
-
-      setTotalTokens(0);
-      setTotalRmb(0.0);
-      setStagesState({
-        intake: "active",
-        charter: "pending",
-        workshop: "pending",
-        wbs: "pending",
-        build: "pending",
-        test: "pending",
-        accept: "pending",
-        release: "pending",
-        retro: "pending",
-      });
-
-      setDispatchSuccessMsg(`🚀 指令已下达！小人正在走向工位，项目 [${newId}] 启动总装...`);
-      setCeoDirective("");
-
-      await loadProjects(newId);
-      await loadProjectDetail(newId);
-
-      hqRef.current?.pushBackendEvent({
-        type: "CLOUD_PROJECT_CREATED",
-        realId: newId,
-        name: autoName,
-      });
-
-      setTimeout(() => setDispatchSuccessMsg(""), 6000);
-    } catch (err) {
-      alert(`流水线启动失败: ${err.message || "网络或权限异常"}`);
-    } finally {
-      setIsDispatching(false);
-    }
-  };
-
-  // Open micro-control stage drawer
-  const openStageDrawer = (stageKey) => {
-    const standardMeta = STAGE_KEYS.find((s) => s.key === stageKey) || {
-      key: stageKey,
-      name: stageKey,
-      code: "00",
-      color: "#00F0FF",
-      desc: "工序微调控制台",
-    };
-    setSelectedStage({ ...standardMeta, state: stagesState[stageKey] || "pending" });
-  };
-
   // Top up budget handler
   const handleTopupBudget = async () => {
     try {
@@ -377,7 +205,6 @@ export default function CyberFactorioDeck({
   const handleCancelRun = () => {
     setBudgetAlert80(false);
     setAlertData(null);
-    setStagesState((prev) => ({ ...prev, build: "blocked" }));
   };
 
   const handleExportBlueprint = (packId) => {
@@ -447,232 +274,20 @@ export default function CyberFactorioDeck({
         margin: 0,
       }}
     >
-      {/* ============================================================== */}
-      {/* MODE 1: 🏢 智能总部 HQ 3D 引擎 (@赛博老爸 10 · HQ 智能总部)          */}
-      {/* ============================================================== */}
-      {studioMode === "hq" && (
-        <CyberHQEngine
-          ref={hqRef}
-          wsConnected={wsConnected}
-          totalTokens={totalTokens}
-          pendingCount={pendingCount}
-          projectList={projectList}
-          activeProjectId={activeProjectId}
-          onCreateTask={handleCreateTaskFromHQ}
-          onSwitchStudio={() => setStudioMode("neko")}
-          onOpenExchange={() => setShowExchangeModal(true)}
-          onNavigateTab={onNavigateTab || onNavigate}
-        />
-      )}
+      {/* 1. 🏢 智能总部 HQ 3D 引擎 (@赛博老爸 10 · HQ 智能总部) */}
+      <CyberHQEngine
+        ref={hqRef}
+        wsConnected={wsConnected}
+        totalTokens={totalTokens}
+        pendingCount={pendingCount}
+        projectList={projectList}
+        activeProjectId={activeProjectId}
+        onCreateTask={handleCreateTaskFromHQ}
+        onOpenExchange={() => setShowExchangeModal(true)}
+        onNavigateTab={onNavigateTab || onNavigate}
+      />
 
-      {/* ============================================================== */}
-      {/* MODE 2: 🐾 Neko-01 赛博猫娘潮玩工坊 (Three.js 60FPS 虚拟工作室)   */}
-      {/* ============================================================== */}
-      {studioMode === "neko" && (
-        <>
-          <CyberStudio3D
-            stagesState={stagesState}
-            activeProjectId={activeProjectId}
-            totalRmb={totalRmb}
-            totalTokens={totalTokens}
-            crystalsCount={crystalsCount}
-            budgetAlert80={budgetAlert80}
-            approvalModal={approvalModal}
-            openStageDrawer={openStageDrawer}
-            onOpenExchange={() => setShowExchangeModal(true)}
-            onOpenApproval={() => {
-              if (approvalModal) setApprovalModal(approvalModal);
-              else if (onNavigateTab) onNavigateTab("approvals");
-              else if (onNavigate) onNavigate("approvals");
-            }}
-            onDirectiveFocus={() => inputRef.current?.focus()}
-            cameraPreset={cameraPreset}
-            onCameraPresetChange={setCameraPreset}
-          />
-
-          {/* Switch Back to HQ Button */}
-          <button
-            className="cyber-btn cyan"
-            style={{
-              position: "absolute",
-              top: "14px",
-              right: "18px",
-              borderRadius: "9999px",
-              padding: "7px 16px",
-              fontSize: "12px",
-              fontWeight: "600",
-              zIndex: 35,
-              boxShadow: "0 4px 18px rgba(0, 240, 255, 0.4)",
-            }}
-            onClick={() => setStudioMode("hq")}
-            title="切回 🏢 智能总部 HQ 全景大厦"
-          >
-            🏢 切回智能总部 HQ
-          </button>
-
-          {/* Top-Left Stats for Neko Mode */}
-          <div
-            style={{
-              position: "absolute",
-              top: "14px",
-              left: "18px",
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              zIndex: 30,
-            }}
-          >
-            <div
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "6px 14px",
-                borderRadius: "9999px",
-                background: "rgba(9, 14, 28, 0.88)",
-                border: "1px solid rgba(0, 240, 255, 0.4)",
-                fontSize: "12px",
-                fontWeight: "600",
-                color: "#f8fafc",
-              }}
-            >
-              <span
-                style={{
-                  width: "7px",
-                  height: "7px",
-                  borderRadius: "50%",
-                  background: wsConnected ? "#00FF9D" : "#64748B",
-                }}
-              />
-              <span>{wsConnected ? "遥测 LIVE" : "遥测离线"}</span>
-            </div>
-
-            {projectList.length > 0 && (
-              <select
-                value={activeProjectId}
-                onChange={(e) => {
-                  const pid = e.target.value;
-                  setActiveProjectId(pid);
-                  loadProjectDetail(pid);
-                }}
-                style={{
-                  background: "rgba(9, 14, 28, 0.88)",
-                  border: "1px solid rgba(120, 140, 255, 0.35)",
-                  borderRadius: "9999px",
-                  padding: "6px 14px",
-                  color: "#e2e8f0",
-                  fontSize: "12px",
-                  outline: "none",
-                  cursor: "pointer",
-                }}
-              >
-                {projectList.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    📁 {p.name || p.id} ({p.current_stage || "init"})
-                  </option>
-                ))}
-              </select>
-            )}
-
-            <div
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "10px",
-                padding: "6px 14px",
-                borderRadius: "9999px",
-                background: "rgba(9, 14, 28, 0.88)",
-                border: "1px solid rgba(168, 85, 247, 0.35)",
-                fontSize: "11px",
-                color: "#cbd5e1",
-              }}
-            >
-              <span style={{ color: "#a855f7", fontWeight: "bold" }}>💎 {crystalsCount} 晶石</span>
-              <span style={{ color: "#475569" }}>|</span>
-              <span style={{ color: "#f59e0b" }}>￥{totalRmb.toFixed(2)}</span>
-              <span style={{ color: "#475569" }}>|</span>
-              <span style={{ color: "#00f0ff" }}>{totalTokens.toLocaleString()} Tok</span>
-            </div>
-          </div>
-
-          {/* Bottom Floating Console in Neko Mode */}
-          <div
-            style={{
-              position: "absolute",
-              bottom: "16px",
-              left: "50%",
-              transform: "translateX(-50%)",
-              width: "min(960px, 94vw)",
-              background: "rgba(9, 14, 28, 0.94)",
-              border: "1px solid rgba(0, 240, 255, 0.4)",
-              borderRadius: "16px",
-              padding: "12px 18px",
-              boxShadow: "0 16px 45px rgba(0, 0, 0, 0.8), 0 0 30px rgba(0, 240, 255, 0.15)",
-              backdropFilter: "blur(14px)",
-              zIndex: 35,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: "600" }}>工序微调:</span>
-                {STAGE_KEYS.map((st) => (
-                  <div
-                    key={st.key}
-                    onClick={() => openStageDrawer(st.key)}
-                    style={{
-                      padding: "2px 8px",
-                      borderRadius: "9999px",
-                      fontSize: "11px",
-                      cursor: "pointer",
-                      background: "rgba(255,255,255,0.06)",
-                      color: "#94a3b8",
-                    }}
-                  >
-                    <span>{st.code}</span> <span>{st.name}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <input
-                ref={inputRef}
-                type="text"
-                value={ceoDirective}
-                onChange={(e) => setCeoDirective(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleDispatchDirective();
-                  }
-                }}
-                placeholder="给 Neko-01 下达指令（发送后小人将自动走向工位开始总装）..."
-                style={{
-                  flex: 1,
-                  background: "#060A14",
-                  border: "1px solid rgba(0, 240, 255, 0.4)",
-                  borderRadius: "8px",
-                  padding: "10px 14px",
-                  color: "#F8FAFC",
-                  fontSize: "13px",
-                  outline: "none",
-                }}
-              />
-              <button
-                type="button"
-                className="cyber-btn cyan"
-                disabled={isDispatching || !ceoDirective.trim()}
-                onClick={handleDispatchDirective}
-                style={{ padding: "8px 16px", whiteSpace: "nowrap" }}
-              >
-                {isDispatching ? "点火总装中..." : "🚀 派发战术指令"}
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* 4. RED ALERT BANNER (80% BUDGET PAUSE) */}
+      {/* 2. RED ALERT BANNER (80% BUDGET PAUSE) */}
       {budgetAlert80 && (
         <div
           className="cyber-alert-ribbon"
@@ -695,43 +310,7 @@ export default function CyberFactorioDeck({
         </div>
       )}
 
-      {/* 5. FLYING PURPLE CRYSTALS PARTICLES */}
-      {flyingCrystals.map((fc) => (
-        <div
-          key={fc.id}
-          className="flying-crystal-particle"
-          style={{
-            position: "fixed",
-            left: `${fc.startX}px`,
-            top: `${fc.startY}px`,
-            "--tx": `${fc.targetX - fc.startX}px`,
-            "--ty": `${fc.targetY - fc.startY}px`,
-            pointerEvents: "none",
-            zIndex: 9999,
-          }}
-        >
-          💎 +1 组织避坑晶石
-        </div>
-      ))}
-
-      {/* 6. SLIDE-OUT MICRO-CONTROL STAGE DRAWER */}
-      {selectedStage && (
-        <CyberStageDrawer
-          stage={selectedStage}
-          projectId={activeProjectId}
-          projectDetail={projectDetail}
-          onClose={() => setSelectedStage(null)}
-          onOpenChat={onOpenChat}
-          onOpenExchange={() => {
-            setSelectedStage(null);
-            setShowExchangeModal(true);
-          }}
-          triggerCrystalDrop={triggerCrystalDrop}
-          onRefreshProject={() => loadProjectDetail(activeProjectId)}
-        />
-      )}
-
-      {/* 7. HOLOGRAPHIC APPROVAL MODAL (WECOM DECOUPLED) */}
+      {/* 3. HOLOGRAPHIC APPROVAL MODAL (WECOM DECOUPLED) */}
       {approvalModal && (
         <div className="cyber-modal-overlay">
           <div className="cyber-modal-card red-alert">
@@ -757,8 +336,7 @@ export default function CyberFactorioDeck({
               <button
                 className="cyber-btn danger"
                 onClick={() => {
-                  alert("已执行驳回！触发经验提取，避坑紫晶凝聚中...");
-                  triggerCrystalDrop({ title: "指挥舱手动驳回", kind: "rejection" });
+                  alert("已执行驳回！");
                   setApprovalModal(null);
                 }}
               >
@@ -784,7 +362,7 @@ export default function CyberFactorioDeck({
         </div>
       )}
 
-      {/* 8. METACORP MULTI-WORLD EXCHANGE MODAL */}
+      {/* 4. METACORP MULTI-WORLD EXCHANGE MODAL */}
       {showExchangeModal && (
         <div className="cyber-modal-overlay" onClick={() => setShowExchangeModal(false)}>
           <div className="cyber-modal-card" style={{ maxWidth: "780px" }} onClick={(e) => e.stopPropagation()}>
