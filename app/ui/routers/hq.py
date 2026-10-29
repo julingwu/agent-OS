@@ -55,6 +55,7 @@ class HireRoleIn(BaseModel):
 def hq_hire_role(payload: HireRoleIn, oa_ui: str | None = Depends(_token)):
     _require(oa_ui)
     with get_conn() as conn:
+        store.ensure(conn)
         roles_mod.ensure(conn)
         actor = _task_actor(conn, oa_ui, "task:*")
         tenant.resolve(actor, payload.entity_id)
@@ -97,6 +98,7 @@ def hq_hire_role(payload: HireRoleIn, oa_ui: str | None = Depends(_token)):
 def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
     """Fast, unified JSON snapshot from real SQLite tables (never fake data)."""
     with get_conn() as conn:
+        store.ensure(conn)
         roles_mod.ensure(conn)
         who = {"role": "system", "tenant_id": "TENANT-HQ"}
         if oa_ui:
