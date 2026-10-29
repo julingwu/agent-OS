@@ -129,10 +129,18 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
                                   sheet=args.get("sheet"))
     if name == "web_search":
         from . import web_tools
-        return web_tools.web_search(str(args.get("query", "")), count=int(args.get("count", 8)))
+        return web_tools.web_search(
+            str(args.get("query", "")),
+            search_type=str(args.get("search_type") or "all"),
+            max_results=int(args.get("max_results") or args.get("count") or 8)
+        )
     if name == "web_fetch":
         from . import web_tools
-        return web_tools.web_fetch(str(args.get("url", "")), max_chars=int(args.get("max_chars", 25000)))
+        return web_tools.web_fetch(
+            str(args.get("url", "")),
+            max_chars=int(args.get("max_chars", 25000)),
+            render_js=bool(args.get("render_js", False))
+        )
     if name == "browser_open":
         from . import web_tools
         return web_tools.browser_open(str(args.get("url", "")), wait_ms=int(args.get("wait_ms", 2500)),
@@ -457,6 +465,7 @@ TOOL_SPECS: list[dict] = [
         "description": "实时多引擎联网搜索（国内必应、360、搜狗级联，获取最新资讯、行业事实与技术文档）。",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "搜索关键词或自然语言问题"},
+            "search_type": {"type": "string", "enum": ["all", "news", "web"], "description": "搜索类型：all 全部 / news 新闻时效 / web 网页，默认 all"},
             "count": {"type": "integer", "description": "返回结果条数，默认 8 条"},
         }, "required": ["query"]},
     }},
@@ -466,6 +475,7 @@ TOOL_SPECS: list[dict] = [
         "parameters": {"type": "object", "properties": {
             "url": {"type": "string", "description": "目标网页的完整 HTTP/HTTPS 链接"},
             "max_chars": {"type": "integer", "description": "提取正文的最大字符数，默认 25000"},
+            "render_js": {"type": "boolean", "description": "是否强制使用无头浏览器完整渲染 JS，默认 false"},
         }, "required": ["url"]},
     }},
     {"type": "function", "function": {

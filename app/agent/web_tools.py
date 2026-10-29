@@ -126,6 +126,21 @@ def _search_pro_api(query: str, key: str, provider: str, max_results: int) -> li
                             "source": item.get("siteName", "bocha"),
                             "time": item.get("dateLastCrawled", ""),
                         })
+            elif provider == "serper" or key.startswith("serper_") or (len(key) == 40 and not key.startswith("sk-")):
+                headers = {"X-API-KEY": key, "Content-Type": "application/json"}
+                r = client.post("https://google.serper.dev/search",
+                                json={"q": query, "num": max_results, "gl": "cn", "hl": "zh-cn"},
+                                headers=headers)
+                if r.status_code == 200:
+                    d = r.json()
+                    for item in d.get("news", []) + d.get("organic", []):
+                        results.append({
+                            "title": item.get("title", ""),
+                            "url": item.get("link", ""),
+                            "snippet": item.get("snippet", ""),
+                            "source": "serper",
+                            "time": item.get("date", ""),
+                        })
     except Exception as exc:
         log.warning("Pro search API failed: %s", exc)
     return results
@@ -135,9 +150,9 @@ def _search_bing_rss(query: str, search_type: str, max_results: int) -> list[dic
     results: list[dict] = []
     endpoints = []
     if search_type in ("news", "all"):
-        endpoints.append(f"https://cn.bing.com/news/search?q={urllib.parse.quote(query)}&format=rss")
+        endpoints.append(f"https://cn.bing.com/news/search?q={urllib.parse.quote_plus(query)}&format=rss")
     if search_type in ("web", "all"):
-        endpoints.append(f"https://cn.bing.com/search?q={urllib.parse.quote(query)}&format=rss")
+        endpoints.append(f"https://cn.bing.com/search?q={urllib.parse.quote_plus(query)}&format=rss")
 
     with httpx.Client(headers=HEADERS, timeout=8.0, follow_redirects=True, trust_env=False) as client:
         for ep in endpoints:
@@ -196,6 +211,78 @@ def _search_so_360(query: str, max_results: int) -> list[dict]:
                         })
     except Exception as exc:
         log.debug("360 search failed: %s", exc)
+    return results
+
+
+def _search_baidu_news(query: str, max_results: int) -> list[dict]:
+    """百度新闻源检索：针对国内科技发布会、企业快讯与最新动态。"""
+    results: list[dict] = []
+    url = f"https://www.baidu.com/s?rtt=1&bsst=1&cl=2&tn=news&word={urllib.parse.quote_plus(query)}"
+    try:
+        with httpx.Client(headers=HEADERS, timeout=8.0, follow_redirects=True, trust_env=False) as client:
+            resp = client.get(url)
+            if resp.status_code == 200 and resp.text:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for item in soup.find_all(class_=re.compile(r"result-op|c-container")):
+                    t_tag = item.find("h3") or item.find(class_=re.compile(r"news-title|c-title"))
+                    a_tag = t_tag.find("a") if t_tag else None
+                    if not a_tag:
+                        continue
+                    title = a_tag.get_text(strip=True)
+                    link = a_tag.get("href", "")
+                    summary_tag = item.find(class_=re.compile(r"c-font-normal|c-color-text2|news-content"))
+                    snippet = summary_tag.get_text(strip=True) if summary_tag else ""
+                    src_tag = item.find(class_=re.compile(r"c-color-gray|c-color-gray2|source"))
+                    time_info = src_tag.get_text(strip=True) if src_tag else ""
+                    if title and link:
+                        results.append({
+                            "title": title,
+                            "url": link,
+                            "snippet": snippet,
+                            "source": "baidu-news",
+                            "time": time_info,
+                        })
+                    if len(results) >= max_results:
+                        break
+    except Exception as exc:
+        log.debug("Baidu news search failed: %s", exc)
+    return results
+
+
+def _search_sogou_weixin(query: str, max_results: int) -> list[dict]:
+    """搜狗微信公众号深度文章检索。"""
+    results: list[dict] = []
+    url = f"https://weixin.sogou.com/weixin?type=2&query={urllib.parse.quote_plus(query)}"
+    try:
+        with httpx.Client(headers=HEADERS, timeout=8.0, follow_redirects=True, trust_env=False) as client:
+            resp = client.get(url)
+            if resp.status_code == 200 and resp.text:
+                soup = BeautifulSoup(resp.text, "html.parser")
+                for li in soup.find_all("li", id=re.compile(r"sogou_vr_")):
+                    h3 = li.find("h3")
+                    a = h3.find("a") if h3 else None
+                    if not a:
+                        continue
+                    title = a.get_text(strip=True)
+                    link = a.get("href", "")
+                    if link.startswith("/"):
+                        link = urllib.parse.urljoin("https://weixin.sogou.com", link)
+                    txt_info = li.find(class_="txt-info")
+                    snippet = txt_info.get_text(strip=True) if txt_info else ""
+                    source_tag = li.find(class_="account") or li.find(class_="s-p")
+                    source = source_tag.get_text(strip=True) if source_tag else "微信公众号"
+                    if title and link:
+                        results.append({
+                            "title": title,
+                            "url": link,
+                            "snippet": snippet,
+                            "source": f"sogou-wx({source})",
+                            "time": "",
+                        })
+                    if len(results) >= max_results:
+                        break
+    except Exception as exc:
+        log.debug("Sogou WeChat search failed: %s", exc)
     return results
 
 
@@ -287,18 +374,28 @@ def web_search(query: str, search_type: str = "all", max_results: int = 8, count
         collected.extend(pro_results)
 
     # 2. Domestic Multi-Engine Cascade
+    # Engine A: Baidu News (priority for news/press releases)
+    if search_type in ("news", "all") and len(collected) < limit:
+        baidu_res = _search_baidu_news(q, limit - len(collected))
+        collected.extend(baidu_res)
+
+    # Engine B: Sogou WeChat Official Accounts
     if len(collected) < limit:
-        # Engine A: Bing RSS (Fastest & most reliable on Tencent Cloud Mainland)
+        wx_res = _search_sogou_weixin(q, limit - len(collected))
+        collected.extend(wx_res)
+
+    # Engine C: Bing RSS (Fastest on Tencent Cloud)
+    if len(collected) < limit:
         bing_res = _search_bing_rss(q, search_type, limit - len(collected))
         collected.extend(bing_res)
 
+    # Engine D: 360 Search
     if len(collected) < limit:
-        # Engine B: 360 Search
         so_res = _search_so_360(q, limit - len(collected))
         collected.extend(so_res)
 
+    # Engine E: Sogou Web
     if len(collected) < limit:
-        # Engine C: Sogou
         sogou_res = _search_sogou(q, limit - len(collected))
         collected.extend(sogou_res)
 

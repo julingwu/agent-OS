@@ -227,6 +227,18 @@ def todo_read(session_id: str | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- 并行子任务委派 (delegate_task)
+def _get_subagent_tool_specs() -> list[dict]:
+    excluded = {
+        "delegate_task", "ask_human", "routine_create", "routine_delete",
+        "skill_save", "skill_delete", "computer_action",
+    }
+    return [
+        s for s in tools.TOOL_SPECS
+        if s.get("function", {}).get("name") not in excluded
+        and not s.get("function", {}).get("name", "").startswith("local_")
+    ]
+
+
 def _run_single_subtask(task: dict[str, Any]) -> dict[str, Any]:
     tid = task.get("id") or secrets.token_hex(4)
     goal = str(task.get("goal") or "").strip()
@@ -235,19 +247,67 @@ def _run_single_subtask(task: dict[str, Any]) -> dict[str, Any]:
     system_prompt = (
         "你是 AgentOS 的专业并发子代理（Subagent Worker）。\n"
         "你的任务是全神贯注于主代理分配给你的具体子目标。\n"
-        "请进行严谨的逻辑推演、信息分析与综合，直接给出高质量、结构化的交付结果。\n"
-        "回答必须事实求是、严禁编造虚假信息。"
+        "你可以调用工具（如 web_search 联网搜索、web_fetch 抓取网页、fs_read/fs_edit/glob_search/grep_search/doc_read 分析文档代码、exec 验证命令）。\n"
+        "请进行严谨的调研、逻辑推演与综合，直接给出高质量、结构化的交付结果。\n"
+        "回答必须实事求是、严禁编造虚假信息。"
     )
     user_prompt = f"【子任务目标】：{goal}\n【背景与上下文信息】：{context or '无'}"
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    subagent_tools = _get_subagent_tool_specs()
+    max_steps = 6
+    final_result = ""
 
     try:
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        resp = llm.chat(messages)
-        content = resp.get("message", {}).get("content") or resp.get("content") or ""
-        return {"id": tid, "goal": goal, "status": "completed", "result": content}
+        for step in range(max_steps):
+            resp = llm.chat(messages, tools=subagent_tools, temperature=0.3)
+            if not resp:
+                break
+            msg = resp.get("message") or {}
+            tool_calls = msg.get("tool_calls") or []
+
+            if not tool_calls:
+                final_result = (msg.get("content") or "").strip()
+                break
+
+            assistant_msg = {
+                "role": "assistant",
+                "content": msg.get("content") or "",
+                "tool_calls": tool_calls,
+                "reasoning_content": msg.get("reasoning_content") or "",
+            }
+            messages.append(assistant_msg)
+
+            for call in tool_calls:
+                fn = call.get("function") or {}
+                fn_name = fn.get("name") or "unknown"
+                call_id = call.get("id") or f"sub_{step}"
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except Exception:
+                    args = {}
+                try:
+                    res = tools.dispatch(fn_name, args)
+                except Exception as exc:
+                    res = {"ok": False, "error": f"subagent tool error: {exc}"}
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(res, ensure_ascii=False)[:12000],
+                })
+
+        if not final_result:
+            summary_resp = llm.chat(
+                messages + [{"role": "user", "content": "请综合上述工具调用与分析结果，直接给出最终结构化结论。"}],
+                tools=None,
+                temperature=0.2,
+            )
+            final_result = ((summary_resp or {}).get("message") or {}).get("content", "").strip()
+
+        return {"id": tid, "goal": goal, "status": "completed", "result": final_result or "（子任务无输出）"}
     except Exception as exc:
         return {"id": tid, "goal": goal, "status": "failed", "error": str(exc)}
 

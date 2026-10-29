@@ -351,6 +351,35 @@ def test_delegate_task(monkeypatch):
     assert "Resolved:" in res["results"][0]["result"]
 
 
+def test_delegate_task_with_tools(monkeypatch, workspace):
+    # Verify subagent workers run tool calls (e.g. fs_read) in mini ReAct loop
+    (workspace / "sub_data.txt").write_text("Secret metric: 4200 units", encoding="utf-8")
+
+    def fake_chat(messages, *, tools=None, **kw):
+        if len(messages) == 2:
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "tc_1",
+                        "function": {
+                            "name": "fs_read",
+                            "arguments": json.dumps({"path": "sub_data.txt"})
+                        }
+                    }]
+                }
+            }
+        return {"message": {"role": "assistant", "content": "Analysis complete: 4200 units found."}}
+
+    monkeypatch.setattr(llm, "chat", fake_chat)
+    tasks = [{"id": "sub_1", "goal": "Find secret metric", "context": "in sub_data.txt"}]
+    res = tools.dispatch("delegate_task", {"tasks": tasks})
+    assert res["ok"] is True
+    assert res["results"][0]["status"] == "completed"
+    assert "4200 units" in res["results"][0]["result"]
+
+
 # ---------------------------------------------------------------- 10. Self Evolution (Skills & Routines)
 def test_skill_and_routine_tools():
     # Save skill
@@ -364,6 +393,10 @@ def test_skill_and_routine_tools():
     # Check skill list
     list_s = tools.dispatch("list_skills", {})
     assert any(s["name"] == "测试自定义技能" for s in list_s["items"])
+    # Verify presence of flagship tool-driven skills
+    flagship_names = {"全网深度调研与实时情报追踪", "开源社区与技术文档排障", "长文档与财报多维拆解", "外科手术式代码重构与测试闭环", "Python数据清洗与可视化交付", "多维竞品并行对标矩阵"}
+    existing_names = {s["name"] for s in list_s["items"]}
+    assert flagship_names.issubset(existing_names)
 
     # Delete skill
     del_s = tools.dispatch("skill_delete", {"name_or_id": "测试自定义技能"})
