@@ -145,6 +145,19 @@ def test_approval_timeout_emits_decided(monkeypatch):
     assert seen[-1][1]["decision"] == "expired"
 
 
+@pytest.mark.parametrize('allow', [True, False])
+def test_remote_decision_emits_terminal_event(allow):
+    seen = []
+    def emit(kind, payload):
+        seen.append((kind, payload))
+        if kind == 'approval.requested':
+            assert local_bridge.resolve_approval(payload['approval_id'], allow)
+    assert local_bridge.request_approval(emit, action='test', detail='', session_id='test-terminal') is allow
+    assert seen[-1][0] == 'approval.decided'
+    assert seen[-1][1]['decision'] == ('allowed' if allow else 'denied')
+    assert seen[-1][1]['approval_id'] == seen[0][1]['approval_id']
+
+
 # ---------------------------------------------------------------- 桌面操控工具（v1.6）
 GUI_TOOLS = ("local_apps", "local_open", "local_windows", "local_focus",
              "local_type", "local_keys", "local_click", "local_close")

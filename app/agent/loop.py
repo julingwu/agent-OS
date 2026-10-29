@@ -65,6 +65,31 @@ STREAM_FLUSH_CHARS = 48
 STREAM_FLUSH_SECONDS = 0.08
 
 
+def _chat_blocking_with_progress(conn, messages, *, bot_id, session_id, turn_id, model,
+                                 tools_specs=None, temperature=0.3):
+    """阻塞式/非流式模型调用，每 5 秒发送 thought.delta 心跳进度，避免界面假死。"""
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    import time
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    start = time.monotonic()
+    future = pool.submit(llm.chat, messages, tools=tools_specs,
+                         temperature=temperature, model=model)
+    try:
+        while True:
+            try:
+                return future.result(timeout=5)
+            except FutureTimeout:
+                if future.done():
+                    raise
+                elapsed = int(time.monotonic() - start)
+                _emit(conn, bot_id=bot_id, session_id=session_id, turn_id=turn_id,
+                      kind="thought.delta", payload={"text":
+                      f"模型正在处理，已等待 {elapsed} 秒；完成后自动返回。"})
+    finally:
+        pool.shutdown(wait=False)
+
+
 def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model):
     """优先流式：边生成边发 message.delta（瞬态，不落库），让界面真的"在打字"。
 
@@ -115,9 +140,11 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model):
             # 把已经显示出去的内容落成 message.bot，界面上的半截才不会一闪而过。
             return {"message": {"content": "".join(acc)}, "usage": {},
                     "stream_error": str(exc)[:200], "partial": True}
-        # 一个字都没吐出来：静默回落到非流式
-        return llm.chat(messages, tools=tools.TOOL_SPECS,
-                        temperature=0.3, model=model)
+        # 一个字都没吐出来：静默回落到非流式（带 5 秒心跳进度）
+        return _chat_blocking_with_progress(conn, messages, bot_id=bot_id,
+                                            session_id=session_id, turn_id=turn_id,
+                                            model=model, tools_specs=tools.TOOL_SPECS,
+                                            temperature=0.3)
 
 
 def _system_prompt(bot: dict, members: list[dict] | None = None,

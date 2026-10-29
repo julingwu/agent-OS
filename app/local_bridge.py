@@ -206,14 +206,16 @@ def request_approval(emit: Callable[[str, dict], None] | None, *,
     finally:
         with _lock:
             _approvals.pop(approval_id, None)
-        if decision["decision"] is None:
-            # 超时未决：告诉界面把这张卡撤掉
-            try:
-                emit("approval.decided",
-                     {"approval_id": approval_id, "decision": "expired",
-                      "session_id": session_id})
-            except Exception:  # noqa: BLE001
-                pass
+        # Broadcast every resolution, including decisions made on another
+        # client. Otherwise its approval overlay remains after the task ends.
+        try:
+            resolved = decision["decision"]
+            emit("approval.decided",
+                 {"approval_id": approval_id,
+                  "decision": "expired" if resolved is None else ("allowed" if resolved else "denied"),
+                  "session_id": session_id})
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def pending() -> list[dict]:

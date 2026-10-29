@@ -192,3 +192,36 @@ def test_post_message_does_not_schedule_when_disabled(client, device, monkeypatc
     res = client.post("/v1/sessions/ses_chief/messages", headers=_auth(device),
                       json={"text": "安静", "client_msg_id": "agent-trigger-2"})
     assert res.json()["reply_scheduled"] is False
+
+
+def test_chat_blocking_emits_progress_heartbeat(monkeypatch):
+    import concurrent.futures
+
+    class Pending:
+        reads = 0
+        def result(self, timeout):
+            self.reads += 1
+            if self.reads == 1:
+                raise concurrent.futures.TimeoutError()
+            return {"message": {"content": "done"}}
+        def done(self):
+            return False
+
+    pending = Pending()
+    class Pool:
+        def __init__(self, **kw): pass
+        def submit(self, *args, **kw): return pending
+        def shutdown(self, **kw): pass
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", Pool)
+    events = []
+    monkeypatch.setattr(agent_loop, "_emit", lambda c, **kw: events.append(kw))
+    def fail_stream(*a, **kw):
+        raise RuntimeError("stream_failed")
+    monkeypatch.setattr(agent_loop.llm, "chat_stream", fail_stream)
+
+    out = agent_loop._chat_streamed(None, [], bot_id="b", session_id="s", turn_id="t", model="any-model")
+    assert out["message"]["content"] == "done"
+    assert len(events) == 1
+    assert events[0]["kind"] == "thought.delta"
+    assert "模型正在处理" in events[0]["payload"]["text"]

@@ -643,6 +643,20 @@ function MainApp({ onLogout }) {
 
   useEffect(() => {
     if (!activeId) return;
+    let closed = false;
+    const sync = async () => {
+      try {
+        const s = await api(`/v1/sessions/${activeId}`);
+        if (closed) return;
+        setStatus(prev => s.running ? 'thinking' : prev === 'thinking' ? 'idle' : prev);
+      } catch { /* websocket reconnect retains the visible status */ }
+    };
+    const timer = setInterval(sync, 5000);
+    return () => { closed = true; clearInterval(timer); };
+  }, [activeId]);
+
+  useEffect(() => {
+    if (!activeId) return;
     let cancelled = false;
     clearArtifactCache();     // 切会话时释放上一批截图的 blob（下载会走 WebView 的 HTTP 缓存）
     setStatus("idle");
@@ -716,7 +730,7 @@ function MainApp({ onLogout }) {
         break;
       case "tool.call":
         if (e.__replay) break;   // 历史工具调用不属于"本轮"
-        setActivity((prev) => [...prev, { id: e.id, callId: p.call_id, tool: p.tool, args: p.args, state: "running" }]);
+        setActivity((prev) => [...prev.filter((a) => a.id !== "model-wait"), { id: e.id, callId: p.call_id, tool: p.tool, args: p.args, state: "running" }]);
         break;
       case "tool.result":
         if (e.__replay) break;
@@ -731,8 +745,15 @@ function MainApp({ onLogout }) {
         if (e.__replay) break;
         setStatus(p.status === "done" ? "idle" : p.status || "idle");
         setStreamText(null);
+        setActivity((prev) => prev.filter((a) => a.id !== "model-wait"));
         break;
       case "needs_human":
+      case "thought.delta":
+        if (e.kind === "thought.delta") {
+          if (!e.__replay) setActivity((prev) => [...prev.filter((a) => a.id !== "model-wait"),
+            { id: "model-wait", tool: "模型处理中", state: "waiting", summary: p.text || "" }]);
+          break;
+        }
         if (e.__replay) break;
         setActivity((prev) => [...prev, { id: e.id, tool: "needs_human", state: "waiting", summary: p.question }]);
         setStatus("needs_human");
