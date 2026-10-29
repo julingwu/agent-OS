@@ -16,6 +16,7 @@ export default function CyberFactorioDeck({
   onReturnMainUI,
   onNavigateTab,
   onOpenAddMember,
+  onWorkspaceChanged,
   pendingCount = 0,
 }) {
   const [wsConnected, setWsConnected] = useState(false);
@@ -38,6 +39,7 @@ export default function CyberFactorioDeck({
   const [activeProjectId, setActiveProjectId] = useState("");
   const [projectList, setProjectList] = useState([]);
   const [projectDetail, setProjectDetail] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
 
   const socketRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
@@ -48,6 +50,7 @@ export default function CyberFactorioDeck({
     try {
       const snap = await api.hqSnapshot();
       if (snap && snap.ok) {
+        setSnapshot(snap);
         hqRef.current?.syncBackendData({ snapshot: snap });
         if (snap.kpis) {
           if (typeof snap.kpis.today_tokens === "number") setTotalTokens(snap.kpis.today_tokens);
@@ -66,7 +69,10 @@ export default function CyberFactorioDeck({
 
   const handleFireEmployee = async (empId) => {
     try {
-      await api.fireEmployee(empId);
+      const id = typeof empId === "string" ? empId : empId?.id;
+      if (!id) return;
+      await api.fireEmployee(id);
+      await onWorkspaceChanged?.();
       await loadSnapshot();
     } catch (e) {
       console.warn("Failed to fire employee", e);
@@ -75,7 +81,10 @@ export default function CyberFactorioDeck({
 
   const handleHireRole = async (role) => {
     try {
-      await api.hqHireRole(role.id);
+      const roleId = typeof role === "string" ? role : role?.id;
+      if (!roleId) return;
+      await api.hqHireRole(roleId);
+      await onWorkspaceChanged?.();
       await loadSnapshot();
     } catch (e) {
       console.warn("Failed to hire role", e);
@@ -85,9 +94,13 @@ export default function CyberFactorioDeck({
   const handleOpenEmployeeChat = (emp) => {
     if (!emp) return;
     const targetId = emp.empId || emp.id;
-    let found = (chats || []).find((ch) => ch.employee_id === targetId || (emp.chatId && ch.id === emp.chatId));
+    const directChatId = emp.chatId || emp.chat_id;
+    let found = directChatId ? (chats || []).find((ch) => ch.id === directChatId) : null;
+    if (!found) {
+      found = (chats || []).find((ch) => ch.employee_id === targetId || (targetId && ch.id === targetId));
+    }
     if (emp.isChief || emp.d === -1) {
-      found = (chats || []).find((ch) => ch.kind === "ceo") || found;
+      found = (chats || []).find((ch) => ch.kind === "ceo") || found || snapshot?.ceo_chat;
     }
     if (found && onOpenChat) {
       onOpenChat(found);
@@ -258,7 +271,11 @@ export default function CyberFactorioDeck({
 
       const empTarget = taskData.employeeId || taskData.employee_id;
       if (mode === "direct" && empTarget) {
-        const empChat = (chats || []).find((c) => c.employee_id === empTarget);
+        const snapChatId = (snapshot?.employees || []).find((e) => e.id === empTarget)?.chat_id;
+        let empChat = (chats || []).find((c) => c.employee_id === empTarget || (snapChatId && c.id === snapChatId));
+        if (!empChat && snapChatId) {
+          empChat = { id: snapChatId, employee_id: empTarget, title: "员工私聊", kind: "dm" };
+        }
         if (empChat) {
           if (req) await api.send(empChat.id, req);
           if (onOpenChat) onOpenChat(empChat);
