@@ -325,6 +325,11 @@ def enter_stage(conn, pid: str, key: str) -> None:
                 action="stage_enter", target=pid, payload={"stage": key, "seq": row["seq"]},
                 response={})
     conn.commit()
+    try:
+        from . import telemetry
+        telemetry.emit("STAGE_STATE_CHANGE", project_id=pid, stage_key=key, state="active", seq=row["seq"])
+    except Exception:
+        pass
 
 
 def finish_stage(conn, pid: str, key: str) -> None:
@@ -340,6 +345,11 @@ def finish_stage(conn, pid: str, key: str) -> None:
     write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="stage", task_id=None, layer="system",
                 action="stage_done", target=pid, payload={"stage": key}, response={})
     conn.commit()
+    try:
+        from . import telemetry
+        telemetry.emit("STAGE_STATE_CHANGE", project_id=pid, stage_key=key, state="done", seq=row["seq"])
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------ 研讨会
@@ -366,6 +376,11 @@ def run_workshop(conn, pid: str, requirement: str, llm_minutes: bool = False) ->
             " VALUES (?,?,?,?,?,?,?)",
             (_id("WT"), wid, round_no, role, author, kind, content))
         turns.append({"round": round_no, "role": role, "kind": kind, "content": content})
+        try:
+            from . import telemetry
+            telemetry.emit("WORKSHOP_TURN", project_id=pid, workshop_id=wid, round=round_no, role_tag=role, author=author, kind=kind, content=content)
+        except Exception:
+            pass
 
     say(1, "product", "产品经理",
         "proposal", "提案：" + requirement[:80] + "。先做最小可用版本，四步推进。")

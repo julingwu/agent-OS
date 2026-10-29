@@ -12,6 +12,13 @@ const CyberHQEngine = forwardRef(function CyberHQEngine({
   onCreateTask = () => {},
   onOpenExchange = () => {},
   onNavigateTab = () => {},
+  onNavigate = () => {},
+  onOpenEmployeeChat = () => {},
+  onInspectEmployee = () => {},
+  onOpenAddMember = () => {},
+  onOpenSettings = () => {},
+  onFireEmployee = () => {},
+  onHireRole = () => {},
 }, ref) {
   const wrapperRef = useRef(null);
   const hqInstRef = useRef(null);
@@ -48,8 +55,31 @@ const CyberHQEngine = forwardRef(function CyberHQEngine({
       onOpenExchange: () => {
         if (onOpenExchange) onOpenExchange();
       },
-      onNavigateTab: (tabKey) => {
-        if (onNavigateTab) onNavigateTab(tabKey);
+      onNavigateTab: (tabKey, opts) => {
+        if (onNavigate) onNavigate(tabKey, opts);
+        else if (onNavigateTab) onNavigateTab(tabKey, opts);
+      },
+      onNavigate: (tabKey, opts) => {
+        if (onNavigate) onNavigate(tabKey, opts);
+        else if (onNavigateTab) onNavigateTab(tabKey, opts);
+      },
+      onOpenEmployeeChat: (emp) => {
+        if (onOpenEmployeeChat) onOpenEmployeeChat(emp);
+      },
+      onInspectEmployee: (emp) => {
+        if (onInspectEmployee) onInspectEmployee(emp);
+      },
+      onOpenAddMember: () => {
+        if (onOpenAddMember) onOpenAddMember();
+      },
+      onOpenSettings: () => {
+        if (onOpenSettings) onOpenSettings();
+      },
+      onFireEmployee: (empId) => {
+        if (onFireEmployee) return onFireEmployee(empId);
+      },
+      onHireRole: (role) => {
+        if (onHireRole) return onHireRole(role);
       },
     };
 

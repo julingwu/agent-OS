@@ -13,7 +13,7 @@ from .common import (
     _token, _require, _tenant_of, _task_actor, _task_write_entities,
     _task_allowed_actions, _task_execution_summary, _budget_for,
 )
-from .routers import orgs, chats, tasks_runs, projects, evals
+from .routers import orgs, chats, tasks_runs, projects, evals, hq
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 
@@ -23,10 +23,11 @@ router.include_router(chats.router)
 router.include_router(tasks_runs.router)
 router.include_router(projects.router)
 router.include_router(evals.router)
+router.include_router(hq.router)
 
 # Re-export models, routes, and internal handlers from sub-routers for compatibility
 # Explicitly avoid re-exporting sub-router `router` attribute to preserve main router.
-for _mod in (orgs, chats, tasks_runs, projects, evals):
+for _mod in (orgs, chats, tasks_runs, projects, evals, hq):
     for _k, _v in _mod.__dict__.items():
         if not _k.startswith("__") and _k != "router":
             globals()[_k] = _v

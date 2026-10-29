@@ -499,6 +499,11 @@ def _run_turn(chat_id: str, employee_id: str | None, text: str, ident: str,
                     conn.execute("UPDATE tasks SET state=?, updated_at=CURRENT_TIMESTAMP"
                                  " WHERE id=?", (state, task_id))
                     conn.commit()
+                    try:
+                        from ... import telemetry
+                        telemetry.emit("TASK_STATE_CHANGE", task_id=task_id, state=state)
+                    except Exception:
+                        pass
                 acc = {"verdict": state, "task_state": state, "results": []}
             except Exception as exc:             # noqa: BLE001
                 with get_conn() as conn:

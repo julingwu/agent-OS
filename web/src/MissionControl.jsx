@@ -346,12 +346,16 @@ function NewProjectModal({ onClose, onCreated }) {
   );
 }
 
-export default function MissionControl({ Icon, onOpenChat, me }) {
+export default function MissionControl({ Icon, onOpenChat, me, initialProjectId }) {
   const [list, setList] = useState(null);          // {projects: [...]}
   const [listErr, setListErr] = useState("");
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
-  const [activeId, setActiveId] = useState("");
+  const [activeId, setActiveId] = useState(initialProjectId || "");
+
+  useEffect(() => {
+    if (initialProjectId) setActiveId(initialProjectId);
+  }, [initialProjectId]);
   const [detail, setDetail] = useState(null);
   const [detailErr, setDetailErr] = useState("");
   const [stageOpen, setStageOpen] = useState("");  // 打开的阶段详情弹窗

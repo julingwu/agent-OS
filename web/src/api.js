@@ -357,6 +357,8 @@ Object.assign(api, {
   deleteFlowTemplate: (id) => req(`/flow-templates/${id}`, { method: "DELETE" }),
   maintenanceStats: () => req("/maintenance/stats"),
   maintenancePurge: (body) => req("/maintenance/purge", { method: "POST", body: JSON.stringify(body) }),
+  hqSnapshot: () => req("/hq/snapshot"),
+  hqHireRole: (roleId, entityId = "LE-GROUP-HQ") => req("/hq/hire", { method: "POST", body: JSON.stringify({ role_id: roleId, entity_id: entityId }) }),
 });
 
 export default api;

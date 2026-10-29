@@ -8,8 +8,11 @@ import "./cyber_factorio.css";
 export default function CyberFactorioDeck({
   me,
   Icon,
+  chats = [],
   onOpenChat,
   onNavigate,
+  onInspectEmployee,
+  onOpenSettings,
   onReturnMainUI,
   onNavigateTab,
   onOpenAddMember,
@@ -39,6 +42,59 @@ export default function CyberFactorioDeck({
   const socketRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const hqRef = useRef(null);
+
+  // Fetch HQ snapshot from real backend
+  const loadSnapshot = useCallback(async () => {
+    try {
+      const snap = await api.hqSnapshot();
+      if (snap && snap.ok) {
+        hqRef.current?.syncBackendData({ snapshot: snap });
+        if (snap.kpis) {
+          if (typeof snap.kpis.today_tokens === "number") setTotalTokens(snap.kpis.today_tokens);
+          if (typeof snap.kpis.total_rmb === "number") setTotalRmb(snap.kpis.total_rmb);
+          if (typeof snap.kpis.crystals_count === "number") setCrystalsCount(snap.kpis.crystals_count);
+        }
+        if (snap.projects && snap.projects.length > 0) {
+          setProjectList(snap.projects);
+          if (!activeProjectId) setActiveProjectId(snap.projects[0].id);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to load HQ snapshot", e);
+    }
+  }, [activeProjectId]);
+
+  const handleFireEmployee = async (empId) => {
+    try {
+      await api.fireEmployee(empId);
+      await loadSnapshot();
+    } catch (e) {
+      console.warn("Failed to fire employee", e);
+    }
+  };
+
+  const handleHireRole = async (role) => {
+    try {
+      await api.hqHireRole(role.id);
+      await loadSnapshot();
+    } catch (e) {
+      console.warn("Failed to hire role", e);
+    }
+  };
+
+  const handleOpenEmployeeChat = (emp) => {
+    if (!emp) return;
+    const targetId = emp.empId || emp.id;
+    let found = (chats || []).find((ch) => ch.employee_id === targetId || (emp.chatId && ch.id === emp.chatId));
+    if (emp.isChief || emp.d === -1) {
+      found = (chats || []).find((ch) => ch.kind === "ceo") || found;
+    }
+    if (found && onOpenChat) {
+      onOpenChat(found);
+    } else if (onNavigate) {
+      onNavigate("chats");
+    }
+  };
 
   // Fetch project list
   const loadProjects = useCallback(async (preferId) => {
@@ -111,6 +167,9 @@ export default function CyberFactorioDeck({
             if (typeof payload.total_tokens === "number") setTotalTokens(payload.total_tokens);
             if (typeof payload.crystals_count === "number") setCrystalsCount(payload.crystals_count);
           }
+          if (["ROSTER_UPDATED", "STAGE_STATE_CHANGE", "TASK_STATE_CHANGE", "WORKSHOP_TURN", "EXP_CRYSTAL_DROP"].includes(payload.type)) {
+            loadSnapshot();
+          }
 
           if (payload.type === "BUDGET_PAUSE_80" || payload.type === "BUDGET_ALERT_80") {
             setBudgetAlert80(true);
@@ -144,11 +203,17 @@ export default function CyberFactorioDeck({
   useEffect(() => {
     connectWebSocket();
     loadProjects();
+    loadSnapshot();
+    const interval = setInterval(loadSnapshot, 10000);
+    const onRefresh = () => loadSnapshot();
+    window.addEventListener("oa-hq-refresh", onRefresh);
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (socketRef.current) socketRef.current.close();
+      clearInterval(interval);
+      window.removeEventListener("oa-hq-refresh", onRefresh);
     };
-  }, [connectWebSocket, loadProjects]);
+  }, [connectWebSocket, loadProjects, loadSnapshot]);
 
   useEffect(() => {
     if (activeProjectId) {
@@ -174,24 +239,48 @@ export default function CyberFactorioDeck({
   // Real Cloud Task Dispatch from HQ Task Modal
   const handleCreateTaskFromHQ = async (taskData) => {
     try {
-      const flowId = taskData.tplKey === "budget" ? "FLOW-ANALYSIS" : "FLOW-SOFTWARE";
+      const mode = taskData.mode || "pipeline";
+      const req = (taskData.requirement || taskData.name || "").trim();
+
+      if (mode === "ceo") {
+        const ceoChat = (chats || []).find((c) => c.kind === "ceo");
+        if (ceoChat) {
+          if (req) await api.send(ceoChat.id, req);
+          if (onOpenChat) onOpenChat(ceoChat);
+        } else if (onNavigate) {
+          onNavigate("chats");
+        }
+        return;
+      }
+
+      if (mode === "direct" && taskData.employeeId) {
+        const empChat = (chats || []).find((c) => c.employee_id === taskData.employeeId);
+        if (empChat) {
+          if (req) await api.send(empChat.id, req);
+          if (onOpenChat) onOpenChat(empChat);
+        } else if (onNavigate) {
+          onNavigate("chats");
+        }
+        return;
+      }
+
+      // Default: 9-stage pipeline
+      const flowId = taskData.flow || (taskData.tplKey === "budget" ? "FLOW-ANALYSIS" : "FLOW-SOFTWARE");
       const res = await api.createProject({
-        name: (taskData.name || "").trim(),
-        requirement: (taskData.name || "").trim(),
+        name: req.slice(0, 40) || "新流水线项目",
+        requirement: req,
         flow: flowId,
       });
 
       const newId = res.id || res.project_id;
       setActiveProjectId(newId);
-      loadProjects(newId);
-      loadProjectDetail(newId);
+      await loadSnapshot();
 
-      // Notify HQ 3D Engine that cloud pipeline is live!
       hqRef.current?.pushBackendEvent({
         type: "CLOUD_PROJECT_CREATED",
-        projId: taskData.projId,
+        projId: newId,
         realId: newId,
-        name: taskData.name,
+        name: req.slice(0, 40),
       });
     } catch (err) {
       console.warn("Failed to create cloud project from HQ task", err);
@@ -290,6 +379,13 @@ export default function CyberFactorioDeck({
         onCreateTask={handleCreateTaskFromHQ}
         onOpenExchange={() => setShowExchangeModal(true)}
         onNavigateTab={onNavigateTab || onNavigate}
+        onNavigate={onNavigate}
+        onOpenEmployeeChat={handleOpenEmployeeChat}
+        onInspectEmployee={onInspectEmployee}
+        onOpenAddMember={onOpenAddMember}
+        onOpenSettings={onOpenSettings}
+        onFireEmployee={handleFireEmployee}
+        onHireRole={handleHireRole}
       />
 
       {/* 2. RED ALERT BANNER (80% BUDGET PAUSE) */}

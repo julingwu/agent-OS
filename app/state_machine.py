@@ -67,4 +67,9 @@ def transition(
         payload={"from": current, "to": target, "event": event, **(payload or {})},
         response={"state": target},
     )
+    try:
+        from . import telemetry
+        telemetry.emit("TASK_STATE_CHANGE", task_id=task_id, state=target, prev_state=current, event=event)
+    except Exception:
+        pass
     return target

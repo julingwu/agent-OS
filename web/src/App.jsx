@@ -102,6 +102,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
     ];
     return valid.includes(selected) ? selected : "cyberdeck";
   });
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [chats, setChats] = useState([]);
   const [active, setActive] = useState(null);
   const [org, setOrg] = useState(null);
@@ -230,6 +231,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
         }
         if (o.status === "fulfilled") setOrg(o.value);
         if (dp.status === "fulfilled") setDepts(dp.value.departments);
+        window.dispatchEvent(new Event("oa-hq-refresh"));
         if (failed.length) setBootError("部分工作空间数据暂时不可用，可以刷新重试。");
       } catch (e) {
         if (current() && !e.stale && e.code !== 401) {
@@ -419,7 +421,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
           >
             ← 返回 AI 团队主界面
           </a>
-          <span className="connection-label"><span className="live-dot" /> 本地工作空间</span>
+          <span className="connection-label"><span className="live-dot" /> {window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost" ? "本地工作空间" : "云端工作空间"}</span>
           <button className="icon-btn" title="使用帮助" aria-label="使用帮助" onClick={() => setShowHelp(true)}>
             <Icon name="help" />
           </button>
@@ -434,10 +436,25 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
           <CyberFactorioDeck
             me={me}
             Icon={Icon}
+            chats={chats}
             onOpenChat={openChat}
-            onNavigate={setTab}
+            onNavigate={(targetTab, opts) => {
+              if (opts?.projectId) setSelectedProjectId(opts.projectId);
+              if (opts?.taskId) {
+                api.task(opts.taskId).then(setFocusedTask).catch(() => {});
+              }
+              setTab(targetTab);
+            }}
+            onInspectEmployee={(emp) => {
+              setEmpPanel(emp);
+              setTab("org");
+            }}
+            onOpenSettings={() => setShowSettings(true)}
             onReturnMainUI={returnToMainUI}
-            onNavigateTab={setTab}
+            onNavigateTab={(targetTab, opts) => {
+              if (opts?.projectId) setSelectedProjectId(opts.projectId);
+              setTab(targetTab);
+            }}
             onOpenAddMember={() => setAdding(true)}
             pendingCount={pendingCount}
           />
@@ -448,7 +465,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
               onChat={openChat} onSelectTask={setFocusedTask} onNavigate={setTab}
               onNewTask={() => setTaskCreating(true)} tasksOnly={tab === "tasks"}
             />
-          ) : tab === "projects" ? <MissionControl Icon={Icon} onOpenChat={openChat} me={me} />
+          ) : tab === "projects" ? <MissionControl Icon={Icon} onOpenChat={openChat} me={me} initialProjectId={selectedProjectId} />
           : tab === "finops" ? <FinOpsView />
           : tab === "evals" ? <EvalsView />
           : tab === "experience" ? <GovernanceView me={me} />
