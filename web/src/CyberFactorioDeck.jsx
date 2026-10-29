@@ -38,7 +38,52 @@ const PRESET_DIRECTIVES = [
   },
 ];
 
-export default function CyberFactorioDeck({ me, Icon, onOpenChat, onNavigate }) {
+
+const NEKO_WORK_DIALOGUES = [
+  "喵~ 报告 CEO！智能工坊 01~09 流水线全力咬合运转中！有新指令交给我吧！✨",
+  "呼噜噜~ MCP 工具链已经全线锁紧，没有发现任何逻辑死锁，算力平稳！🐾",
+  "本猫正在严密监视 L2 激光质检与验收网关！不合规的物料一个也别想出港！🛡️",
+  "想要给本猫投喂点什么吗？发光紫晶石最美味了，还能扩充组织经验库哦~ 💎",
+  "按【空格键】随时唤醒本猫的 CEO 指令舱！秒级起草并下发战术工作流！⚡",
+];
+
+const NEKO_CAMP_DIALOGUES = [
+  "露营篝火噼里啪啦响呢~ Agent 小伙伴们正在星空下复盘今天的敏捷交付！🏕️",
+  "紫晶石温润地吸收着今天跑通的避坑经验，组织资产又壮大了喵~ 💎",
+  "喝一口赛博热可可~ 劳逸结合才能防止 Agent 发生幻觉与语义漂移哦！✨",
+];
+
+const NEKO_GYM_DIALOGUES = [
+  "一二一！脑机超频 520 TFLOPS！高并发压力测试正在挥汗如雨！🏋️",
+  "心率平稳，Token 吞吐量持续冲高！我们团队的上下文窗口越来越深厚了！⚡",
+  "出汗的感觉真棒！打完这轮拳击，就能轻松扛住 100 个并发复杂 WBS 任务！🥊",
+];
+
+export default function CyberFactorioDeck({
+  me,
+  Icon,
+  onOpenChat,
+  onNavigate,
+  onReturnMainUI,
+  onNavigateTab,
+  onOpenAddMember,
+  pendingCount = 0,
+  zeroHudMode = true,
+  onToggleClassicDeck,
+}) {
+  // 3D Toy-Box Diorama CyberDeck State
+  const [dioramaMode, setDioramaMode] = useState(true);
+  const [scene, setScene] = useState("work"); // "work" | "camp" | "gym"
+  const [isFlipping, setIsFlipping] = useState(false);
+  const [tilt, setTilt] = useState({ x: 0, y: 0 });
+  const [showNekoDialog, setShowNekoDialog] = useState(false);
+  const [nekoDialogIdx, setNekoDialogIdx] = useState(0);
+  const [nekoBounce, setNekoBounce] = useState(false);
+  const [nekoReactions, setNekoReactions] = useState([]);
+  const [showAllModulesMenu, setShowAllModulesMenu] = useState(false);
+  const [showDirectiveLauncher, setShowDirectiveLauncher] = useState(false);
+  const [showWorkPropsMenu, setShowWorkPropsMenu] = useState(false);
+
   const [wsConnected, setWsConnected] = useState(false);
   // 100% 真实状态绑定：初始全为 pending，严禁任何写死 done/active！
   const [stagesState, setStagesState] = useState({
@@ -526,10 +571,898 @@ export default function CyberFactorioDeck({ me, Icon, onOpenChat, onNavigate }) 
     }
   };
 
+
+  const handleNavigate = onNavigateTab || onNavigate;
+
+  const handleSwitchScene = (newScene) => {
+    if (newScene === scene || isFlipping) return;
+    setIsFlipping(true);
+    setTimeout(() => {
+      setScene(newScene);
+    }, 400);
+    setTimeout(() => {
+      setIsFlipping(false);
+    }, 800);
+  };
+
+  const handleMouseMove = (e) => {
+    if (isFlipping) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mouseX = (e.clientX - rect.left) / rect.width - 0.5;
+    const mouseY = (e.clientY - rect.top) / rect.height - 0.5;
+    setTilt({
+      x: -(mouseY * 12),
+      y: mouseX * 14,
+    });
+  };
+
+  const handleMouseLeave = () => {
+    setTilt({ x: 0, y: 0 });
+  };
+
+  const handleNekoClick = (e) => {
+    e.stopPropagation();
+    setNekoBounce(true);
+    setTimeout(() => setNekoBounce(false), 600);
+
+    const emojis = ["✨", "🐾", "💎", "⚡", "🐱", "💜", "🚀", "+10 EXP"];
+    const emoji = emojis[Math.floor(Math.random() * emojis.length)];
+    const rx = (Math.random() - 0.5) * 80;
+    const reactionId = Date.now() + Math.random();
+    setNekoReactions((prev) => [...prev.slice(-6), { id: reactionId, emoji, rx }]);
+    setTimeout(() => {
+      setNekoReactions((prev) => prev.filter((r) => r.id !== reactionId));
+    }, 1200);
+
+    setNekoDialogIdx((prev) => prev + 1);
+    setShowNekoDialog(true);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        setShowDirectiveLauncher((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const currentNekoDialogues =
+    scene === "camp"
+      ? NEKO_CAMP_DIALOGUES
+      : scene === "gym"
+      ? NEKO_GYM_DIALOGUES
+      : NEKO_WORK_DIALOGUES;
+  const currentNekoText =
+    currentNekoDialogues[nekoDialogIdx % currentNekoDialogues.length];
+
+  const sceneImages = {
+    work: `${import.meta.env.BASE_URL}diorama/work_pod.png`,
+    camp: `${import.meta.env.BASE_URL}diorama/idle_camp.png`,
+    gym: `${import.meta.env.BASE_URL}diorama/idle_gym.png`,
+  };
+
+  const nekoPositions = {
+    work: { left: "48%", top: "48%" },
+    camp: { left: "50%", top: "64%" },
+    gym: { left: "44%", top: "56%" },
+  };
+
   return (
     <div className={`cyber-deck ${budgetAlert80 ? "alert-strobe" : ""}`}>
+
       {/* 1. TOP TELEMETRY HUD */}
-      <header className="cyber-hud">
+            {/* 3D TOY-BOX DIORAMA MODE */}
+      {dioramaMode ? (
+        <div
+          className="diorama-container"
+          onClick={() => {
+            setShowAllModulesMenu(false);
+            setShowWorkPropsMenu(false);
+            setShowNekoDialog(false);
+          }}
+        >
+          {/* Top-Left Controls */}
+          <div className="diorama-top-left" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="diorama-pill-btn"
+              onClick={() => {
+                if (onReturnMainUI) onReturnMainUI();
+                else if (handleNavigate) handleNavigate("chat");
+              }}
+              title="返回 AI 团队日常主工作台"
+            >
+              <span>←</span>
+              <span>返回 AI 团队主界面</span>
+            </button>
+
+            <div className={`diorama-status-badge ${wsConnected ? "active" : ""}`}>
+              <span
+                style={{
+                  display: "inline-block",
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: wsConnected ? "#00FF9D" : "#64748B",
+                }}
+              />
+              <span>{wsConnected ? "全息总线 LIVE" : "遥测离线"}</span>
+            </div>
+
+            {projectList.length > 0 && (
+              <select
+                className="diorama-project-picker"
+                value={activeProjectId}
+                onChange={(e) => {
+                  const newPid = e.target.value;
+                  setActiveProjectId(newPid);
+                  loadProjectDetail(newPid);
+                }}
+              >
+                {projectList.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    📁 {p.name || p.id} ({p.current_stage || "init"})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Top-Right Controls */}
+          <div className="diorama-top-right" onClick={(e) => e.stopPropagation()}>
+            {/* Dual-Kernel Switcher */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                background: "rgba(9, 14, 28, 0.85)",
+                border: "1px solid rgba(0, 240, 255, 0.35)",
+                borderRadius: "9999px",
+                padding: "4px 12px",
+                backdropFilter: "blur(10px)",
+              }}
+            >
+              <span style={{ fontSize: "11px", color: "#00F0FF", fontWeight: "600" }}>⚙️ 内核:</span>
+              <select
+                value={kernelMode}
+                onChange={(e) => handleSwitchKernel(e.target.value)}
+                style={{
+                  background: "transparent",
+                  color: "#00F0FF",
+                  border: "none",
+                  fontSize: "11px",
+                  outline: "none",
+                  cursor: "pointer",
+                }}
+              >
+                <option value="auto_failover">⚡ 自动容错</option>
+                <option value="native">🟢 原生内核</option>
+                <option value="dsh">🛡️ DSH-ACP</option>
+              </select>
+            </div>
+
+            {/* Capsule Menu: 盲盒手办柜 (All Modules Dropdown) */}
+            <button
+              className="diorama-pill-btn"
+              onClick={() => setShowAllModulesMenu((prev) => !prev)}
+            >
+              <span>📦</span>
+              <span>盲盒手办柜</span>
+              {pendingCount > 0 && (
+                <span
+                  style={{
+                    background: "#FF0055",
+                    color: "#fff",
+                    fontSize: 10,
+                    padding: "1px 6px",
+                    borderRadius: 999,
+                  }}
+                >
+                  {pendingCount}
+                </span>
+              )}
+            </button>
+
+            {/* Switch to Classic 2D Factorio Deck */}
+            <button
+              className="diorama-pill-btn"
+              onClick={() => {
+                setDioramaMode(false);
+                if (onToggleClassicDeck) onToggleClassicDeck();
+              }}
+              title="切换至经典 2D S型工业流水线"
+            >
+              <span>🎛️</span>
+              <span>经典 2D 流程</span>
+            </button>
+          </div>
+
+          {/* Modules Capsule Dropdown Menu */}
+          {showAllModulesMenu && (
+            <div
+              className="diorama-modules-menu"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  borderBottom: "1px solid rgba(0, 240, 255, 0.2)",
+                  paddingBottom: "8px",
+                }}
+              >
+                <div style={{ fontWeight: "bold", color: "#00F0FF", fontSize: "13px" }}>
+                  📦 盲盒手办柜 · 全功能舱室导航
+                </div>
+                <button
+                  className="neko-dialog-close"
+                  onClick={() => setShowAllModulesMenu(false)}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="diorama-modules-grid">
+                <button
+                  className="module-card-btn"
+                  onClick={() => {
+                    if (handleNavigate) handleNavigate("chat");
+                    setShowAllModulesMenu(false);
+                  }}
+                >
+                  <span>💬</span>
+                  <span>团队通讯 Chat</span>
+                </button>
+
+                <button
+                  className="module-card-btn"
+                  onClick={() => {
+                    if (handleNavigate) handleNavigate("agents");
+                    setShowAllModulesMenu(false);
+                  }}
+                >
+                  <span>👥</span>
+                  <span>员工工卡 Agents</span>
+                </button>
+
+                <button
+                  className="module-card-btn"
+                  onClick={() => {
+                    if (handleNavigate) handleNavigate("workflows");
+                    setShowAllModulesMenu(false);
+                  }}
+                >
+                  <span>🌿</span>
+                  <span>敏捷工作流 WBS</span>
+                </button>
+
+                <button
+                  className="module-card-btn"
+                  onClick={() => {
+                    if (handleNavigate) handleNavigate("approvals");
+                    setShowAllModulesMenu(false);
+                  }}
+                >
+                  <span>🛡️</span>
+                  <span>决策审批 Approvals</span>
+                  {pendingCount > 0 && <span className="badge-pill">{pendingCount}</span>}
+                </button>
+
+                <button
+                  className="module-card-btn"
+                  onClick={() => {
+                    if (handleNavigate) handleNavigate("finops");
+                    setShowAllModulesMenu(false);
+                  }}
+                >
+                  <span>💰</span>
+                  <span>FinOps 算力表</span>
+                </button>
+
+                <button
+                  className="module-card-btn"
+                  onClick={() => {
+                    setShowExchangeModal(true);
+                    setShowAllModulesMenu(false);
+                  }}
+                >
+                  <span>🌐</span>
+                  <span>万界交易所 MCP</span>
+                </button>
+
+                <button
+                  className="module-card-btn"
+                  onClick={() => {
+                    if (onOpenAddMember) onOpenAddMember();
+                    setShowAllModulesMenu(false);
+                  }}
+                >
+                  <span>➕</span>
+                  <span>招募新员工</span>
+                </button>
+
+                <button
+                  className="module-card-btn"
+                  onClick={() => {
+                    if (handleNavigate) handleNavigate("settings");
+                    setShowAllModulesMenu(false);
+                  }}
+                >
+                  <span>⚙️</span>
+                  <span>元系统配置</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 3D Viewport with Perspective & Parallax */}
+          <div
+            className="diorama-viewport"
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+          >
+            <div
+              className={`diorama-stage-card ${isFlipping ? "flipping" : ""}`}
+              style={{
+                transform: isFlipping
+                  ? "rotateY(180deg) scale(0.88)"
+                  : `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`,
+              }}
+            >
+              {/* Scene Artwork Image */}
+              <img
+                src={sceneImages[scene]}
+                alt={`Cyber Diorama - ${scene}`}
+                className="diorama-scene-img"
+                draggable={false}
+              />
+
+              {/* Glowing Base Ambient Ring */}
+              <div className={`diorama-base-glow ${scene}`} />
+
+              {/* Ambient Floating Spark Particles */}
+              <div className="diorama-particles-layer">
+                <div className="spark-dot" style={{ left: "20%", top: "60%", animationDelay: "0s" }} />
+                <div className="spark-dot purple" style={{ left: "75%", top: "45%", animationDelay: "1.2s" }} />
+                <div className="spark-dot green" style={{ left: "45%", top: "70%", animationDelay: "2.4s" }} />
+                <div className="spark-dot" style={{ left: "85%", top: "65%", animationDelay: "0.8s" }} />
+                <div className="spark-dot purple" style={{ left: "30%", top: "50%", animationDelay: "1.8s" }} />
+              </div>
+
+              {/* DIEGETIC PROP HOTSPOTS: WORK POD SCENE */}
+              {scene === "work" && (
+                <>
+                  {/* Prop 1: 01~04 规划拆解 (立项黑板) */}
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "22%", top: "36%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowWorkPropsMenu((prev) => !prev);
+                    }}
+                    title="01~04 需求分解与立项黑板 (点击展开多阶段)"
+                  >
+                    <div className="prop-marker">📋</div>
+                    <div className="prop-ar-badge">
+                      <span>01~04 规划黑板</span>
+                      <span style={{ color: "#00F0FF" }}>({stagesState.wbs || "待命"})</span>
+                    </div>
+
+                    {/* Popover for 01-04 */}
+                    {showWorkPropsMenu && (
+                      <div className="micro-prop-popover" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          className="micro-stage-btn"
+                          onClick={() => {
+                            openStageDrawer("intake");
+                            setShowWorkPropsMenu(false);
+                          }}
+                        >
+                          <span>01 接需求</span>
+                          <span style={{ color: "#00F0FF" }}>{stagesState.intake || "pending"}</span>
+                        </button>
+                        <button
+                          className="micro-stage-btn"
+                          onClick={() => {
+                            openStageDrawer("charter");
+                            setShowWorkPropsMenu(false);
+                          }}
+                        >
+                          <span>02 立项界标</span>
+                          <span style={{ color: "#00F0FF" }}>{stagesState.charter || "pending"}</span>
+                        </button>
+                        <button
+                          className="micro-stage-btn"
+                          onClick={() => {
+                            openStageDrawer("workshop");
+                            setShowWorkPropsMenu(false);
+                          }}
+                        >
+                          <span>03 4轮研讨会</span>
+                          <span style={{ color: "#FF6B00" }}>{stagesState.workshop || "pending"}</span>
+                        </button>
+                        <button
+                          className="micro-stage-btn"
+                          onClick={() => {
+                            openStageDrawer("wbs");
+                            setShowWorkPropsMenu(false);
+                          }}
+                        >
+                          <span>04 黑板拆解</span>
+                          <span style={{ color: "#00F0FF" }}>{stagesState.wbs || "pending"}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Prop 2: 05 生产装配 (弧形吧台 & 机械臂) */}
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "52%", top: "66%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStageDrawer("build");
+                    }}
+                    title="05 生产装配流水线 (点击开启机械臂装配台)"
+                  >
+                    <div className="prop-marker">⚙️</div>
+                    <div className="prop-ar-badge">
+                      <span>05 装配中枢</span>
+                      <span style={{ color: stagesState.build === "active" ? "#00F0FF" : stagesState.build === "done" ? "#00FF9D" : "#94A3B8" }}>
+                        ({stagesState.build || "pending"})
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Prop 3: 09 紫晶金库 / FinOps 算力表 */}
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "78%", top: "44%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStageDrawer("retro");
+                    }}
+                    title="09 组织避坑紫晶金库 & FinOps (点击开启复盘金库)"
+                  >
+                    <div className="prop-marker" style={{ borderColor: "#A855F7" }}>💎</div>
+                    <div className="prop-ar-badge purple">
+                      <span>09 紫晶金库</span>
+                      <span style={{ color: "#A855F7" }}>￥{totalRmb.toFixed(2)} | 💎{crystalsCount}</span>
+                    </div>
+                  </div>
+
+                  {/* Prop 4: 万界 MCP 交易所 (MCP 磁带架) */}
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "80%", top: "22%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowExchangeModal(true);
+                    }}
+                    title="万界 MCP 交易所 (蓝图导出/外部雇佣)"
+                  >
+                    <div className="prop-marker" style={{ borderColor: "#A855F7" }}>🌐</div>
+                    <div className="prop-ar-badge purple">
+                      <span>万界 MCP 交易所</span>
+                    </div>
+                  </div>
+
+                  {/* Prop 5: 06 质检 & 07 验收 (激光扫描仪) */}
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "28%", top: "68%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStageDrawer("test");
+                    }}
+                    title="06 激光脉冲质检 & 07 验收网关"
+                  >
+                    <div className="prop-marker" style={{ borderColor: "#00FF9D" }}>🔬</div>
+                    <div className="prop-ar-badge laser">
+                      <span>06 脉冲质检 / 07 验收</span>
+                      <span style={{ color: stagesState.test === "done" ? "#00FF9D" : "#00F0FF" }}>
+                        ({stagesState.test || "pending"})
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Prop 6: 08 出货港 / 审批签章 (传送出货口) */}
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "68%", top: "78%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStageDrawer("release");
+                    }}
+                    title="08 出货港 · Bundle.zip 一键交付"
+                  >
+                    <div className="prop-marker" style={{ borderColor: approvalModal ? "#FF0055" : "#00F0FF" }}>📦</div>
+                    <div className={`prop-ar-badge ${approvalModal ? "alert" : ""}`}>
+                      <span>08 出货港</span>
+                      <span style={{ color: approvalModal ? "#FF0055" : "#00F0FF" }}>
+                        {approvalModal ? "⚠️待签章" : `(${stagesState.release || "pending"})`}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* DIEGETIC PROP HOTSPOTS: CAMP SCENE */}
+              {scene === "camp" && (
+                <>
+                  <div className="prop-hotspot" style={{ left: "28%", top: "42%" }}>
+                    <div className="prop-marker">⛺</div>
+                    <div className="prop-ar-badge">休眠舱 · 全体 Agent 离线蓄能 (100%)</div>
+                  </div>
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "52%", top: "68%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStageDrawer("retro");
+                    }}
+                  >
+                    <div className="prop-marker" style={{ borderColor: "#A855F7" }}>🔥</div>
+                    <div className="prop-ar-badge purple">紫晶篝火 · 经验沉淀 💎 {crystalsCount}</div>
+                  </div>
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "74%", top: "36%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      loadProjectDetail(activeProjectId);
+                    }}
+                  >
+                    <div className="prop-marker">🌌</div>
+                    <div className="prop-ar-badge">全息天幕 · 项目 {activeProjectId || "空闲"}</div>
+                  </div>
+                </>
+              )}
+
+              {/* DIEGETIC PROP HOTSPOTS: GYM SCENE */}
+              {scene === "gym" && (
+                <>
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "26%", top: "46%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStageDrawer("build");
+                    }}
+                  >
+                    <div className="prop-marker">🏃</div>
+                    <div className="prop-ar-badge">脑机超频 · 520 TFLOPS 稳态</div>
+                  </div>
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "74%", top: "42%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStageDrawer("retro");
+                    }}
+                  >
+                    <div className="prop-marker">🥤</div>
+                    <div className="prop-ar-badge">Token 能量吧 · 消耗 {totalTokens.toLocaleString()}</div>
+                  </div>
+                  <div
+                    className="prop-hotspot"
+                    style={{ left: "50%", top: "72%" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openStageDrawer("test");
+                    }}
+                  >
+                    <div className="prop-marker">🥊</div>
+                    <div className="prop-ar-badge laser">抗压质检 · 0 异常</div>
+                  </div>
+                </>
+              )}
+
+              {/* Neko-01 Chibi Character Hotspot */}
+              <div
+                className="neko-hotspot"
+                style={{
+                  left: nekoPositions[scene].left,
+                  top: nekoPositions[scene].top,
+                }}
+                onClick={handleNekoClick}
+                title="Neko-01 赛博猫娘首席助理 (点击互动/对话)"
+              >
+                <div className={`neko-aura ${budgetAlert80 ? "alert" : wsConnected ? "active" : ""}`} />
+                <div className={`neko-clickable-core ${nekoBounce ? "neko-bounce" : ""}`}>
+                  🐱
+                </div>
+
+                {/* Floating Reaction Particles */}
+                {nekoReactions.map((r) => (
+                  <div
+                    key={r.id}
+                    className="neko-reaction-particle"
+                    style={{ "--rx": `${r.rx}px` }}
+                  >
+                    {r.emoji}
+                  </div>
+                ))}
+
+                {/* Holographic Speech Bubble */}
+                {showNekoDialog && (
+                  <div
+                    className="neko-dialog-bubble"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="neko-dialog-head">
+                      <div className="neko-dialog-name">
+                        <span>🐾</span>
+                        <span>Neko-01 · 指挥官首席助手</span>
+                      </div>
+                      <button
+                        className="neko-dialog-close"
+                        onClick={() => setShowNekoDialog(false)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="neko-dialog-text">
+                      {currentNekoText}
+                    </div>
+                    <div className="neko-dialog-actions">
+                      <button
+                        className="neko-action-pill primary"
+                        onClick={() => {
+                          setShowDirectiveLauncher(true);
+                          setShowNekoDialog(false);
+                        }}
+                      >
+                        ✨ 派发 CEO 指令
+                      </button>
+                      <button
+                        className="neko-action-pill"
+                        onClick={() => {
+                          setCrystalsCount((c) => c + 1);
+                          triggerCrystalDrop({
+                            title: "Neko-01 投喂奖励",
+                            experience_summary: "投喂避坑紫晶石，元公司灵感 +1",
+                          });
+                        }}
+                      >
+                        💎 投喂紫晶石
+                      </button>
+                      {scene !== "work" && (
+                        <button
+                          className="neko-action-pill"
+                          onClick={() => handleSwitchScene("work")}
+                        >
+                          🛠️ 回工坊
+                        </button>
+                      )}
+                      {scene !== "camp" && (
+                        <button
+                          className="neko-action-pill"
+                          onClick={() => handleSwitchScene("camp")}
+                        >
+                          🏕️ 去露营
+                        </button>
+                      )}
+                      {scene !== "gym" && (
+                        <button
+                          className="neko-action-pill"
+                          onClick={() => handleSwitchScene("gym")}
+                        >
+                          🏋️ 去健身
+                        </button>
+                      )}
+                      {approvalModal && (
+                        <button
+                          className="neko-action-pill alert"
+                          onClick={() => setShowNekoDialog(false)}
+                        >
+                          🐾 待办审批待签章
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Controls Bar */}
+          <div className="diorama-bottom-controls" onClick={(e) => e.stopPropagation()}>
+            {/* Mini 01-09 Crystal Stage Pills */}
+            <div className="diorama-mini-stages">
+              {STAGE_KEYS.map((st) => {
+                const state = stagesState[st.key] || "pending";
+                return (
+                  <div
+                    key={st.key}
+                    className={`mini-stage-pill ${state}`}
+                    onClick={() => openStageDrawer(st.key)}
+                    title={`${st.code} ${st.name} (${state})`}
+                  >
+                    <span>{st.code}</span>
+                    <span>{st.name}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Scene Switcher Tabs (180 deg Flip) */}
+            <div className="diorama-scene-tabs">
+              <div
+                className={`scene-tab-btn ${scene === "work" ? "active" : ""}`}
+                onClick={() => handleSwitchScene("work")}
+              >
+                🛠️ 智能工坊
+              </div>
+              <div
+                className={`scene-tab-btn ${scene === "camp" ? "active" : ""}`}
+                onClick={() => handleSwitchScene("camp")}
+              >
+                🏕️ 赛博露营
+              </div>
+              <div
+                className={`scene-tab-btn ${scene === "gym" ? "active" : ""}`}
+                onClick={() => handleSwitchScene("gym")}
+              >
+                🏋️ 极客体能
+              </div>
+            </div>
+
+            {/* Space Shortcut Pill */}
+            <div
+              className="space-directive-pill"
+              onClick={() => setShowDirectiveLauncher(true)}
+            >
+              ⚡ 按 <strong>[SPACE 空格]</strong> 或点击此处唤醒 CEO 战略指令舱
+            </div>
+          </div>
+
+          {/* Floating CEO Directive Launcher Modal */}
+          {showDirectiveLauncher && (
+            <div
+              className="diorama-directive-modal-overlay"
+              onClick={() => setShowDirectiveLauncher(false)}
+            >
+              <div
+                className="diorama-directive-modal"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: "16px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "20px" }}>✨</span>
+                    <span style={{ color: "#00F0FF", fontWeight: "bold", fontSize: "16px" }}>
+                      CEO 战略工作流极速下发中枢
+                    </span>
+                  </div>
+                  <button
+                    className="cyber-btn"
+                    style={{ padding: "4px 10px" }}
+                    onClick={() => setShowDirectiveLauncher(false)}
+                  >
+                    ✕ 关闭
+                  </button>
+                </div>
+
+                {/* Presets */}
+                <div style={{ marginBottom: "14px" }}>
+                  <div style={{ fontSize: "11px", color: "#94A3B8", marginBottom: "6px" }}>⚡ 经典实盘模板预设：</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                    {PRESET_DIRECTIVES.map((p, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        className="cyber-btn"
+                        style={{ fontSize: "11px", padding: "4px 8px" }}
+                        onClick={() => {
+                          setCeoDirective(p.prompt);
+                        }}
+                      >
+                        <span>{p.icon}</span>
+                        <span>{p.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Workflow selector */}
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                  <span style={{ fontSize: "12px", color: "#94A3B8" }}>流水线架构:</span>
+                  <select
+                    value={selectedFlow}
+                    onChange={(e) => setSelectedFlow(e.target.value)}
+                    style={{
+                      background: "#060913",
+                      color: "#00F0FF",
+                      border: "1px solid rgba(0, 240, 255, 0.4)",
+                      borderRadius: "6px",
+                      padding: "4px 10px",
+                      fontSize: "12px",
+                      outline: "none",
+                    }}
+                  >
+                    <option value="FLOW-SOFTWARE">💻 软件产研标准流水线 (01-09)</option>
+                    <option value="FLOW-MARKETING">📢 品牌营销投放流 (01-08)</option>
+                    <option value="FLOW-RESEARCH">🔬 行业竞争情报流 (01-07)</option>
+                  </select>
+                </div>
+
+                {/* Textarea */}
+                <textarea
+                  rows={4}
+                  value={ceoDirective}
+                  onChange={(e) => setCeoDirective(e.target.value)}
+                  placeholder="输入 CEO 宏观需求指令（如：开发高并发计数器组件、全网行业竞品调研、落地页广告法合规审计...）"
+                  style={{
+                    width: "100%",
+                    background: "#060A14",
+                    border: "1px solid rgba(0, 240, 255, 0.4)",
+                    borderRadius: "8px",
+                    padding: "12px",
+                    color: "#F8FAFC",
+                    fontSize: "13px",
+                    resize: "vertical",
+                    outline: "none",
+                    marginBottom: "14px",
+                  }}
+                />
+
+                {dispatchSuccessMsg && (
+                  <div
+                    style={{
+                      padding: "10px",
+                      marginBottom: "12px",
+                      borderRadius: "6px",
+                      background: "rgba(0, 255, 157, 0.15)",
+                      border: "1px solid #00FF9D",
+                      color: "#00FF9D",
+                      fontSize: "12px",
+                    }}
+                  >
+                    {dispatchSuccessMsg}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+                  <button
+                    className="cyber-btn"
+                    onClick={() => setShowDirectiveLauncher(false)}
+                  >
+                    取消
+                  </button>
+                  <button
+                    className="cyber-btn cyan"
+                    disabled={isDispatching || !ceoDirective.trim()}
+                    onClick={async () => {
+                      await handleDispatchDirective();
+                      setTimeout(() => {
+                        setShowDirectiveLauncher(false);
+                      }, 1500);
+                    }}
+                  >
+                    {isDispatching ? "点火装配中..." : "🚀 确认下发并启动总装流水线"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* CLASSIC 2D FACTORIO CONVEYOR DECK */
+        <>
+<header className="cyber-hud">
         <div className="hud-title-group">
           <div className="hud-logo">
             <span>⚙️</span>
@@ -574,6 +1507,20 @@ export default function CyberFactorioDeck({ me, Icon, onOpenChat, onNavigate }) 
               <option value="dsh">🛡️ DSH-ACP 内核</option>
             </select>
           </div>
+                    <button
+            className="cyber-btn"
+            style={{
+              background: "linear-gradient(135deg, rgba(0, 240, 255, 0.25), rgba(168, 85, 247, 0.25))",
+              border: "1px solid #00F0FF",
+              color: "#FFF",
+              fontWeight: "bold",
+              boxShadow: "0 0 15px rgba(0, 240, 255, 0.4)",
+            }}
+            onClick={() => setDioramaMode(true)}
+          >
+            <span>🔮</span>
+            <span>切回 3D 盲盒指挥舱</span>
+          </button>
           <button className="cyber-btn purple" onClick={() => setShowExchangeModal(true)}>
             <span>🌐</span> 万界 MCP 交易所
           </button>
@@ -937,7 +1884,9 @@ export default function CyberFactorioDeck({ me, Icon, onOpenChat, onNavigate }) 
         <span className="stream-content">{JSON.stringify(latestEvent.data || {})}</span>
       </footer>
 
-      {/* 6. SLIDE-OUT MICRO-CONTROL STAGE DRAWER */}
+              </>
+      )}
+{/* 6. SLIDE-OUT MICRO-CONTROL STAGE DRAWER */}
       {selectedStage && (
         <CyberStageDrawer
           stage={selectedStage}
