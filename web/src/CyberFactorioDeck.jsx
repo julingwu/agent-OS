@@ -43,9 +43,10 @@ export default function CyberFactorioDeck({
   // Fetch project list
   const loadProjects = useCallback(async (preferId) => {
     try {
-      const res = await api.getProjects?.();
+      const res = await (api.projects ? api.projects() : api.getProjects?.());
       if (res && res.projects) {
         setProjectList(res.projects);
+        hqRef.current?.syncBackendData({ projects: res.projects });
         if (preferId) {
           setActiveProjectId(preferId);
         } else if (!activeProjectId && res.projects.length > 0) {
@@ -61,7 +62,7 @@ export default function CyberFactorioDeck({
   const loadProjectDetail = useCallback(async (pid) => {
     if (!pid) return;
     try {
-      const res = await api.getProjectDetail?.(pid);
+      const res = await (api.project ? api.project(pid) : api.getProjectDetail?.(pid));
       if (res) {
         setProjectDetail(res);
         if (typeof res.total_rmb === "number") setTotalRmb(res.total_rmb);
@@ -81,7 +82,10 @@ export default function CyberFactorioDeck({
 
     const loc = window.location;
     const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${loc.host}/ui/ws`;
+    const isDesktop = loc.hostname === "tauri.localhost" || loc.protocol === "tauri:";
+    const wsUrl = isDesktop
+      ? "ws://127.0.0.1:8077/ws/metacorp"
+      : `${protocol}//${loc.host}/ws/metacorp`;
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -170,10 +174,11 @@ export default function CyberFactorioDeck({
   // Real Cloud Task Dispatch from HQ Task Modal
   const handleCreateTaskFromHQ = async (taskData) => {
     try {
+      const flowId = taskData.tplKey === "budget" ? "FLOW-ANALYSIS" : "FLOW-SOFTWARE";
       const res = await api.createProject({
-        name: taskData.name,
-        requirement: taskData.name,
-        flow: taskData.tplKey === "soft" ? "FLOW-SOFTWARE" : "FLOW-SOFTWARE",
+        name: (taskData.name || "").trim(),
+        requirement: (taskData.name || "").trim(),
+        flow: flowId,
       });
 
       const newId = res.id || res.project_id;

@@ -2460,6 +2460,15 @@ function submitTask() {
   closeModal();
   toast("已交给 Chief：" + name + "（拆成 " + P.N + " 项）");
   goView("pj", P);
+  if (bridge && typeof bridge.onCreateTask === "function") {
+    bridge.onCreateTask({
+      name: name,
+      projId: P.id,
+      tplKey: TPL[TK.tpl] ? TPL[TK.tpl].k : "feature",
+      stagesCount: S.length,
+      urgent: TK.pri === 1,
+    });
+  }
 }
 /* ---------- 人员管理 ---------- */
 var HRUI = { open: false, dept: -1, q: "", form: null, conf: null, look: null, type: 1 };
