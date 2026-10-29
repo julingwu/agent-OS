@@ -102,7 +102,6 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
     ];
     return valid.includes(selected) ? selected : "cyberdeck";
   });
-  const [zeroHudMode, setZeroHudMode] = useState(true);
   const [chats, setChats] = useState([]);
   const [active, setActive] = useState(null);
   const [org, setOrg] = useState(null);
@@ -301,7 +300,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
   );
 
   return (
-    <div className={cls("shell", chatLayout && "chat-layout", (!chatLayout || !showDetail) && "no-detail", tab === "cyberdeck" && zeroHudMode && "zero-hud-shell")}>
+    <div className={cls("shell", chatLayout && "chat-layout", (!chatLayout || !showDetail) && "no-detail")}>
       <DialogAccessibility />
       <nav className="rail" aria-label="主导航">
         <div className="workspace-brand">
@@ -395,7 +394,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
 
       <ContextMenu ctx={ctx} />
       {depting && <NewDept onClose={() => setDepting(false)} onDone={boot} />}
-      <div className="right">
+      <div className={cls("right", tab === "cyberdeck" && "cyberdeck-view")}>
         <header className="app-topbar">
           <div className="app-breadcrumb">
             <Icon name="org" /><span className="breadcrumb-workspace">我的工作空间</span>
@@ -411,16 +410,6 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
             >
               {chats.map((c) => (<option value={c.id} key={c.id}>{c.employee_name || c.title}</option>))}
             </select>
-          )}
-          {(tab !== "cyberdeck" || !zeroHudMode) && (
-            <button
-              type="button"
-              className="btn-enter-diorama"
-              onClick={() => { setTab("cyberdeck"); setZeroHudMode(true); }}
-              title="进入 3D 盲盒指挥舱（潮玩微缩世界 · 零 HUD 沉浸操控）"
-            >
-              <span>🔮</span> 进入 3D 盲盒指挥舱
-            </button>
           )}
           <a
             href="/ui/"
@@ -448,11 +437,9 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
             onOpenChat={openChat}
             onNavigate={setTab}
             onReturnMainUI={returnToMainUI}
-            onNavigateTab={(t) => { setZeroHudMode(false); setTab(t); }}
+            onNavigateTab={setTab}
             onOpenAddMember={() => setAdding(true)}
             pendingCount={pendingCount}
-            zeroHudMode={zeroHudMode}
-            onToggleClassicDeck={() => setZeroHudMode(false)}
           />
         )
           : tab === "overview" || tab === "tasks" ? (
