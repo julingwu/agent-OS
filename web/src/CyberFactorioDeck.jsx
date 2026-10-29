@@ -243,24 +243,30 @@ export default function CyberFactorioDeck({
       const req = (taskData.requirement || taskData.name || "").trim();
 
       if (mode === "ceo") {
-        const ceoChat = (chats || []).find((c) => c.kind === "ceo");
-        if (ceoChat) {
-          if (req) await api.send(ceoChat.id, req);
-          if (onOpenChat) onOpenChat(ceoChat);
+        const ceoChatId = (chats || []).find((c) => c.kind === "ceo")?.id || snapshot?.ceo_chat?.id;
+        if (ceoChatId) {
+          if (req) await api.send(ceoChatId, req);
+          const found = (chats || []).find((c) => c.id === ceoChatId) || { id: ceoChatId, title: "CEO 调度台", kind: "ceo" };
+          if (onOpenChat) onOpenChat(found);
         } else if (onNavigate) {
           onNavigate("chats");
         }
+        await onWorkspaceChanged?.();
+        await loadSnapshot();
         return;
       }
 
-      if (mode === "direct" && taskData.employeeId) {
-        const empChat = (chats || []).find((c) => c.employee_id === taskData.employeeId);
+      const empTarget = taskData.employeeId || taskData.employee_id;
+      if (mode === "direct" && empTarget) {
+        const empChat = (chats || []).find((c) => c.employee_id === empTarget);
         if (empChat) {
           if (req) await api.send(empChat.id, req);
           if (onOpenChat) onOpenChat(empChat);
         } else if (onNavigate) {
           onNavigate("chats");
         }
+        await onWorkspaceChanged?.();
+        await loadSnapshot();
         return;
       }
 
@@ -274,6 +280,7 @@ export default function CyberFactorioDeck({
 
       const newId = res.id || res.project_id;
       setActiveProjectId(newId);
+      await onWorkspaceChanged?.();
       await loadSnapshot();
 
       hqRef.current?.pushBackendEvent({
@@ -283,7 +290,7 @@ export default function CyberFactorioDeck({
         name: req.slice(0, 40),
       });
     } catch (err) {
-      console.warn("Failed to create cloud project from HQ task", err);
+      console.warn("Failed to create cloud task/project from HQ", err);
     }
   };
 

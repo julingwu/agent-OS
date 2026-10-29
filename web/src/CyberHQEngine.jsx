@@ -22,6 +22,19 @@ const CyberHQEngine = forwardRef(function CyberHQEngine({
 }, ref) {
   const wrapperRef = useRef(null);
   const hqInstRef = useRef(null);
+  const cbRef = useRef({});
+  cbRef.current = {
+    onCreateTask,
+    onOpenExchange,
+    onNavigateTab,
+    onNavigate,
+    onOpenEmployeeChat,
+    onInspectEmployee,
+    onOpenAddMember,
+    onOpenSettings,
+    onFireEmployee,
+    onHireRole,
+  };
 
   // Expose methods to parent component
   useImperativeHandle(ref, () => ({
@@ -50,36 +63,36 @@ const CyberHQEngine = forwardRef(function CyberHQEngine({
 
     const bridge = {
       onCreateTask: (taskData) => {
-        if (onCreateTask) onCreateTask(taskData);
+        cbRef.current.onCreateTask?.(taskData);
       },
       onOpenExchange: () => {
-        if (onOpenExchange) onOpenExchange();
+        cbRef.current.onOpenExchange?.();
       },
       onNavigateTab: (tabKey, opts) => {
-        if (onNavigate) onNavigate(tabKey, opts);
-        else if (onNavigateTab) onNavigateTab(tabKey, opts);
+        if (cbRef.current.onNavigate) cbRef.current.onNavigate(tabKey, opts);
+        else cbRef.current.onNavigateTab?.(tabKey, opts);
       },
       onNavigate: (tabKey, opts) => {
-        if (onNavigate) onNavigate(tabKey, opts);
-        else if (onNavigateTab) onNavigateTab(tabKey, opts);
+        if (cbRef.current.onNavigate) cbRef.current.onNavigate(tabKey, opts);
+        else cbRef.current.onNavigateTab?.(tabKey, opts);
       },
       onOpenEmployeeChat: (emp) => {
-        if (onOpenEmployeeChat) onOpenEmployeeChat(emp);
+        cbRef.current.onOpenEmployeeChat?.(emp);
       },
       onInspectEmployee: (emp) => {
-        if (onInspectEmployee) onInspectEmployee(emp);
+        cbRef.current.onInspectEmployee?.(emp);
       },
       onOpenAddMember: () => {
-        if (onOpenAddMember) onOpenAddMember();
+        cbRef.current.onOpenAddMember?.();
       },
       onOpenSettings: () => {
-        if (onOpenSettings) onOpenSettings();
+        cbRef.current.onOpenSettings?.();
       },
       onFireEmployee: (empId) => {
-        if (onFireEmployee) return onFireEmployee(empId);
+        return cbRef.current.onFireEmployee?.(empId);
       },
       onHireRole: (role) => {
-        if (onHireRole) return onHireRole(role);
+        return cbRef.current.onHireRole?.(role);
       },
     };
 

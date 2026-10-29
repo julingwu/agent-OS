@@ -438,6 +438,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
             Icon={Icon}
             chats={chats}
             onOpenChat={openChat}
+            onWorkspaceChanged={boot}
             onNavigate={(targetTab, opts) => {
               if (opts?.projectId) setSelectedProjectId(opts.projectId);
               if (opts?.taskId) {
@@ -445,8 +446,17 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
               }
               setTab(targetTab);
             }}
-            onInspectEmployee={(emp) => {
-              setEmpPanel(emp);
+            onInspectEmployee={async (empOrId) => {
+              let found = null;
+              if (typeof empOrId === "string") {
+                try {
+                  const list = await api.employees();
+                  found = (list.employees || list || []).find(x => x.id === empOrId);
+                } catch (e) {}
+              } else if (empOrId && typeof empOrId === "object") {
+                found = empOrId;
+              }
+              if (found) setEmpPanel(found);
               setTab("org");
             }}
             onOpenSettings={() => setShowSettings(true)}
