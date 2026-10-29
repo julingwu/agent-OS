@@ -184,7 +184,7 @@ fn ws_url(base_url: &str, token: &str) -> String {
 }
 
 #[cfg(windows)]
-type BridgeSocket = tungstenite::WebSocket<native_tls::TlsStream<std::net::TcpStream>>;
+type BridgeSocket = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
 
 #[cfg(windows)]
 fn connect_bridge(base_url: &str, token: &str) -> Result<BridgeSocket, String> {
@@ -194,16 +194,24 @@ fn connect_bridge(base_url: &str, token: &str) -> Result<BridgeSocket, String> {
     let port = parsed.port_or_known_default().ok_or("url has no port")?;
     let tcp = std::net::TcpStream::connect((host.as_str(), port))
         .map_err(|e| format!("tcp: {e}"))?;
-    let ignore_cert = std::env::var("AGENTOS_IGNORE_CERT").is_ok();
+    tcp.set_write_timeout(Some(Duration::from_secs(15))).map_err(|e| e.to_string())?;
+    if parsed.scheme() == "ws" {
+        if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+            return Err("Unencrypted bridge is only allowed on loopback".into());
+        }
+        let request = url.into_client_request().map_err(|e| format!("request: {e}"))?;
+        let (socket, _) = tungstenite::client::client(request,
+            tungstenite::stream::MaybeTlsStream::Plain(tcp)).map_err(|e| format!("handshake: {e}"))?;
+        return Ok(socket);
+    }
     let tls = native_tls::TlsConnector::builder()
-        .danger_accept_invalid_certs(ignore_cert)
         .build()
         .map_err(|e| format!("tls: {e}"))?;
     let tls_stream = tls.connect(&host, tcp).map_err(|e| format!("tls connect: {e}"))?;
     let request = url
         .into_client_request()
         .map_err(|e| format!("request: {e}"))?;
-    let (socket, _resp) = tungstenite::client::client(request, tls_stream)
+    let (socket, _resp) = tungstenite::client::client(request, tungstenite::stream::MaybeTlsStream::NativeTls(tls_stream))
         .map_err(|e| format!("handshake: {e}"))?;
     Ok(socket)
 }
@@ -517,58 +525,71 @@ fn local_exec(cmd: &str, cwd: Option<&str>, timeout_s: u64) -> (bool, Value) {
     if cmd.trim().is_empty() {
         return (false, json!({"error": "empty command"}));
     }
-    let mut command = if cfg!(windows) {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(cmd);
-        c.creation_flags(CREATE_NO_WINDOW);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(cmd);
-        c
-    };
+    // cmd parses its own command line; Command::arg applies CRT escaping which
+    // corrupts nested quotes such as python -c "...".
+    let mut command = Command::new("cmd.exe");
+    command.raw_arg("/D /S /C").raw_arg(format!("\"{cmd}\""));
+    command.creation_flags(CREATE_NO_WINDOW);
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let child = match command.spawn() {
+    let mut child = match command.spawn() {
         Ok(c) => c,
         Err(err) => return (false, json!({"error": format!("spawn: {err}")})),
     };
-    // 简单超时：轮询等待；超时杀掉进程
-    let start = std::time::Instant::now();
-    let mut child = child;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let output = child.wait_with_output();
-                let (stdout, stderr) = match output {
-                    Ok(out) => (
-                        String::from_utf8_lossy(&out.stdout).to_string(),
-                        String::from_utf8_lossy(&out.stderr).to_string(),
-                    ),
-                    Err(_) => (String::new(), String::new()),
-                };
-                return (
-                    status.success(),
-                    json!({
-                        "ok": status.success(),
-                        "exit_code": status.code(),
-                        "stdout": stdout.chars().take(8000).collect::<String>(),
-                        "stderr": stderr.chars().take(8000).collect::<String>(),
-                    }),
-                );
+    // Drain both pipes while the process runs. Retain bounded output, but keep
+    // consuming excess bytes so a verbose child cannot deadlock on a full pipe.
+    fn drain<R: std::io::Read + Send + 'static>(mut pipe: R)
+        -> (std::sync::Arc<std::sync::Mutex<Vec<u8>>>, std::sync::mpsc::Receiver<()>) {
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let copy = buffer.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let mut output = copy.lock().unwrap();
+                        let keep = n.min(32000usize.saturating_sub(output.len()));
+                        output.extend_from_slice(&chunk[..keep]);
+                    }
+                }
             }
+            let _ = tx.send(());
+        });
+        (buffer, rx)
+    }
+    let (stdout, stdout_done) = drain(child.stdout.take().unwrap());
+    let (stderr, stderr_done) = drain(child.stderr.take().unwrap());
+    let start = std::time::Instant::now();
+    let timeout_s = timeout_s.clamp(1, 150);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
             Ok(None) => {
-                if start.elapsed() > Duration::from_secs(timeout_s.max(1)) {
+                if start.elapsed() > Duration::from_secs(timeout_s) {
+                    // Terminate the entire command tree; killing only cmd leaves
+                    // Python/PowerShell descendants alive and holding the pipes.
+                    let _ = Command::new("taskkill.exe")
+                        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+                        .creation_flags(CREATE_NO_WINDOW).output();
                     let _ = child.kill();
+                    let _ = child.wait();
                     return (false, json!({"error": format!("timeout after {timeout_s}s")}));
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(err) => return (false, json!({"error": format!("wait: {err}")})),
         }
-    }
+    };
+    // Descendants can inherit a pipe; never block the bridge waiting for EOF.
+    let _ = stdout_done.recv_timeout(Duration::from_secs(1));
+    let _ = stderr_done.recv_timeout(Duration::from_secs(1));
+    let stdout = String::from_utf8_lossy(&stdout.lock().unwrap()).chars().take(8000).collect::<String>();
+    let stderr = String::from_utf8_lossy(&stderr.lock().unwrap()).chars().take(8000).collect::<String>();
+    (status.success(), json!({"ok": status.success(), "exit_code": status.code(),
+                             "stdout": stdout, "stderr": stderr}))
 }

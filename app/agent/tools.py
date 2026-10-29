@@ -310,7 +310,12 @@ def _local_tool(name: str, args: dict, emit, session_id: str | None = None) -> d
                     emit, action=label, detail=detail, risk=risk, preview=preview)
         if not allowed:
             return {"ok": False, "error": "用户拒绝了这次本地操作"}
-    result = local_bridge.call(device_id, name, args)
+    if name == 'local_exec':
+        args = dict(args)
+        args['timeout_s'] = max(1, min(int(args.get('timeout_s') or 60), 150))
+        result = local_bridge.call(device_id, name, args, timeout=args['timeout_s'] + 10)
+    else:
+        result = local_bridge.call(device_id, name, args)
     # 图片/二进制不上事件（8KB 上限），只发引用；界面按 url 拉取
     if isinstance(result, dict):
         for art in result.pop("_artifacts", None) or []:
@@ -432,7 +437,9 @@ TOOL_SPECS: list[dict] = [
     {"type": "function", "function": {
         "name": "local_exec",
         "description": "在用户本地电脑上执行命令（Windows 用 cmd /C，其他用 sh -c）。"
-                       "需要用户审批，默认 60 秒超时。启动 GUI 程序请用 local_open，别用这个。",
+                       "需要用户审批，默认 60 秒超时，最多 150 秒。Windows 命令使用 cmd 语法；"
+                       "复杂 Python/PowerShell 脚本应先 local_write 写文件再执行，避免多层引号。"
+                       "启动 GUI 程序请用 local_open，别用这个。",
         "parameters": {"type": "object", "properties": {
             "cmd": {"type": "string"},
             "cwd": {"type": "string"},

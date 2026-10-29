@@ -133,6 +133,11 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
     遥测，不能凭空估。失败返回 None，由调用方决定回落还是报错。
     `model` 允许调用方按 Bot 指定模型；None 用环境默认。
     """
+    from . import codex_cli
+    if codex_cli.selected(model):
+        if is_offline():
+            return None
+        return codex_cli.chat(messages, tools=tools, model=model, timeout=timeout)
     key = _key()
     if not key or is_offline():
         return None
@@ -198,6 +203,12 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
       * tool_calls 是碎片形式的（按 index 累积 arguments），和一次性返回的结构不一样。
     任何异常都往上抛，由 agent loop 决定是否回落到非流式 chat()。
     """
+    from . import codex_cli
+    if codex_cli.selected(model):
+        if is_offline():
+            raise RuntimeError('llm_offline')
+        yield 'final', codex_cli.chat(messages, tools=tools, model=model, timeout=timeout)
+        return
     key = _key()
     if not key or is_offline():
         raise RuntimeError("llm_offline")

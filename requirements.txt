@@ -6,3 +6,4 @@ cryptography
 pymysql
 python-multipart
 defusedxml
+jsonschema>=4.18,<5

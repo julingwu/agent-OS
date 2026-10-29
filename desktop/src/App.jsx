@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api, clearConn, getConn, setConn, wsUrl } from "./api.js";
+import ModelPicker from './ModelPicker.jsx';
 
 const TABS = [
   { id: "computer", label: "电脑" },
@@ -602,6 +603,20 @@ function MainApp({ onLogout }) {
 
   useEffect(() => {
     if (!activeId) return;
+    let closed = false;
+    const sync = async () => {
+      try {
+        const s = await api(`/v1/sessions/${activeId}`);
+        if (closed) return;
+        setStatus(prev => s.running ? 'thinking' : prev === 'thinking' ? 'idle' : prev);
+      } catch { /* websocket reconnect retains the visible status */ }
+    };
+    const timer = setInterval(sync, 5000);
+    return () => { closed = true; clearInterval(timer); };
+  }, [activeId]);
+
+  useEffect(() => {
+    if (!activeId) return;
     let cancelled = false;
     clearArtifactCache();     // 切会话时释放上一批截图的 blob（下载会走 WebView 的 HTTP 缓存）
     setStatus("idle");
@@ -692,6 +707,12 @@ function MainApp({ onLogout }) {
         setStreamText(null);
         break;
       case "needs_human":
+      case "thought.delta":
+        if (e.kind === 'thought.delta') {
+          if (!e.__replay) setActivity(prev => [...prev.filter(a => a.id !== 'model-wait'),
+            {id: 'model-wait', tool: '模型处理中', state: 'waiting', summary: p.text || ''}]);
+          break;
+        }
         if (e.__replay) break;
         setActivity((prev) => [...prev, { id: e.id, tool: "needs_human", state: "waiting", summary: p.question }]);
         setStatus("needs_human");
@@ -1516,18 +1537,9 @@ function MainApp({ onLogout }) {
                 <div className="detail-role">{details?.role || activeBot?.role || "assistant"}</div>
               </div>
             </div>
-            <div className="kv model-row">
-              <span>模型</span>
-              <select
-                value={activeBot?.model || ""}
-                onChange={(e) => saveBotModel(activeBot.id, e.target.value)}
-              >
-                <option value="">跟随全局默认（{settings?.model || models.default || "deepseek-flash"}）</option>
-                {models.items.map((m) => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
-                ))}
-              </select>
-            </div>
+            <ModelPicker items={models.items} value={activeBot?.model || ''}
+              defaultModel={settings?.model || models.default || 'codex-cli'}
+              onChange={value => saveBotModel(activeBot.id, value)} />
             <div className="kv"><span>今日用量</span><b>{(details?.usage_today_tokens || 0).toLocaleString()} tokens</b></div>
             <div className="kv"><span>会话</span><b>{details?.sessions?.length || 1}</b></div>
             <div className="block-title">人格</div>

@@ -106,7 +106,10 @@ def put_settings(body: SettingsPatch, device: dict = Depends(require_device)) ->
 # ---------------------------------------------------------------- 模型
 def available_models() -> list[str]:
     raw = os.environ.get("AVAILABLE_MODELS", "deepseek-flash,deepseek-v4-pro")
-    return [m.strip() for m in raw.split(",") if m.strip()]
+    models = [m.strip() for m in raw.split(",") if m.strip()]
+    if 'codex-cli' not in models:
+        models.append('codex-cli')
+    return models
 
 
 @router.get("/models")
@@ -115,9 +118,16 @@ def list_models(device: dict = Depends(require_device)) -> dict:
         row = conn.execute("SELECT value_json FROM app_settings WHERE key='model'").fetchone()
     default = json.loads(row["value_json"]) if row else DEFAULT_SETTINGS["model"]
     items = [{"id": m, "label": m} for m in available_models()]
+    from .. import codex_cli
+    catalog_error = None
+    try:
+        items.extend(codex_cli.model_options())
+    except Exception:
+        catalog_error = 'Codex 模型目录暂不可用，请稍后刷新。'
     if default not in [i["id"] for i in items]:
         items.insert(0, {"id": default, "label": default})
-    return {"default": default, "items": items}
+    return {"default": default, "items": items, "catalog_error": catalog_error,
+            "catalog_source": "codex-cli model/list"}
 
 
 # ---------------------------------------------------------------- 外部接入目录

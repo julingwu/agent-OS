@@ -73,6 +73,26 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model):
       * 已吐出部分文字后失败 → 保留这半截并当成本轮结果，不重跑（重跑会让用户看到内容闪现消失）；
       * 任何情况下都不把内部异常当回答写给用户。
     """
+    from .. import codex_cli
+    if codex_cli.selected(model):
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+        import time
+        pool = ThreadPoolExecutor(max_workers=1)
+        start = time.monotonic()
+        future = pool.submit(llm.chat, messages, tools=tools.TOOL_SPECS,
+                             temperature=0.3, model=model)
+        try:
+            while True:
+                try:
+                    return future.result(timeout=5)
+                except FutureTimeout:
+                    if future.done():
+                        raise
+                    _emit(conn, bot_id=bot_id, session_id=session_id, turn_id=turn_id,
+                          kind='thought.delta', payload={'text':
+                          f'Codex 正在处理，已等待 {int(time.monotonic()-start)} 秒；完成后自动返回。'})
+        finally:
+            pool.shutdown(wait=False)
     import time
 
     buf: list[str] = []
