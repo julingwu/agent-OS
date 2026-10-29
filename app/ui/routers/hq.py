@@ -66,7 +66,11 @@ def hq_hire_role(payload: HireRoleIn, oa_ui: str | None = Depends(_token)):
             raise HTTPException(404, detail={"code": "RoleNotFound", "message": str(exc)})
         emp = conn.execute("SELECT * FROM ai_employees WHERE id=?", (emp_id,)).fetchone()
         pos = conn.execute("SELECT * FROM positions WHERE id=?", (emp["position_id"],)).fetchone() if emp else None
-        chat = conn.execute("SELECT id FROM chats WHERE employee_id=? AND kind='dm'", (emp_id,)).fetchone()
+        has_chats = _has_table(conn, "chats")
+        if has_chats:
+            chat = conn.execute("SELECT id FROM chats WHERE employee_id=? AND kind='dm'", (emp_id,)).fetchone()
+        else:
+            chat = None
     
     try:
         telemetry.emit(
@@ -102,16 +106,28 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
                 pass
 
         # ------------------------------------------------------------------ 1. Employees
-        emp_rows = conn.execute("""
-            SELECT e.id, e.name, e.status, e.model, e.role_id,
-                   p.title, le.name as entity_name,
-                   c.id as chat_id
-            FROM ai_employees e
-            LEFT JOIN positions p ON p.id = e.position_id
-            LEFT JOIN legal_entities le ON le.id = e.legal_entity_id
-            LEFT JOIN chats c ON c.employee_id = e.id AND c.kind = 'dm'
-            WHERE COALESCE(e.status, 'online') != 'fired'
-        """).fetchall()
+        has_chats = _has_table(conn, "chats")
+        if has_chats:
+            emp_rows = conn.execute("""
+                SELECT e.id, e.name, e.status, e.model, e.role_id,
+                       p.title, le.name as entity_name,
+                       c.id as chat_id
+                FROM ai_employees e
+                LEFT JOIN positions p ON p.id = e.position_id
+                LEFT JOIN legal_entities le ON le.id = e.legal_entity_id
+                LEFT JOIN chats c ON c.employee_id = e.id AND c.kind = 'dm'
+                WHERE COALESCE(e.status, 'online') != 'fired'
+            """).fetchall()
+        else:
+            emp_rows = conn.execute("""
+                SELECT e.id, e.name, e.status, e.model, e.role_id,
+                       p.title, le.name as entity_name,
+                       NULL as chat_id
+                FROM ai_employees e
+                LEFT JOIN positions p ON p.id = e.position_id
+                LEFT JOIN legal_entities le ON le.id = e.legal_entity_id
+                WHERE COALESCE(e.status, 'online') != 'fired'
+            """).fetchall()
 
         employees = []
         for r in emp_rows:
@@ -193,7 +209,7 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
             })
 
         # ------------------------------------------------------------------ 2. CEO Chat
-        ceo_chat_row = conn.execute("SELECT id, title FROM chats WHERE kind='ceo' LIMIT 1").fetchone()
+        ceo_chat_row = conn.execute("SELECT id, title FROM chats WHERE kind='ceo' LIMIT 1").fetchone() if has_chats else None
         ceo_chat = (
             {"id": ceo_chat_row["id"], "title": ceo_chat_row["title"]}
             if ceo_chat_row else {"id": "C-CEO", "title": "CEO 调度台"}
@@ -290,9 +306,12 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
                 }
 
             # Pending gates
-            pending_gates = conn.execute("""
-                SELECT COUNT(*) as c FROM stage_gates WHERE project_id = ? AND state != 'approved'
-            """, (p['id'],)).fetchone()['c']
+            pending_gates = 0
+            if _has_table(conn, "stage_gates"):
+                row_pg = conn.execute("""
+                    SELECT COUNT(*) as c FROM stage_gates WHERE project_id = ? AND state != 'approved'
+                """, (p['id'],)).fetchone()
+                pending_gates = row_pg['c'] if row_pg else 0
 
             projects.append({
                 "id": p['id'],
