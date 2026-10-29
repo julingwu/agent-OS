@@ -258,15 +258,17 @@ class SettingsIn(BaseModel):
 @router.get("/settings")
 def get_settings(token: str | None = Auth):
     _require(token)
+    from .. import llm_config
     with get_conn() as conn:
+        cfg = llm_config.resolve_llm_config(conn=conn)
         rows = conn.execute("SELECT key, value FROM settings").fetchall()
     vals = {r["key"]: r["value"] for r in rows}
     from .. import flows, finance
     with get_conn() as conn:
         budget = flows.stage_budget(conn)
         fin = finance.config(conn)
-    return {"default_model": vals.get("default_model") or os.environ.get("LLM_MODEL", "deepseek-chat"),
-            "default_api_base": vals.get("default_api_base") or os.environ.get("LLM_API_BASE", "https://api.deepseek.com/v1"),
+    return {"default_model": vals.get("default_model") or cfg["model"],
+            "default_api_base": vals.get("default_api_base") or cfg["base_url"],
             "theme": vals.get("theme") or "dark",
             "flow_stage_budget": budget,
             "flow_stage_budget_source": ("settings" if vals.get("flow_stage_budget")
@@ -274,7 +276,7 @@ def get_settings(token: str | None = Auth):
             "budget_elastic": fin["elastic"],
             "project_budget_cap": fin["cap"],
             "budget_pause_ratio": fin["pause_ratio"],
-            "api_key_set": bool(os.environ.get("DEEPSEEK_API_KEY"))}
+            "api_key_set": bool(cfg["api_key"])}
 
 
 @router.put("/settings")
@@ -307,7 +309,13 @@ def put_settings(payload: SettingsIn, token: str | None = Auth):
                     target="settings", layer="system", payload={**data,
                                                                 "flow_stage_budget": budget},
                     response={"by": who})
+        if "default_model" in data and data["default_model"]:
+            conn.execute("INSERT INTO app_settings (key, value_json, updated_at) VALUES ('model', ?, CURRENT_TIMESTAMP) "
+                         "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=CURRENT_TIMESTAMP",
+                         (json.dumps(data["default_model"]),))
         conn.commit()
+    from .. import llm_config
+    llm_config.invalidate_cache()
     return {"ok": True}
 
 

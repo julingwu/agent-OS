@@ -13,9 +13,9 @@ import re
 
 import httpx
 
+from .. import llm_config
+
 ALLOWED = ["dev", "design", "content", "data", "qa", "translate"]
-API_URL = os.environ.get("ROUTER_LLM_URL", "https://api.deepseek.com/chat/completions")
-MODEL = os.environ.get("ROUTER_LLM_MODEL", "deepseek-chat")
 
 SYSTEM = f"""你是任务路由器。把用户需求映射到下列标签（可多选）：
 {", ".join(ALLOWED)}
@@ -24,10 +24,6 @@ SYSTEM = f"""你是任务路由器。把用户需求映射到下列标签（可�
 - 既要写代码又要写文案 → ["dev","content"]
 - 只做界面 → ["design"]；只有数据分析 → ["data"]
 - 判断不了 → {{"tags": [], "reason": "..."}}"""
-
-
-def _key() -> str | None:
-    return os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
 
 
 def _extract(text: str) -> dict | None:
@@ -43,11 +39,19 @@ def _extract(text: str) -> dict | None:
 
 
 def classify(text: str, timeout: float = 20.0) -> dict | None:
-    key = _key()
+    cfg = llm_config.resolve_llm_config()
+    key = cfg["api_key"]
     if not key:
         return None
+    allowed, _, _ = llm_config.check_global_daily_token_gate()
+    if not allowed:
+        return None
+
+    url = os.environ.get("ROUTER_LLM_URL") or cfg["chat_url"]
+    model = os.environ.get("ROUTER_LLM_MODEL") or cfg["model"]
+
     body = {
-        "model": MODEL,
+        "model": model,
         "messages": [{"role": "system", "content": SYSTEM},
                      {"role": "user", "content": text[:500]}],
         "temperature": 0,
@@ -58,10 +62,19 @@ def classify(text: str, timeout: float = 20.0) -> dict | None:
     for trust_env in (False, True):        # 先直连，失败再走系统代理
         try:
             with httpx.Client(timeout=timeout, trust_env=trust_env) as c:
-                r = c.post(API_URL, json=body, headers=headers)
+                r = c.post(url, json=body, headers=headers)
             if r.status_code != 200:
                 continue
-            out = _extract(r.json()["choices"][0]["message"]["content"])
+            res_json = r.json()
+            usage = res_json.get("usage") or {}
+            p_tok = int(usage.get("prompt_tokens") or 0)
+            c_tok = int(usage.get("completion_tokens") or 0)
+            if p_tok or c_tok:
+                try:
+                    llm_config.record_token_usage(p_tok, c_tok)
+                except Exception:
+                    pass
+            out = _extract(res_json["choices"][0]["message"]["content"])
             if out is not None:
                 return out
         except Exception:                  # noqa: BLE001

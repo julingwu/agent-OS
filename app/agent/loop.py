@@ -301,6 +301,24 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
 
     model = bot.get("model") or _default_model(conn)
 
+    from .. import llm_config
+    gate_ok, used_today, limit = llm_config.check_global_daily_token_gate(conn)
+    if not gate_ok:
+        limit_str = f"{limit:,}"
+        used_str = f"{used_today:,}"
+        final_text = (
+            f"⚠️ **今日 Token 额度已达到上限**\n\n"
+            f"- 今日已使用：**{used_str}** / **{limit_str}** tokens\n"
+            f"- 如需继续对话或执行任务，请在「设置 - 通用」中调高每日上限或开启「不限额」。"
+        )
+        _emit(conn, bot_id=bot_id, session_id=session_id, kind="message.bot",
+              turn_id=turn_id, payload={"text": final_text})
+        _emit(conn, bot_id=bot_id, session_id=session_id, kind="turn.ended",
+              turn_id=turn_id, payload={"status": "limit_exceeded",
+                                        "prompt_tokens": 0, "completion_tokens": 0})
+        return {"turn_id": turn_id, "status": "limit_exceeded", "event_id": started.id,
+                "prompt_tokens": 0, "completion_tokens": 0}
+
     total_prompt = total_completion = 0
     status, final_text = "done", ""
     executed_steps_summary: list[str] = []
@@ -455,11 +473,15 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                                     "completion_tokens": total_completion})
 
     if total_prompt or total_completion:
+        turn_used = total_prompt + total_completion
+        from .. import llm_config
+        allowed, used_today, limit = llm_config.check_global_daily_token_gate(conn)
         _emit(conn, bot_id=bot_id, session_id=session_id, kind="budget.updated",
               turn_id=turn_id, payload={
-                  "used": total_prompt + total_completion,
-                  "limit": int(__import__("os").environ.get("M0_DAILY_TOKENS", "500000")),
-                  "state": "ok"})
+                  "used": used_today,
+                  "turn_used": turn_used,
+                  "limit": limit,
+                  "state": "ok" if allowed else "exhausted"})
 
     return {"turn_id": turn_id, "status": status, "event_id": started.id,
             "prompt_tokens": total_prompt, "completion_tokens": total_completion}

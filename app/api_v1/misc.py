@@ -13,12 +13,14 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import time
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .. import db
+from .. import db, llm_config
 from ..secretbox import decrypt, encrypt
 from .stream import require_device
 
@@ -27,13 +29,18 @@ router = APIRouter(prefix="/v1", tags=["misc"])
 DEFAULT_SETTINGS = {
     "theme": "cyber",
     "computer_fps": 2,
-    "daily_tokens": 500000,
+    "daily_tokens": 0,
     "model": "deepseek-flash",
     "view_only": True,
     "local_enabled": False,
     "local_approval": True,
     "memory_enabled": True,
     "local_allow_dirs": [],
+    "llm_provider": "deepseek",
+    "llm_base_url": "",
+    "llm_api_key": "",
+    "custom_models": [],
+    "apply_model_globally": True,
 }
 
 
@@ -72,16 +79,34 @@ def connect_app(app_id: str, body: AppToggle,
 
 
 # ---------------------------------------------------------------- 设置
+def _format_settings(stored: dict, conn=None) -> dict:
+    merged = {**DEFAULT_SETTINGS, **stored}
+    raw_key = str(merged.get("llm_api_key") or "").strip()
+    masked = (raw_key[:3] + "..." + raw_key[-4:]) if len(raw_key) > 7 else ("***" if raw_key else "")
+    has_key = bool(raw_key)
+    # Never leak raw key to client
+    merged["llm_api_key"] = ""
+    merged["llm_api_key_masked"] = masked
+    merged["llm_has_key"] = has_key
+    try:
+        merged["usage_today_tokens"] = llm_config.get_today_token_usage(conn)
+    except Exception:
+        merged["usage_today_tokens"] = 0
+    return merged
+
+
 @router.get("/settings")
 def get_settings(device: dict = Depends(require_device)) -> dict:
     with db.get_conn() as conn:
+        llm_config.migrate_unlimited_default_if_needed(conn)
         rows = conn.execute("SELECT key, value_json FROM app_settings").fetchall()
-    stored = {r["key"]: json.loads(r["value_json"]) for r in rows}
-    return {"values": {**DEFAULT_SETTINGS, **stored}}
+        stored = {r["key"]: json.loads(r["value_json"]) for r in rows}
+        return {"values": _format_settings(stored, conn)}
 
 
 class SettingsPatch(BaseModel):
     values: dict
+    apply_model_globally: bool | None = None
 
 
 @router.put("/settings")
@@ -90,17 +115,99 @@ def put_settings(body: SettingsPatch, device: dict = Depends(require_device)) ->
     unknown = [k for k in body.values if k not in allowed]
     if unknown:
         raise HTTPException(status_code=400, detail=f"unknown settings: {unknown}")
+
+    apply_globally = body.apply_model_globally
+    if apply_globally is None:
+        apply_globally = bool(body.values.get("apply_model_globally", True))
+
     now = _now()
     with db.get_conn() as conn:
+        llm_config.migrate_unlimited_default_if_needed(conn)
         for key, value in body.values.items():
+            if key == "llm_api_key":
+                s_val = str(value or "").strip()
+                if not s_val or "..." in s_val:
+                    continue
             conn.execute(
                 "INSERT INTO app_settings (key, value_json, updated_at) VALUES (?,?,?)"
                 " ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,"
                 " updated_at=excluded.updated_at",
                 (key, json.dumps(value, ensure_ascii=False), now),
             )
+
+        new_model = body.values.get("model")
+        if new_model:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('default_model', ?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (new_model,),
+            )
+            if apply_globally:
+                conn.execute("UPDATE bots SET model = NULL WHERE deleted_at IS NULL")
+
+        new_base = body.values.get("llm_base_url")
+        if new_base:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('default_api_base', ?)"
+                " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (new_base,),
+            )
+
+        llm_config.invalidate_cache()
+
         rows = conn.execute("SELECT key, value_json FROM app_settings").fetchall()
-    return {"values": {**DEFAULT_SETTINGS, **{r["key"]: json.loads(r["value_json"]) for r in rows}}}
+        stored = {r["key"]: json.loads(r["value_json"]) for r in rows}
+        return {"values": _format_settings(stored, conn)}
+
+
+class TestLlmIn(BaseModel):
+    provider: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    model: str | None = None
+
+
+@router.post("/settings/test-llm")
+def test_llm_connection(body: TestLlmIn, device: dict = Depends(require_device)) -> dict:
+    with db.get_conn() as conn:
+        cfg = llm_config.resolve_llm_config(conn=conn)
+
+    provider = body.provider or cfg.get("provider") or "deepseek"
+    base_url = (body.base_url or "").strip()
+    if not base_url:
+        base_url = llm_config.PROVIDER_PRESETS.get(provider, {}).get("base_url") or cfg.get("base_url") or ""
+
+    chat_url = llm_config.normalize_chat_completions_url(base_url)
+
+    key = (body.api_key or "").strip()
+    if not key or "..." in key:
+        key = cfg.get("api_key") or ""
+
+    if not key:
+        return {"ok": False, "error": "API Key 不能为空"}
+
+    model = (body.model or "").strip() or cfg.get("model") or "deepseek-chat"
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 10,
+    }
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+    t0 = time.time()
+    try:
+        with httpx.Client(timeout=12.0, trust_env=False) as client:
+            res = client.post(chat_url, json=payload, headers=headers)
+        latency_ms = int((time.time() - t0) * 1000)
+        if res.status_code == 200:
+            return {"ok": True, "latency_ms": latency_ms, "model": model, "provider": provider}
+        else:
+            detail = res.text[:200]
+            return {"ok": False, "error": f"HTTP {res.status_code}: {detail}", "latency_ms": latency_ms}
+    except Exception as exc:
+        latency_ms = int((time.time() - t0) * 1000)
+        return {"ok": False, "error": f"连接失败: {exc}", "latency_ms": latency_ms}
 
 
 # ---------------------------------------------------------------- 模型
@@ -112,11 +219,43 @@ def available_models() -> list[str]:
 @router.get("/models")
 def list_models(device: dict = Depends(require_device)) -> dict:
     with db.get_conn() as conn:
+        cfg = llm_config.resolve_llm_config(conn=conn)
         row = conn.execute("SELECT value_json FROM app_settings WHERE key='model'").fetchone()
-    default = json.loads(row["value_json"]) if row else DEFAULT_SETTINGS["model"]
-    items = [{"id": m, "label": m} for m in available_models()]
-    if default not in [i["id"] for i in items]:
+        custom_row = conn.execute("SELECT value_json FROM app_settings WHERE key='custom_models'").fetchone()
+        custom_models = json.loads(custom_row["value_json"]) if custom_row else []
+
+    default = json.loads(row["value_json"]) if row else cfg.get("model") or DEFAULT_SETTINGS["model"]
+
+    models_seen = set()
+    items = []
+
+    # 1. available_models (preserves test_pairing_v1 expectations)
+    for m in available_models():
+        if m not in models_seen:
+            models_seen.add(m)
+            items.append({"id": m, "label": m})
+
+    # 2. Provider presets
+    provider = cfg.get("provider", "deepseek")
+    preset_models = llm_config.PROVIDER_MODELS.get(provider, [])
+    for m in preset_models:
+        if m not in models_seen:
+            models_seen.add(m)
+            items.append({"id": m, "label": m})
+
+    # 3. Custom models configured by user
+    if isinstance(custom_models, list):
+        for m in custom_models:
+            m_str = str(m).strip()
+            if m_str and m_str not in models_seen:
+                models_seen.add(m_str)
+                items.append({"id": m_str, "label": m_str})
+
+    # 4. Currently configured default
+    if default not in models_seen:
+        models_seen.add(default)
         items.insert(0, {"id": default, "label": default})
+
     return {"default": default, "items": items}
 
 

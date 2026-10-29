@@ -64,6 +64,24 @@ def build_env(workspace: pathlib.Path | str, base: dict | None = None) -> dict:
         # 让 npx 不去碰用户目录里的全局包
         "npm_config_prefix": str(ws / ".npm-global"),
     })
+
+    try:
+        from .. import llm_config
+        cfg = llm_config.resolve_llm_config()
+        if cfg.get("api_key"):
+            env.setdefault("OPENAI_API_KEY", cfg["api_key"])
+            env.setdefault("DEEPSEEK_API_KEY", cfg["api_key"])
+        if cfg.get("base_url"):
+            env.setdefault("OPENAI_BASE_URL", cfg["base_url"])
+            env.setdefault("LLM_API_BASE", cfg["base_url"])
+            env.setdefault("MODEL_BASE_URL", cfg["base_url"])
+        if cfg.get("chat_url"):
+            env.setdefault("LLM_URL", cfg["chat_url"])
+        if cfg.get("model"):
+            env.setdefault("LLM_MODEL", cfg["model"])
+    except Exception:
+        pass
+
     return env
 
 

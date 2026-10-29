@@ -13,12 +13,15 @@ from contextlib import contextmanager
 
 import httpx
 
+from . import llm_config
+
 API_URL = os.environ.get("LLM_URL", "https://api.deepseek.com/chat/completions")
 MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
 
 
 def _key() -> str | None:
-    return os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    cfg = llm_config.resolve_llm_config()
+    return cfg["api_key"] or None
 
 
 def has_key() -> bool:
@@ -28,11 +31,13 @@ def has_key() -> bool:
 
 def _url() -> str:
     """运行时读环境：测试可以用本地 mock server 顶替，不需要改模块常量。"""
-    return os.environ.get("LLM_URL") or API_URL
+    cfg = llm_config.resolve_llm_config()
+    return cfg["chat_url"]
 
 
 def _model() -> str:
-    return os.environ.get("LLM_MODEL") or MODEL
+    cfg = llm_config.resolve_llm_config()
+    return cfg["model"]
 
 
 # ---------------------------------------------------------------- 统一离线阀门（v5.4.1）
@@ -100,9 +105,15 @@ def usage_totals() -> dict:
 
 
 def _record_usage(kind: str, usage: dict) -> None:
+    p_tok = int(usage.get("prompt_tokens") or 0)
+    c_tok = int(usage.get("completion_tokens") or 0)
     _usage_totals["calls"] += 1
-    _usage_totals["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
-    _usage_totals["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+    _usage_totals["prompt_tokens"] += p_tok
+    _usage_totals["completion_tokens"] += c_tok
+    try:
+        llm_config.record_token_usage(p_tok, c_tok)
+    except Exception:
+        pass
     sink = _current_sink.get()
     if sink is not None:
         try:
@@ -136,6 +147,9 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
     key = _key()
     if not key or is_offline():
         return None
+    allowed, used_today, limit = llm_config.check_global_daily_token_gate()
+    if not allowed:
+        raise RuntimeError(f"daily_token_limit_exceeded: used {used_today} of {limit}")
     body: dict = {"model": model or _model(), "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens}
     if tools:
@@ -164,12 +178,14 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
                 if "reasoning_content" in msg or "reasoning" in msg:
                     msg.setdefault("reasoning_content", msg.get("reasoning_content") or msg.get("reasoning"))
                 usage = data.get("usage") or {}
+                usage_dict = {
+                    "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                    "completion_tokens": int(usage.get("completion_tokens") or 0),
+                }
+                _record_usage("chat", usage_dict)
                 return {
                     "message": msg,
-                    "usage": {
-                        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
-                        "completion_tokens": int(usage.get("completion_tokens") or 0),
-                    },
+                    "usage": usage_dict,
                     "finish_reason": choice.get("finish_reason"),
                 }
             except Exception as exc:                       # noqa: BLE001
@@ -201,6 +217,9 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
     key = _key()
     if not key or is_offline():
         raise RuntimeError("llm_offline")
+    allowed, used_today, limit = llm_config.check_global_daily_token_gate()
+    if not allowed:
+        raise RuntimeError(f"daily_token_limit_exceeded: used {used_today} of {limit}")
 
     body: dict = {"model": model or _model(), "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens,
@@ -314,6 +333,9 @@ def complete_with_usage(prompt: str, system: str | None = None, *,
     """
     key = _key()
     if not key or is_offline():
+        return None, {}
+    allowed, used_today, limit = llm_config.check_global_daily_token_gate()
+    if not allowed:
         return None, {}
     msgs = []
     if system:

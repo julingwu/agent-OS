@@ -118,8 +118,8 @@ def create_bot(body: BotCreate, device: dict = Depends(require_device)) -> dict:
                     role = r["tag"] or r["name"]
                 if not persona:
                     persona = r["prompt"]
-                if not model and r["model"]:
-                    model = r["model"]
+                # Follow First-Principles: do not force template model into bot.model,
+                # keep model=None (NULL) so newly created bots track the global default.
                 if not role_skills and r["skills"]:
                     role_skills = [s.strip() for s in r["skills"].split(",") if s.strip()]
 
@@ -160,17 +160,28 @@ def get_bot(bot_id: str, device: dict = Depends(require_device)) -> dict:
 @router.patch("/bots/{bot_id}")
 def patch_bot(bot_id: str, body: BotPatch,
               device: dict = Depends(require_device)) -> dict:
-    """改名字/职责/人格/模型。模型留空表示跟随全局默认。"""
-    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    """改名字/职责/人格/模型。模型留空或 null 表示跟随全局默认（解除覆盖）。"""
+    dump = body.model_dump(exclude_unset=True)
+    if not dump:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    fields = {}
+    for k, v in dump.items():
+        if k == "model":
+            if v is None or (isinstance(v, str) and not v.strip()):
+                fields["model"] = None
+            else:
+                fields["model"] = v.strip()
+        elif v is not None:
+            fields[k] = v
+
     if not fields:
         raise HTTPException(status_code=400, detail="nothing to update")
+
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM bots WHERE id=? AND deleted_at IS NULL",
                            (bot_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="bot not found")
-        if "model" in fields and not fields["model"]:
-            fields.pop("model")
         sets = ", ".join(f"{k}=?" for k in fields)
         conn.execute(f"UPDATE bots SET {sets} WHERE id=?", (*fields.values(), bot_id))
         row = conn.execute("SELECT * FROM bots WHERE id=?", (bot_id,)).fetchone()
@@ -222,7 +233,7 @@ def bot_details(bot_id: str, device: dict = Depends(require_device)) -> dict:
         for e in ev.read(conn, since=0, bot_id=bot_id, kinds=["budget.updated"],
                          limit=ev.MAX_READ_LIMIT):
             if e.ts.startswith(today):
-                used += int(e.payload.get("used") or 0)
+                used += int(e.payload.get("turn_used") or e.payload.get("used") or 0)
         sessions = [r["session_id"] for r in conn.execute(
             "SELECT session_id FROM session_members WHERE member_id=?", (bot_id,)
         ).fetchall()]

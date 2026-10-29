@@ -19,10 +19,9 @@ import re
 
 import httpx
 
-log = logging.getLogger("octo.intent")
+from .. import llm_config
 
-DEFAULT_BASE = "https://api.deepseek.com/v1"
-DEFAULT_MODEL = "deepseek-chat"
+log = logging.getLogger("octo.intent")
 
 WORK_HINTS = re.compile(
     r"(写|做|生成|开发|实现|整理|翻译|分析|抓|爬|设计|画|产出|输出|帮我|给我|"
@@ -46,10 +45,8 @@ SYSTEM = """你是「小文」，一家 AI 协作公司的 PM（项目经理）�
 
 
 def _endpoint() -> tuple[str, str, str]:
-    key = os.environ.get("DEEPSEEK_API_KEY", "")
-    base = os.environ.get("LLM_API_BASE", DEFAULT_BASE).rstrip("/")
-    model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
-    return base, key, model
+    cfg = llm_config.resolve_llm_config()
+    return cfg["chat_url"], cfg["api_key"], cfg["model"]
 
 
 def _fallback(text: str) -> dict:
@@ -68,8 +65,11 @@ def classify(text: str, timeout: float = 12.0, prefs: dict[str, str] | None = No
     三者都拼进 system 消息：模型只负责措辞，事实由服务端提供，
     这样它不会把「我的秘书」答成「我没有秘书」。
     """
-    base, key, model = _endpoint()
+    url, key, model = _endpoint()
     if not key:
+        return _fallback(text)
+    allowed, _, _ = llm_config.check_global_daily_token_gate()
+    if not allowed:
         return _fallback(text)
 
     system = SYSTEM
@@ -89,11 +89,19 @@ def classify(text: str, timeout: float = 12.0, prefs: dict[str, str] | None = No
         "max_tokens": 220,
     }
     try:
-        with httpx.Client(base_url=base, timeout=timeout, trust_env=False) as c:
-            r = c.post("/chat/completions",
-                       headers={"Authorization": f"Bearer {key}"}, json=payload)
+        with httpx.Client(timeout=timeout, trust_env=False) as c:
+            r = c.post(url, headers={"Authorization": f"Bearer {key}"}, json=payload)
             r.raise_for_status()
-            content = r.json()["choices"][0]["message"]["content"].strip()
+            res_json = r.json()
+            usage = res_json.get("usage") or {}
+            p_tok = int(usage.get("prompt_tokens") or 0)
+            c_tok = int(usage.get("completion_tokens") or 0)
+            if p_tok or c_tok:
+                try:
+                    llm_config.record_token_usage(p_tok, c_tok)
+                except Exception:
+                    pass
+            content = res_json["choices"][0]["message"]["content"].strip()
     except Exception as exc:                      # noqa: BLE001
         log.warning("intent call failed (%s), falling back", exc)
         return _fallback(text)

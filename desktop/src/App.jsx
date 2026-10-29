@@ -861,9 +861,14 @@ function MainApp({ onLogout }) {
     setModal(null);
   };
 
-  const saveSettings = async (values) => {
-    const res = await api("/v1/settings", { method: "PUT", body: { values } });
+  const saveSettings = async (values, applyModelGlobally) => {
+    const body = { values };
+    if (applyModelGlobally !== undefined) {
+      body.apply_model_globally = applyModelGlobally;
+    }
+    const res = await api("/v1/settings", { method: "PUT", body });
     setSettings(res.values);
+    await loadBasics();
   };
 
   const toggleApp = async (app) => {
@@ -1415,7 +1420,11 @@ function MainApp({ onLogout }) {
                 <button className="revoke-btn" onClick={() => toggleSessionAuth(activeId, false)}>收回</button>
               </div>
             )}
-            <div className="chat-usage">今日 {usage.toLocaleString()} tokens</div>
+            <div className="chat-usage">
+              {Number(settings?.daily_tokens) === 0
+                ? `今日 ${usage.toLocaleString()} tokens · 不限额`
+                : `今日 ${usage.toLocaleString()} / ${(settings?.daily_tokens || 500000).toLocaleString()} tokens`}
+            </div>
             <button
               className="mobile-toggle-btn"
               onClick={() => {
@@ -2186,26 +2195,105 @@ function AppsModal({ onClose }) {
 }
 
 /* ============================== 弹层：设置 ============================== */
+const PROVIDER_PRESETS = [
+  { id: "deepseek", label: "DeepSeek 官方", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-chat", models: ["deepseek-chat", "deepseek-reasoner"] },
+  { id: "openai", label: "OpenAI 官方", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o", models: ["gpt-4o", "gpt-4.1", "o3-mini"] },
+  { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", defaultModel: "anthropic/claude-3.7-sonnet", models: ["anthropic/claude-3.7-sonnet", "google/gemini-2.5-pro", "openai/gpt-4o", "deepseek/deepseek-r1"] },
+  { id: "dashscope", label: "阿里云百炼 (通义千问)", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-max", models: ["qwen-max", "qwen-plus", "qwq-32b"] },
+  { id: "ark", label: "火山引擎方舟 (豆包/DeepSeek)", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", defaultModel: "doubao-1-5-pro-32k-250115", models: ["doubao-1-5-pro-32k-250115", "deepseek-r1-250120"] },
+  { id: "siliconflow", label: "硅基流动 (SiliconFlow)", baseUrl: "https://api.siliconflow.cn/v1", defaultModel: "deepseek-ai/DeepSeek-V3", models: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"] },
+  { id: "moonshot", label: "Moonshot (Kimi)", baseUrl: "https://api.moonshot.cn/v1", defaultModel: "kimi-k2-0711-preview", models: ["kimi-k2-0711-preview", "moonshot-v1-128k"] },
+  { id: "custom", label: "自定义 (OpenAI 兼容规范)", baseUrl: "", defaultModel: "", models: [] },
+];
+
 function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, onSleep, vault, onOpenVault, models, pairCode, onGenPairCode, integrations, localDevices, onClose }) {
   const [local, setLocal] = useState(settings || {});
   const [saved, setSaved] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  const [applyGlobally, setApplyGlobally] = useState(true);
+  const [testStatus, setTestStatus] = useState(null);
+
   useEffect(() => setLocal(settings || {}), [settings]);
   useEffect(() => { if (tab === "vault") onOpenVault(); }, [tab, onOpenVault]);
 
+  const isUnlimited = Number(local.daily_tokens) === 0;
+
   const change = (key, value) => setLocal((prev) => ({ ...prev, [key]: value }));
+
+  const handleProviderSelect = (pid) => {
+    const preset = PROVIDER_PRESETS.find((p) => p.id === pid);
+    if (!preset) return;
+    setLocal((prev) => ({
+      ...prev,
+      llm_provider: pid,
+      llm_base_url: preset.baseUrl,
+      model: preset.defaultModel || prev.model,
+    }));
+  };
+
+  const testConnection = async () => {
+    setTestStatus({ loading: true, msg: "正在测试连接…" });
+    try {
+      const res = await api("/v1/settings/test-llm", {
+        method: "POST",
+        body: {
+          provider: local.llm_provider || "deepseek",
+          base_url: local.llm_base_url,
+          api_key: local.llm_api_key,
+          model: local.model,
+        },
+      });
+      if (res.ok) {
+        setTestStatus({
+          loading: false,
+          ok: true,
+          msg: `✓ 连接成功 (${res.latency_ms}ms) · 模型响应正常`,
+        });
+      } else {
+        setTestStatus({
+          loading: false,
+          ok: false,
+          msg: `✗ ${res.error || "连接测试未通过"}`,
+        });
+      }
+    } catch (err) {
+      setTestStatus({
+        loading: false,
+        ok: false,
+        msg: `✗ 请求失败: ${err.message || err}`,
+      });
+    }
+  };
+
   const save = async () => {
-    await onSave({
+    const payload = {
       model: local.model,
-      daily_tokens: Number(local.daily_tokens) || 500000,
+      daily_tokens: isUnlimited ? 0 : (Number(local.daily_tokens) || 0),
+      llm_provider: local.llm_provider || "deepseek",
+      llm_base_url: (local.llm_base_url || "").trim(),
+      apply_model_globally: applyGlobally,
       computer_fps: Number(local.computer_fps) || 2,
       view_only: !!local.view_only,
       local_enabled: !!local.local_enabled,
       local_approval: local.local_approval !== false,
       memory_enabled: local.memory_enabled !== false,
-    });
+      local_allow_dirs: local.local_allow_dirs || [],
+    };
+    if (local.llm_api_key && local.llm_api_key.trim()) {
+      payload.llm_api_key = local.llm_api_key.trim();
+    }
+    await onSave(payload, applyGlobally);
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };
+
+  const combinedModelOptions = Array.from(new Set([
+    local.model,
+    ...(models?.items ? models.items.map((m) => m.id) : []),
+    ...(PROVIDER_PRESETS.find((p) => p.id === local.llm_provider)?.models || []),
+    "deepseek-chat", "deepseek-reasoner", "gpt-4o", "gpt-4.1", "o3-mini",
+    "anthropic/claude-3.7-sonnet", "qwen-max"
+  ].filter(Boolean)));
 
   return (
     <div className="modal-mask" onClick={onClose}>
@@ -2220,15 +2308,135 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
         <div className="settings-body">
           {tab === "general" && (
             <>
-              <h3>通用</h3>
-              <label>默认模型（所有 Bot 未单独指定时用它）</label>
-              <select value={local.model || ""} onChange={(e) => change("model", e.target.value)}>
-                {(models.items.length ? models.items : [{ id: "deepseek-flash", label: "deepseek-flash" }])
-                  .map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+              <h3>全局大模型配置</h3>
+              <p className="hint">统一管理底座模型、接口地址与秘钥。所有助手默认继承此处配置。</p>
+
+              <label>服务提供商 (Provider Preset)</label>
+              <select
+                value={local.llm_provider || "deepseek"}
+                onChange={(e) => handleProviderSelect(e.target.value)}
+              >
+                {PROVIDER_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
               </select>
-              <label>每日 token 上限</label>
-              <input type="number" value={local.daily_tokens || 500000}
-                onChange={(e) => change("daily_tokens", e.target.value)} />
+
+              <label>Base URL 接口地址</label>
+              <input
+                type="text"
+                value={local.llm_base_url || ""}
+                placeholder="https://api.deepseek.com"
+                onChange={(e) => change("llm_base_url", e.target.value)}
+              />
+              <span style={{ fontSize: "11px", color: "var(--sub)", marginTop: "-4px" }}>
+                自动智能兼容 /v1 与 /chat/completions 后缀；支持任何 OpenAI 兼容规范接口。
+              </span>
+
+              <label>API Key 秘钥</label>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <input
+                  type={showKey ? "text" : "password"}
+                  style={{ flex: 1 }}
+                  value={local.llm_api_key ?? ""}
+                  placeholder={local.llm_has_key ? `已配置 (${local.llm_api_key_masked || "***"}) · 留空保持不变` : "请输入 API Key (sk-...)"}
+                  onChange={(e) => change("llm_api_key", e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="mini-btn"
+                  style={{ padding: "8px 12px", minWidth: "60px" }}
+                  onClick={() => setShowKey(!showKey)}
+                >
+                  {showKey ? "隐藏" : "显示"}
+                </button>
+              </div>
+
+              <label>全局默认模型</label>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <input
+                  list="global-model-presets"
+                  style={{ flex: 1 }}
+                  value={local.model || ""}
+                  placeholder="选择或输入模型名称，如 deepseek-chat"
+                  onChange={(e) => change("model", e.target.value)}
+                />
+                <datalist id="global-model-presets">
+                  {combinedModelOptions.map((opt) => (
+                    <option key={opt} value={opt} />
+                  ))}
+                </datalist>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  style={{ padding: "8px 14px", whiteSpace: "nowrap", borderColor: "rgba(56, 232, 255, 0.4)", color: "var(--cyan)" }}
+                  disabled={testStatus?.loading}
+                  onClick={testConnection}
+                >
+                  {testStatus?.loading ? "测试中…" : "⚡ 测试连接"}
+                </button>
+              </div>
+
+              {testStatus && (
+                <div style={{
+                  fontSize: "12px",
+                  padding: "6px 10px",
+                  borderRadius: "6px",
+                  background: testStatus.ok ? "rgba(40, 200, 120, 0.12)" : "rgba(255, 70, 70, 0.12)",
+                  color: testStatus.ok ? "#4ade80" : "#f87171",
+                  border: `1px solid ${testStatus.ok ? "rgba(40, 200, 120, 0.3)" : "rgba(255, 70, 70, 0.3)"}`,
+                }}>
+                  {testStatus.msg}
+                </div>
+              )}
+
+              <label className="checkline" style={{ marginTop: "4px" }}>
+                <input
+                  type="checkbox"
+                  checked={applyGlobally}
+                  onChange={(e) => setApplyGlobally(e.target.checked)}
+                />
+                同时将此模型应用于所有已创建的智能体助手（清除个体独立覆盖）
+              </label>
+
+              <div className="settings-divider" />
+
+              <h3>全局每日 Token 额度</h3>
+              <p className="hint">控制系统每日全局调用消耗上限，防止意外超支。</p>
+              <label className="checkline">
+                <input
+                  type="checkbox"
+                  checked={isUnlimited}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      change("daily_tokens", 0);
+                    } else {
+                      change("daily_tokens", 500000);
+                    }
+                  }}
+                />
+                每日 Token 不设上限 (0 = 不限额，推荐)
+              </label>
+
+              {!isUnlimited && (
+                <>
+                  <label>自定义每日 Token 上限</label>
+                  <input
+                    type="number"
+                    value={local.daily_tokens || 500000}
+                    onChange={(e) => change("daily_tokens", Math.max(0, parseInt(e.target.value) || 0))}
+                  />
+                </>
+              )}
+              <div style={{ fontSize: "11px", color: "var(--sub)" }}>
+                今日已消耗：<b style={{ color: "var(--text)" }}>{(local.usage_today_tokens || 0).toLocaleString()}</b> tokens
+              </div>
+
+              <div className="modal-actions">
+                <button className="primary" onClick={save}>{saved ? "已保存 ✓" : "保存设置"}</button>
+              </div>
+
+              <div className="settings-divider" />
+              <h3>系统安全与记忆</h3>
               <label className="checkline">
                 <input type="checkbox" checked={!!local.view_only}
                   onChange={(e) => change("view_only", e.target.checked)} />
@@ -2242,8 +2450,6 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
                   onChange={(e) => change("local_allow_dirs",
                     e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))} />
               </label>
-              <div className="modal-actions"><button className="primary" onClick={save}>{saved ? "已保存 ✓" : "保存"}</button></div>
-
               <label className="checkline">
                 <input type="checkbox" checked={local.memory_enabled !== false}
                   onChange={(e) => change("memory_enabled", e.target.checked)} />
