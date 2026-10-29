@@ -1,6 +1,9 @@
+/* Required Notice: Copyright (c) 2026 赛博老爸 (PolyForm Noncommercial License 1.0.0) — Adapted & Wired for AgentOS */
+
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "./api.js";
 import CyberStageDrawer from "./CyberStageDrawer.jsx";
+import CyberHQEngine from "./CyberHQEngine.jsx";
 import CyberStudio3D from "./CyberStudio3D.jsx";
 import "./cyber_factorio.css";
 
@@ -49,8 +52,11 @@ export default function CyberFactorioDeck({
   onOpenAddMember,
   pendingCount = 0,
 }) {
+  // Studio Switcher: "hq" (🏢 智能总部 HQ, default) or "neko" (🐾 Neko-01 潮玩工坊)
+  const [studioMode, setStudioMode] = useState("hq");
+
   const [wsConnected, setWsConnected] = useState(false);
-  // 100% 真实状态绑定：初始全为 pending，严禁任何写死 done/active！
+  // 100% 真实状态绑定：初始全为 pending
   const [stagesState, setStagesState] = useState({
     intake: "pending",
     charter: "pending",
@@ -69,11 +75,10 @@ export default function CyberFactorioDeck({
   const [budgetAlert80, setBudgetAlert80] = useState(false);
   const [alertData, setAlertData] = useState(null);
   const [flyingCrystals, setFlyingCrystals] = useState([]);
-  const [vaultFlash, setVaultFlash] = useState(false);
   const [latestEvent, setLatestEvent] = useState({
     type: "SYSTEM_READY",
     time_iso: new Date().toLocaleTimeString(),
-    data: { message: "3D 赛博潮玩虚拟工作室就绪，实时总线已接入" }
+    data: { message: "HQ 智能总部 3D 引擎就绪，实时总线已接入" }
   });
   const [selectedStage, setSelectedStage] = useState(null);
   const [showExchangeModal, setShowExchangeModal] = useState(false);
@@ -93,7 +98,7 @@ export default function CyberFactorioDeck({
   // Dual-engine kernel mode state
   const [kernelMode, setKernelMode] = useState("auto_failover");
 
-  // Camera preset view
+  // Camera preset view in Neko studio
   const [cameraPreset, setCameraPreset] = useState("overview");
 
   // CEO command bar state
@@ -107,6 +112,7 @@ export default function CyberFactorioDeck({
   const reconnectTimeoutRef = useRef(null);
   const speechRecognitionRef = useRef(null);
   const inputRef = useRef(null);
+  const hqRef = useRef(null);
 
   // Trigger purple crystal particle flying animation
   const triggerCrystalDrop = useCallback((data) => {
@@ -120,9 +126,6 @@ export default function CyberFactorioDeck({
     };
     setFlyingCrystals((prev) => [...prev, newParticle]);
     setCrystalsCount((prev) => prev + 1);
-
-    setVaultFlash(true);
-    setTimeout(() => setVaultFlash(false), 800);
 
     setTimeout(() => {
       setFlyingCrystals((prev) => prev.filter((p) => p.id !== id));
@@ -184,6 +187,7 @@ export default function CyberFactorioDeck({
         if (activeProjectId) {
           ws.send(JSON.stringify({ type: "SUBSCRIBE_PROJECT", project_id: activeProjectId }));
         }
+        hqRef.current?.syncBackendData({ wsConnected: true });
       };
 
       ws.onmessage = (event) => {
@@ -194,6 +198,9 @@ export default function CyberFactorioDeck({
             time_iso: new Date().toLocaleTimeString(),
             data: payload
           });
+
+          // Forward to HQ 3D Engine live feed & Chief speech
+          hqRef.current?.pushBackendEvent(payload);
 
           if (payload.type === "TELEMETRY_UPDATE" || payload.type === "STAGE_STATE_CHANGE") {
             if (payload.stages_state) {
@@ -223,6 +230,7 @@ export default function CyberFactorioDeck({
 
       ws.onclose = () => {
         setWsConnected(false);
+        hqRef.current?.syncBackendData({ wsConnected: false });
         reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
       };
 
@@ -266,54 +274,33 @@ export default function CyberFactorioDeck({
     }
   }, [showExchangeModal]);
 
-  // Voice recognition toggle
-  const toggleSpeechRecognition = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("当前浏览器环境不支持语音识别 API，请直接输入文本。");
-      return;
-    }
-
-    if (isListening) {
-      if (speechRecognitionRef.current) {
-        speechRecognitionRef.current.stop();
-      }
-      setIsListening(false);
-    } else {
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.lang = "zh-CN";
-        recognition.continuous = false;
-        recognition.interimResults = true;
-
-        recognition.onstart = () => setIsListening(true);
-        recognition.onresult = (event) => {
-          const transcript = Array.from(event.results)
-            .map((result) => result[0].transcript)
-            .join("");
-          setCeoDirective(transcript);
-        };
-        recognition.onerror = () => setIsListening(false);
-        recognition.onend = () => setIsListening(false);
-
-        speechRecognitionRef.current = recognition;
-        recognition.start();
-      } catch (e) {
-        setIsListening(false);
-      }
-    }
-  };
-
-  const handleSwitchKernel = async (newMode) => {
-    setKernelMode(newMode);
+  // Launch new project from HQ Task Modal or CEO Command Bar
+  const handleCreateTaskFromHQ = async (taskData) => {
     try {
-      await api.setKernelMode?.(newMode);
-    } catch (e) {
-      console.warn("Failed to set kernel mode", e);
+      const res = await api.createProject({
+        name: taskData.name,
+        requirement: taskData.name,
+        flow: taskData.tplKey === "soft" ? "FLOW-SOFTWARE" : "FLOW-SOFTWARE",
+      });
+
+      const newId = res.id || res.project_id;
+      setActiveProjectId(newId);
+      loadProjects(newId);
+      loadProjectDetail(newId);
+
+      // Notify HQ 3D Engine that cloud pipeline is live!
+      hqRef.current?.pushBackendEvent({
+        type: "CLOUD_PROJECT_CREATED",
+        projId: taskData.projId,
+        realId: newId,
+        name: taskData.name,
+      });
+    } catch (err) {
+      console.warn("Failed to create cloud project from HQ task", err);
     }
   };
 
-  // Launch new project from CEO Command Bar
+  // Launch new project from CEO Command Bar in Neko mode
   const handleDispatchDirective = async () => {
     const promptText = ceoDirective.trim();
     if (!promptText || isDispatching) return;
@@ -332,7 +319,6 @@ export default function CyberFactorioDeck({
       const newId = res.id || res.project_id;
       setActiveProjectId(newId);
 
-      // Reset stages to active intake
       setTotalTokens(0);
       setTotalRmb(0.0);
       setStagesState({
@@ -352,6 +338,12 @@ export default function CyberFactorioDeck({
 
       await loadProjects(newId);
       await loadProjectDetail(newId);
+
+      hqRef.current?.pushBackendEvent({
+        type: "CLOUD_PROJECT_CREATED",
+        realId: newId,
+        name: autoName,
+      });
 
       setTimeout(() => setDispatchSuccessMsg(""), 6000);
     } catch (err) {
@@ -455,224 +447,230 @@ export default function CyberFactorioDeck({
         margin: 0,
       }}
     >
-      {/* 1. REAL-TIME THREE.JS 3D TOY-BOX ISOMETRIC VIRTUAL STUDIO ENGINE */}
-      <CyberStudio3D
-        stagesState={stagesState}
-        activeProjectId={activeProjectId}
-        totalRmb={totalRmb}
-        totalTokens={totalTokens}
-        crystalsCount={crystalsCount}
-        budgetAlert80={budgetAlert80}
-        approvalModal={approvalModal}
-        openStageDrawer={openStageDrawer}
-        onOpenExchange={() => setShowExchangeModal(true)}
-        onOpenApproval={() => {
-          if (approvalModal) setApprovalModal(approvalModal);
-          else if (onNavigateTab) onNavigateTab("approvals");
-          else if (onNavigate) onNavigate("approvals");
-        }}
-        onDirectiveFocus={() => inputRef.current?.focus()}
-        cameraPreset={cameraPreset}
-        onCameraPresetChange={setCameraPreset}
-      />
+      {/* ============================================================== */}
+      {/* MODE 1: 🏢 智能总部 HQ 3D 引擎 (@赛博老爸 10 · HQ 智能总部)          */}
+      {/* ============================================================== */}
+      {studioMode === "hq" && (
+        <CyberHQEngine
+          ref={hqRef}
+          wsConnected={wsConnected}
+          totalTokens={totalTokens}
+          pendingCount={pendingCount}
+          projectList={projectList}
+          activeProjectId={activeProjectId}
+          onCreateTask={handleCreateTaskFromHQ}
+          onSwitchStudio={() => setStudioMode("neko")}
+          onOpenExchange={() => setShowExchangeModal(true)}
+          onNavigateTab={onNavigateTab || onNavigate}
+        />
+      )}
 
-      {/* 2. TOP-LEFT FLOATING CONTROL PILL */}
-      <div
-        style={{
-          position: "absolute",
-          top: "14px",
-          left: "18px",
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          zIndex: 30,
-        }}
-      >
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "6px 14px",
-            borderRadius: "9999px",
-            background: "rgba(9, 14, 28, 0.88)",
-            border: "1px solid rgba(0, 240, 255, 0.4)",
-            boxShadow: "0 4px 18px rgba(0,0,0,0.5)",
-            backdropFilter: "blur(10px)",
-            fontSize: "12px",
-            fontWeight: "600",
-            color: "#f8fafc",
-          }}
-        >
-          <span
-            style={{
-              width: "7px",
-              height: "7px",
-              borderRadius: "50%",
-              background: wsConnected ? "#00FF9D" : "#64748B",
-              boxShadow: wsConnected ? "0 0 8px #00FF9D" : "none",
+      {/* ============================================================== */}
+      {/* MODE 2: 🐾 Neko-01 赛博猫娘潮玩工坊 (Three.js 60FPS 虚拟工作室)   */}
+      {/* ============================================================== */}
+      {studioMode === "neko" && (
+        <>
+          <CyberStudio3D
+            stagesState={stagesState}
+            activeProjectId={activeProjectId}
+            totalRmb={totalRmb}
+            totalTokens={totalTokens}
+            crystalsCount={crystalsCount}
+            budgetAlert80={budgetAlert80}
+            approvalModal={approvalModal}
+            openStageDrawer={openStageDrawer}
+            onOpenExchange={() => setShowExchangeModal(true)}
+            onOpenApproval={() => {
+              if (approvalModal) setApprovalModal(approvalModal);
+              else if (onNavigateTab) onNavigateTab("approvals");
+              else if (onNavigate) onNavigate("approvals");
             }}
+            onDirectiveFocus={() => inputRef.current?.focus()}
+            cameraPreset={cameraPreset}
+            onCameraPresetChange={setCameraPreset}
           />
-          <span>{wsConnected ? "遥测 LIVE" : "遥测离线"}</span>
-        </div>
 
-        {/* Project Switcher */}
-        {projectList.length > 0 && (
-          <select
-            value={activeProjectId}
-            onChange={(e) => {
-              const pid = e.target.value;
-              setActiveProjectId(pid);
-              loadProjectDetail(pid);
-            }}
+          {/* Switch Back to HQ Button */}
+          <button
+            className="cyber-btn cyan"
             style={{
-              background: "rgba(9, 14, 28, 0.88)",
-              border: "1px solid rgba(120, 140, 255, 0.35)",
+              position: "absolute",
+              top: "14px",
+              right: "18px",
               borderRadius: "9999px",
-              padding: "6px 14px",
-              color: "#e2e8f0",
+              padding: "7px 16px",
               fontSize: "12px",
-              outline: "none",
-              cursor: "pointer",
-              backdropFilter: "blur(10px)",
+              fontWeight: "600",
+              zIndex: 35,
+              boxShadow: "0 4px 18px rgba(0, 240, 255, 0.4)",
             }}
+            onClick={() => setStudioMode("hq")}
+            title="切回 🏢 智能总部 HQ 全景大厦"
           >
-            {projectList.map((p) => (
-              <option key={p.id} value={p.id}>
-                📁 {p.name || p.id} ({p.current_stage || "init"})
-              </option>
-            ))}
-          </select>
-        )}
+            🏢 切回智能总部 HQ
+          </button>
 
-        {/* Real-time KPI Stats Pill */}
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "10px",
-            padding: "6px 14px",
-            borderRadius: "9999px",
-            background: "rgba(9, 14, 28, 0.88)",
-            border: "1px solid rgba(168, 85, 247, 0.35)",
-            fontSize: "11px",
-            color: "#cbd5e1",
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          <span style={{ color: "#a855f7", fontWeight: "bold" }}>💎 {crystalsCount} 晶石</span>
-          <span style={{ color: "#475569" }}>|</span>
-          <span style={{ color: "#f59e0b" }}>￥{totalRmb.toFixed(2)}</span>
-          <span style={{ color: "#475569" }}>|</span>
-          <span style={{ color: "#00f0ff" }}>{totalTokens.toLocaleString()} Tok</span>
-        </div>
-
-        {/* Dual-Kernel Switcher */}
-        <div
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "5px 12px",
-            borderRadius: "9999px",
-            background: "rgba(9, 14, 28, 0.88)",
-            border: "1px solid rgba(0, 240, 255, 0.3)",
-            fontSize: "11px",
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          <span style={{ color: "#00F0FF", fontWeight: "600" }}>⚙️ 内核:</span>
-          <select
-            value={kernelMode}
-            onChange={(e) => handleSwitchKernel(e.target.value)}
+          {/* Top-Left Stats for Neko Mode */}
+          <div
             style={{
-              background: "transparent",
-              color: "#00F0FF",
-              border: "none",
-              fontSize: "11px",
-              outline: "none",
-              cursor: "pointer",
+              position: "absolute",
+              top: "14px",
+              left: "18px",
+              display: "flex",
+              alignItems: "center",
+              gap: "10px",
+              zIndex: 30,
             }}
           >
-            <option value="auto_failover">⚡ 自动容错</option>
-            <option value="native">🟢 原生内核</option>
-            <option value="dsh">🛡️ DSH-ACP</option>
-          </select>
-        </div>
-      </div>
-
-      {/* 3. TOP-RIGHT CAMERA CONTROLS & UTILITIES */}
-      <div
-        style={{
-          position: "absolute",
-          top: "14px",
-          right: "18px",
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          zIndex: 30,
-        }}
-      >
-        {/* Camera Preset Buttons */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "4px",
-            padding: "4px",
-            borderRadius: "9999px",
-            background: "rgba(9, 14, 28, 0.88)",
-            border: "1px solid rgba(120, 140, 255, 0.35)",
-            backdropFilter: "blur(10px)",
-          }}
-        >
-          {[
-            { id: "overview", label: "🔍 全景" },
-            { id: "workshop", label: "🛠️ 工坊" },
-            { id: "camp", label: "🏕️ 露营" },
-            { id: "gym", label: "🏋️ 健身" },
-            { id: "follow", label: "🎥 跟随" },
-          ].map((v) => (
-            <button
-              key={v.id}
-              onClick={() => setCameraPreset(v.id)}
+            <div
               style={{
-                padding: "4px 10px",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "6px 14px",
                 borderRadius: "9999px",
-                border: "none",
-                fontSize: "11px",
+                background: "rgba(9, 14, 28, 0.88)",
+                border: "1px solid rgba(0, 240, 255, 0.4)",
+                fontSize: "12px",
                 fontWeight: "600",
-                cursor: "pointer",
-                background: cameraPreset === v.id ? "rgba(0, 240, 255, 0.25)" : "transparent",
-                color: cameraPreset === v.id ? "#00f0ff" : "#94a3b8",
-                transition: "all 0.15s ease",
+                color: "#f8fafc",
               }}
             >
-              {v.label}
-            </button>
-          ))}
-        </div>
+              <span
+                style={{
+                  width: "7px",
+                  height: "7px",
+                  borderRadius: "50%",
+                  background: wsConnected ? "#00FF9D" : "#64748B",
+                }}
+              />
+              <span>{wsConnected ? "遥测 LIVE" : "遥测离线"}</span>
+            </div>
 
-        {/* MCP Exchange Button */}
-        <button
-          className="cyber-btn purple"
-          style={{ padding: "6px 12px", fontSize: "12px", borderRadius: "9999px" }}
-          onClick={() => setShowExchangeModal(true)}
-          title="万界 MCP 交易所（导出/导入业务神装，或跨公司委派执行）"
-        >
-          <span>🌐</span> 万界 MCP 交易所
-        </button>
+            {projectList.length > 0 && (
+              <select
+                value={activeProjectId}
+                onChange={(e) => {
+                  const pid = e.target.value;
+                  setActiveProjectId(pid);
+                  loadProjectDetail(pid);
+                }}
+                style={{
+                  background: "rgba(9, 14, 28, 0.88)",
+                  border: "1px solid rgba(120, 140, 255, 0.35)",
+                  borderRadius: "9999px",
+                  padding: "6px 14px",
+                  color: "#e2e8f0",
+                  fontSize: "12px",
+                  outline: "none",
+                  cursor: "pointer",
+                }}
+              >
+                {projectList.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    📁 {p.name || p.id} ({p.current_stage || "init"})
+                  </option>
+                ))}
+              </select>
+            )}
 
-        {/* Trigger Crystal Drop */}
-        <button
-          className="cyber-btn orange"
-          style={{ padding: "6px 10px", fontSize: "12px", borderRadius: "9999px" }}
-          onClick={() => triggerCrystalDrop({ title: "演练掉落", kind: "consensus" })}
-          title="晶石演练：让 Neko-01 拾取紫晶并入库"
-        >
-          <span>💎</span>
-        </button>
-      </div>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "10px",
+                padding: "6px 14px",
+                borderRadius: "9999px",
+                background: "rgba(9, 14, 28, 0.88)",
+                border: "1px solid rgba(168, 85, 247, 0.35)",
+                fontSize: "11px",
+                color: "#cbd5e1",
+              }}
+            >
+              <span style={{ color: "#a855f7", fontWeight: "bold" }}>💎 {crystalsCount} 晶石</span>
+              <span style={{ color: "#475569" }}>|</span>
+              <span style={{ color: "#f59e0b" }}>￥{totalRmb.toFixed(2)}</span>
+              <span style={{ color: "#475569" }}>|</span>
+              <span style={{ color: "#00f0ff" }}>{totalTokens.toLocaleString()} Tok</span>
+            </div>
+          </div>
+
+          {/* Bottom Floating Console in Neko Mode */}
+          <div
+            style={{
+              position: "absolute",
+              bottom: "16px",
+              left: "50%",
+              transform: "translateX(-50%)",
+              width: "min(960px, 94vw)",
+              background: "rgba(9, 14, 28, 0.94)",
+              border: "1px solid rgba(0, 240, 255, 0.4)",
+              borderRadius: "16px",
+              padding: "12px 18px",
+              boxShadow: "0 16px 45px rgba(0, 0, 0, 0.8), 0 0 30px rgba(0, 240, 255, 0.15)",
+              backdropFilter: "blur(14px)",
+              zIndex: 35,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: "600" }}>工序微调:</span>
+                {STAGE_KEYS.map((st) => (
+                  <div
+                    key={st.key}
+                    onClick={() => openStageDrawer(st.key)}
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: "9999px",
+                      fontSize: "11px",
+                      cursor: "pointer",
+                      background: "rgba(255,255,255,0.06)",
+                      color: "#94a3b8",
+                    }}
+                  >
+                    <span>{st.code}</span> <span>{st.name}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <input
+                ref={inputRef}
+                type="text"
+                value={ceoDirective}
+                onChange={(e) => setCeoDirective(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleDispatchDirective();
+                  }
+                }}
+                placeholder="给 Neko-01 下达指令（发送后小人将自动走向工位开始总装）..."
+                style={{
+                  flex: 1,
+                  background: "#060A14",
+                  border: "1px solid rgba(0, 240, 255, 0.4)",
+                  borderRadius: "8px",
+                  padding: "10px 14px",
+                  color: "#F8FAFC",
+                  fontSize: "13px",
+                  outline: "none",
+                }}
+              />
+              <button
+                type="button"
+                className="cyber-btn cyan"
+                disabled={isDispatching || !ceoDirective.trim()}
+                onClick={handleDispatchDirective}
+                style={{ padding: "8px 16px", whiteSpace: "nowrap" }}
+              >
+                {isDispatching ? "点火总装中..." : "🚀 派发战术指令"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* 4. RED ALERT BANNER (80% BUDGET PAUSE) */}
       {budgetAlert80 && (
@@ -697,180 +695,7 @@ export default function CyberFactorioDeck({
         </div>
       )}
 
-      {/* 5. FLOATING BOTTOM CEO COMMAND CONSOLE WITH 01-09 COMPACT STAGE DOTS */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: "16px",
-          left: "50%",
-          transform: "translateX(-50%)",
-          width: "min(960px, 94vw)",
-          background: "rgba(9, 14, 28, 0.94)",
-          border: "1px solid rgba(0, 240, 255, 0.4)",
-          borderRadius: "16px",
-          padding: "12px 18px",
-          boxShadow: "0 16px 45px rgba(0, 0, 0, 0.8), 0 0 30px rgba(0, 240, 255, 0.15)",
-          backdropFilter: "blur(14px)",
-          zIndex: 35,
-        }}
-      >
-        {/* Top Mini Stage Indicator Bar (01-09) */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: "10px",
-            borderBottom: "1px solid rgba(120, 140, 255, 0.15)",
-            paddingBottom: "8px",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: "600" }}>流水线工序:</span>
-            {STAGE_KEYS.map((st) => {
-              const state = stagesState[st.key] || "pending";
-              const isDone = state === "done";
-              const isActive = state === "active";
-              const isBlocked = state === "blocked";
-              return (
-                <div
-                  key={st.key}
-                  onClick={() => openStageDrawer(st.key)}
-                  title={`${st.code} ${st.name} (${state}) - 点击展开微调抽屉`}
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "4px",
-                    padding: "3px 8px",
-                    borderRadius: "9999px",
-                    fontSize: "11px",
-                    cursor: "pointer",
-                    background: isActive ? "rgba(0, 240, 255, 0.2)" : isDone ? "rgba(0, 255, 157, 0.12)" : isBlocked ? "rgba(255, 0, 85, 0.15)" : "rgba(255, 255, 255, 0.04)",
-                    border: `1px solid ${isActive ? "#00F0FF" : isDone ? "#00FF9D" : isBlocked ? "#FF0055" : "rgba(255, 255, 255, 0.1)"}`,
-                    color: isActive ? "#00F0FF" : isDone ? "#00FF9D" : isBlocked ? "#FF0055" : "#94a3b8",
-                    transition: "all 0.15s ease",
-                  }}
-                >
-                  <span style={{ fontWeight: "bold" }}>{st.code}</span>
-                  <span>{st.name}</span>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Quick Preset Directive Chips */}
-          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <span style={{ fontSize: "11px", color: "#64748b" }}>模板:</span>
-            {PRESET_DIRECTIVES.map((p, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => setCeoDirective(p.prompt)}
-                style={{
-                  background: "rgba(0, 240, 255, 0.08)",
-                  border: "1px solid rgba(0, 240, 255, 0.25)",
-                  color: "#cbd5e1",
-                  borderRadius: "6px",
-                  padding: "2px 8px",
-                  fontSize: "11px",
-                  cursor: "pointer",
-                }}
-              >
-                <span>{p.icon}</span> <span>{p.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Input & Dispatch Row */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          {/* Flow Selector */}
-          <select
-            value={selectedFlow}
-            onChange={(e) => setSelectedFlow(e.target.value)}
-            style={{
-              background: "#060A14",
-              color: "#00F0FF",
-              border: "1px solid rgba(0, 240, 255, 0.4)",
-              borderRadius: "8px",
-              padding: "9px 12px",
-              fontSize: "12px",
-              outline: "none",
-              cursor: "pointer",
-            }}
-          >
-            <option value="FLOW-SOFTWARE">💻 软件产研 (01-09)</option>
-            <option value="FLOW-MARKETING">📢 品牌营销流</option>
-            <option value="FLOW-RESEARCH">🔬 行业竞争情报</option>
-          </select>
-
-          {/* Text Input */}
-          <input
-            ref={inputRef}
-            type="text"
-            value={ceoDirective}
-            onChange={(e) => setCeoDirective(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleDispatchDirective();
-              }
-            }}
-            placeholder="给 Neko-01 下达指令（发送后小人将自动走向工作台执行）..."
-            style={{
-              flex: 1,
-              background: "#060A14",
-              border: "1px solid rgba(0, 240, 255, 0.4)",
-              borderRadius: "8px",
-              padding: "10px 14px",
-              color: "#F8FAFC",
-              fontSize: "13px",
-              outline: "none",
-            }}
-          />
-
-          {/* Voice Input Button */}
-          <button
-            type="button"
-            className={`cyber-btn ${isListening ? "danger recording" : ""}`}
-            style={{ padding: "8px 12px" }}
-            onClick={toggleSpeechRecognition}
-            title={isListening ? "正在聆听语音输入..." : "点击开启语音指令输入"}
-          >
-            <span>🎙️</span>
-          </button>
-
-          {/* Dispatch Button */}
-          <button
-            type="button"
-            className="cyber-btn cyan"
-            disabled={isDispatching || !ceoDirective.trim()}
-            onClick={handleDispatchDirective}
-            style={{ padding: "8px 16px", whiteSpace: "nowrap" }}
-          >
-            {isDispatching ? "点火总装中..." : "🚀 派发战术指令"}
-          </button>
-        </div>
-
-        {/* Success / Alert message */}
-        {dispatchSuccessMsg && (
-          <div
-            style={{
-              marginTop: "8px",
-              padding: "6px 12px",
-              borderRadius: "6px",
-              background: "rgba(0, 255, 157, 0.15)",
-              border: "1px solid #00FF9D",
-              color: "#00FF9D",
-              fontSize: "12px",
-            }}
-          >
-            {dispatchSuccessMsg}
-          </div>
-        )}
-      </div>
-
-      {/* 6. FLYING PURPLE CRYSTALS PARTICLES */}
+      {/* 5. FLYING PURPLE CRYSTALS PARTICLES */}
       {flyingCrystals.map((fc) => (
         <div
           key={fc.id}
@@ -889,7 +714,7 @@ export default function CyberFactorioDeck({
         </div>
       ))}
 
-      {/* 7. SLIDE-OUT MICRO-CONTROL STAGE DRAWER */}
+      {/* 6. SLIDE-OUT MICRO-CONTROL STAGE DRAWER */}
       {selectedStage && (
         <CyberStageDrawer
           stage={selectedStage}
@@ -906,7 +731,7 @@ export default function CyberFactorioDeck({
         />
       )}
 
-      {/* 8. HOLOGRAPHIC APPROVAL MODAL (WECOM DECOUPLED) */}
+      {/* 7. HOLOGRAPHIC APPROVAL MODAL (WECOM DECOUPLED) */}
       {approvalModal && (
         <div className="cyber-modal-overlay">
           <div className="cyber-modal-card red-alert">
@@ -959,7 +784,7 @@ export default function CyberFactorioDeck({
         </div>
       )}
 
-      {/* 9. METACORP MULTI-WORLD EXCHANGE MODAL */}
+      {/* 8. METACORP MULTI-WORLD EXCHANGE MODAL */}
       {showExchangeModal && (
         <div className="cyber-modal-overlay" onClick={() => setShowExchangeModal(false)}>
           <div className="cyber-modal-card" style={{ maxWidth: "780px" }} onClick={(e) => e.stopPropagation()}>
