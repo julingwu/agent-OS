@@ -502,6 +502,7 @@ function MainApp({ onLogout }) {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [view, setView] = useState("chat");       // chat | workbench（整窗切换）
   const [workbenchSrc, setWorkbenchSrc] = useState("");
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [ctx, setCtx] = useState(null);
   const [toast, setToast] = useState("");
   const [pairCode, setPairCode] = useState(null);
@@ -509,6 +510,36 @@ function MainApp({ onLogout }) {
   const streamRef = useRef(null);
   const listRef = useRef(null);
   const imgRef = useRef(null);
+
+  const scrollToBottom = useCallback((smooth = false) => {
+    setShowScrollBottom(false);
+    const el = listRef.current;
+    if (!el) return;
+    if (smooth && typeof el.scrollTo === "function") {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+    requestAnimationFrame(() => {
+      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+    });
+    setTimeout(() => {
+      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+    }, 60);
+  }, []);
+
+  const handleMessagesScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setShowScrollBottom(dist > 100);
+  }, []);
+
+  useEffect(() => {
+    if (view === "chat") {
+      scrollToBottom(false);
+    }
+  }, [view, scrollToBottom]);
   const activeRef = useRef(null);
   activeRef.current = activeId;
   const bootCursorRef = useRef(0);   // 打开界面时的事件游标：早于它的是历史，不回放审批卡
@@ -592,6 +623,7 @@ function MainApp({ onLogout }) {
         ].sort((a, b) => (a.id || 0) - (b.id || 0));
         setMessages(merged);
         setActivity([]);
+        scrollToBottom(false);
       } catch (e) {
         if (!cancelled) setError(String(e.message || e));
       }
@@ -794,6 +826,7 @@ function MainApp({ onLogout }) {
     const text = draft.trim();
     if (!text || !activeId) return;
     setDraft("");
+    scrollToBottom(false);
     try {
       await api(`/v1/sessions/${activeId}/messages`, {
         method: "POST",
@@ -1148,8 +1181,10 @@ function MainApp({ onLogout }) {
   };
 
   useEffect(() => {
-    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages, activity]);
+    if (!showScrollBottom) {
+      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
+  }, [messages, activity, streamText, showScrollBottom]);
 
   const activeSession = sessions.find((s) => s.id === activeId);
   const activeBot =
@@ -1247,10 +1282,6 @@ function MainApp({ onLogout }) {
     return (
       <div className="workbench-shell">
         <iframe className="workbench-frame" title="cyberdeck" src={workbenchSrc} />
-        <div className="workbench-bar">
-          <span>赛博指挥舱 · 项目工作台</span>
-          <button onClick={() => setView("chat")}>← 返回对话</button>
-        </div>
       </div>
     );
   }
@@ -1398,7 +1429,7 @@ function MainApp({ onLogout }) {
           </div>
         </header>
 
-        <div className="messages" ref={listRef}>
+        <div className="messages" ref={listRef} onScroll={handleMessagesScroll}>
           {messages.map((m) => (
             m.kind === "artifact.attached" ? (
               <ArtifactBubble key={`art-${m.id}`} item={m.artifact} ts={m.ts}
@@ -1435,6 +1466,21 @@ function MainApp({ onLogout }) {
             </details>
           )}
         </div>
+
+        {showScrollBottom && (
+          <button
+            type="button"
+            className="scroll-bottom-btn"
+            onClick={() => scrollToBottom(true)}
+            title="回到最新消息"
+            aria-label="回到最新消息"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14" />
+              <path d="m19 12-7 7-7-7" />
+            </svg>
+          </button>
+        )}
 
         <div className="composer">
           {error && <div className="error-bar" onClick={() => setError("")}>{error}（点击关闭）</div>}

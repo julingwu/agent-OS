@@ -964,6 +964,30 @@ button .icon { flex-shrink: 0; }
   padding: 5px;
   color: var(--text);
 }
+.btn-return-workspace {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.18);
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  color: #c7d2fe;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-right: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: all 0.15s ease;
+}
+.btn-return-workspace:hover {
+  background: rgba(99, 102, 241, 0.32);
+  border-color: rgba(99, 102, 241, 0.75);
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+}
 .main {
   display: flex;
   flex-direction: column;

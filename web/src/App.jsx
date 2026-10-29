@@ -276,6 +276,15 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
   const openChat = (chat) => { setActive(chat); setTab("chats"); };
   const openApprovals = () => { setFocusedTask(null); setShowDetail(false); setTab("approvals"); };
 
+  const returnToMainUI = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: "SWITCH_TO_CHAT" }, "*");
+    } else {
+      window.location.href = "/ui/";
+    }
+  };
+
   const navButton = ([key, icon, label]) => (
     <button
       key={key}
@@ -300,15 +309,9 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
         </div>
         <div
           className="workspace-switcher"
-          onClick={() => {
-            if (window.parent && window.parent !== window) {
-              window.parent.postMessage({ type: "SWITCH_TO_CHAT" }, "*");
-            } else {
-              window.location.href = "/ui/";
-            }
-          }}
+          onClick={returnToMainUI}
           style={{ cursor: "pointer" }}
-          title="点击返回 AI 团队主工作台（对话与电脑协作）"
+          title="点击返回 AI 团队主界面（对话与电脑协作）"
         >
           <Icon name="org" /><div><b>我的工作空间</b><small>← 返回 AI 团队主界面</small></div>
           <span className="spacer" /><Icon name="chevron" />
@@ -411,31 +414,10 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
           <a
             href="/ui/"
             className="btn-return-workspace"
-            onClick={(e) => {
-              if (window.parent && window.parent !== window) {
-                e.preventDefault();
-                window.parent.postMessage({ type: "SWITCH_TO_CHAT" }, "*");
-              }
-            }}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              padding: "5px 14px",
-              borderRadius: "6px",
-              background: "rgba(99, 102, 241, 0.18)",
-              border: "1px solid rgba(99, 102, 241, 0.5)",
-              color: "#c7d2fe",
-              textDecoration: "none",
-              fontSize: "12px",
-              fontWeight: 600,
-              cursor: "pointer",
-              marginRight: "12px",
-              boxShadow: "0 2px 6px rgba(0,0,0,0.2)",
-            }}
+            onClick={returnToMainUI}
             title="返回 AgentOS 主界面（角色助手对话、实时电脑桌面操控、技能赋予）"
           >
-            ← 返回 AI 团队主工作台
+            ← 返回 AI 团队主界面
           </a>
           <span className="connection-label"><span className="live-dot" /> 本地工作空间</span>
           <button className="icon-btn" title="使用帮助" aria-label="使用帮助" onClick={() => setShowHelp(true)}>

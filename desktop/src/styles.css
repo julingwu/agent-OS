@@ -31,6 +31,31 @@ body { background: var(--bg); color: var(--text); font-size: 14px; }
 button { font: inherit; cursor: pointer; border: none; background: none; color: inherit; }
 input, textarea { font: inherit; }
 
+/* 自定义极简现代暗色滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+  transition: background 0.15s ease;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.45);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+}
+
 /* ==================================================================
    赛博风登录页
    ================================================================== */
@@ -282,7 +307,7 @@ input, textarea { font: inherit; }
 }
 .connect-apps:hover { border-color: var(--cyan); color: var(--cyan); }
 
-.chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #0b0e1b; }
+.chat { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #0b0e1b; }
 .chat-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; border-bottom: 1px solid var(--line); }
 .chat-title { font-weight: 650; letter-spacing: 0.04em; }
 .chat-sub { font-size: 11px; color: var(--sub); margin-top: 3px; display: flex; align-items: center; gap: 6px; }
@@ -388,6 +413,49 @@ input, textarea { font: inherit; }
   background: rgba(255, 93, 115, 0.08); color: #ffa3b1;
   border: 1px solid rgba(255, 93, 115, 0.3);
   border-radius: 9px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px;
+}
+
+/* 浮动返回最新消息圆形按钮 */
+.scroll-bottom-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 86px;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 30;
+  cursor: pointer;
+  background: rgba(21, 26, 48, 0.92);
+  border: 1px solid rgba(120, 140, 255, 0.28);
+  color: #c7d2fe;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 10px rgba(99, 102, 241, 0.15);
+  backdrop-filter: blur(8px);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.scroll-bottom-btn:hover {
+  background: rgba(30, 38, 70, 0.98);
+  border-color: rgba(99, 102, 241, 0.65);
+  color: #ffffff;
+  transform: translateX(-50%) translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55), 0 0 14px rgba(99, 102, 241, 0.35);
+}
+.scroll-bottom-btn:active {
+  transform: translateX(-50%) translateY(0);
+}
+[data-theme="light"] .scroll-bottom-btn {
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #4f46e5;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+[data-theme="light"] .scroll-bottom-btn:hover {
+  background: #ffffff;
+  color: #3730a3;
+  border-color: #6366f1;
 }
 
 .panel { border-left: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
