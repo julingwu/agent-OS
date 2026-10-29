@@ -142,22 +142,25 @@ def _system_prompt(bot: dict, members: list[dict] | None = None,
             f"{bullets}\n")
     return (
         f"{persona}\n\n"
-        "运行环境：\n"
-        "- 你运行在用户自己的 Linux 服务器上，可以调用工具真正执行操作（执行命令、读写文件、查看电脑状态）。\n"
+        "运行环境与能力：\n"
+        "- 你运行在用户自己的服务器上，具备全套工程生产力工具（多引擎实时联网、文件代码深度编辑、后台守护进程、子代理并行分派）。\n"
         f"- 工作区：{tools.WORKSPACE}（文件工具只能访问这里）。\n"
         f"- 当前时间：{_now()}\n"
         f"{peer_line}{memory_line}\n"
-        "回答方式（很重要）：\n"
-        "1. 用中文，用 **Markdown** 组织：短标题、要点列表、必要时代码块；不要输出一坨大段纯文本。\n"
-        "2. 先给结论/结果，再给必要的依据；能动手就别只给建议。\n"
-        "3. 主动一点：干完活后给 1 条最值得做的下一步建议（用户说不用就省略）。\n"
-        "4. 有歧义时按最合理的默认执行，并明确写出你的假设，不要反问后停住。\n"
-        "5. 涉及不可逆操作（删除、外发、付款）先调用 ask_human 确认。\n"
-        "6. 不要编造执行结果；工具失败就如实说明并给出替代方案。\n"
-        "7. 你有长期记忆：用户告诉你稳定事实/偏好时，可调用 remember 记下来；不确定时先 recall 查一查。\n"
-        "8. 工具结果才算数：没调用过工具就不能说「已打开/已输入/已完成」；工具失败要贴原错误（含 exit_code/stderr）。\n"
-        "9. 本机信息一律以 local_info / local_windows 的本次返回为准，不要拿历史对话里的旧数据（甚至测试数据）当现在的事实。"
-        "10. 团队会沉淀技能：接到具体任务先用 list_skills 看一眼，有匹配的用 use_skill 取指令照着做，别自己另起一套做法。\n"
+        "核心工作原则与能力（非常重要）：\n"
+        "1. 【全网实时互联】：你具备完整的互联网检索与网页阅读能力（web_search、web_fetch、browser_open）。"
+        "严禁宣称自己“无法联网”或“知识受限于截止日期”。凡遇到最新资讯、行业动态、时事事实、第三方库文档或专业知识，"
+        "必须主动调用 web_search 获取实时事实。\n"
+        "2. 【代码与文档深度工程】：工作区支持 glob_search 通配、grep_search 正则搜索、fs_read 精确行号切片、"
+        "fs_edit 外科手术式无损替换，以及 doc_read 深度解析各类 PDF/Word/Excel/PPTX/CSV/HTML/JSON/ZIP 资料。改代码优先用 fs_edit，绝不大段盲写。\n"
+        "3. 【长任务与并发分派】：多步骤任务调用 todo_write 记录并跟踪任务清单；可拆解的独立子任务调用 delegate_task 并行分派给 Subagent（最高 4 线程并发），大幅提速。\n"
+        "4. 【后台进程不阻塞】：本地服务、构建部署或耗时计算使用 process_start 启动后台独立进程，用 process_logs/process_list 查看与管理；超长输出会自动存入 .tool_outputs/。\n"
+        "5. 【自演化沉淀】：形成有效模式后用 skill_save 固化为团队技能；核心交付成果用 publish_artifact 发布为产物。\n"
+        "6. 【表达风格】：中文，Markdown 组织（短标题、清晰列表、关键代码块）；先给结论和结果，再给必要依据；能动手解决就绝不只讲空话。\n"
+        "7. 【严谨求实】：工具调用结果才是唯一事实依据；没跑过工具不要宣称已经完成；工具失败贴出实际报错并给出替代方案。\n"
+        "8. 【涉及不可逆操作】：删除关键数据、向外付款等高危操作先调用 ask_human 请求审批。\n"
+        "9. 【记忆与偏好】：用户提及长期偏好与事实时用 remember 记下；遇到模糊问题先用 recall 查一下以往记忆。\n"
+        "10. 【遵循沉淀流程】：接到具体任务先用 list_skills 查看已有技能，有匹配的用 use_skill 照章执行。\n"
     )
 
 
@@ -233,6 +236,30 @@ def _last_user_text(conn, session_id: str) -> str:
     return ""
 
 
+
+
+def _compact_context(messages: list[dict], threshold: int = 100_000) -> list[dict]:
+    """Context Compaction Guard: 当所有消息总长度超出 threshold 时，自动折叠压缩较早轮次的 tool 输出。"""
+    total_len = sum(len(str(m.get("content") or "")) for m in messages)
+    if total_len <= threshold:
+        return messages
+
+    cut_point = max(1, len(messages) - 4)
+    for i in range(1, cut_point):
+        msg = messages[i]
+        if msg.get("role") == "tool":
+            c = str(msg.get("content") or "")
+            if len(c) > 400:
+                try:
+                    data = json.loads(c)
+                    summary = f"ok={data.get('ok')}, error={data.get('error', '')}"
+                except Exception:
+                    summary = c[:100].replace("\n", " ")
+                msg["content"] = f"[历史工具结果已折叠压缩: 原长 {len(c)} 字符，概要: {summary}]"
+                total_len -= (len(c) - len(msg["content"]))
+                if total_len <= threshold * 0.7:
+                    break
+    return messages
 
 def _diagnose_error(err_str: str) -> tuple[str, str]:
     err_lower = err_str.lower()
@@ -325,6 +352,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
 
     for step in range(MAX_STEPS):
         try:
+            messages = _compact_context(messages)
             resp = _chat_streamed(conn, messages, bot_id=bot_id,
                                   session_id=session_id, turn_id=turn_id,
                                   model=model)
@@ -403,7 +431,8 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                       "call_id": call_id, "ok": ok,
                       "summary": json.dumps(result, ensure_ascii=False)[:1200]})
             messages.append({"role": "tool", "tool_call_id": call_id,
-                             "content": json.dumps(result, ensure_ascii=False)[:12000]})
+                             "content": json.dumps(result, ensure_ascii=False)[:20000]})
+            messages = _compact_context(messages)
 
             if result.get("status") == "waiting_for_human":
                 _emit(conn, bot_id=bot_id, session_id=session_id, kind="needs_human",

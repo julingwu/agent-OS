@@ -41,6 +41,7 @@ DEFAULT_SETTINGS = {
     "llm_api_key": "",
     "custom_models": [],
     "apply_model_globally": True,
+    "search_api_key": "",
 }
 
 
@@ -88,6 +89,12 @@ def _format_settings(stored: dict, conn=None) -> dict:
     merged["llm_api_key"] = ""
     merged["llm_api_key_masked"] = masked
     merged["llm_has_key"] = has_key
+    raw_search = str(merged.get("search_api_key") or "").strip()
+    masked_search = (raw_search[:3] + "..." + raw_search[-4:]) if len(raw_search) > 7 else ("***" if raw_search else "")
+    has_search = bool(raw_search)
+    merged["search_api_key"] = ""
+    merged["search_api_key_masked"] = masked_search
+    merged["search_has_key"] = has_search
     try:
         merged["usage_today_tokens"] = llm_config.get_today_token_usage(conn)
     except Exception:
@@ -124,6 +131,10 @@ def put_settings(body: SettingsPatch, device: dict = Depends(require_device)) ->
     with db.get_conn() as conn:
         llm_config.migrate_unlimited_default_if_needed(conn)
         for key, value in body.values.items():
+            if key == "search_api_key":
+                s_val = str(value or "").strip()
+                if not s_val or "..." in s_val:
+                    continue
             if key == "llm_api_key":
                 s_val = str(value or "").strip()
                 if not s_val or "..." in s_val:

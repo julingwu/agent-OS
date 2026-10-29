@@ -508,6 +508,47 @@ function MainApp({ onLogout }) {
   const [pairCode, setPairCode] = useState(null);
 
   const streamRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingFile(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const b64 = reader.result;
+        try {
+          const res = await api("/v1/workspace/upload", {
+            method: "POST",
+            body: {
+              filename: file.name,
+              data_b64: b64,
+              session_id: activeId,
+              bot_id: activeBot?.id,
+            },
+          });
+          if (res.ok) {
+            setToast(`已上传：${res.filename}`);
+            setDraft((prev) => (prev ? `${prev} [已上传文件: ${res.path}]` : `已上传文件: ${res.path}，请查阅并处理。`));
+          } else {
+            setError(res.error || "上传失败");
+          }
+        } catch (err) {
+          setError(err.message || "上传失败");
+        } finally {
+          setUploadingFile(false);
+          if (fileInputRef.current) fileInputRef.current.value = "";
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      setError(err.message || "文件读取失败");
+      setUploadingFile(false);
+    }
+  };
+
   const listRef = useRef(null);
   const imgRef = useRef(null);
 
@@ -1494,6 +1535,21 @@ function MainApp({ onLogout }) {
         <div className="composer">
           {error && <div className="error-bar" onClick={() => setError("")}>{error}（点击关闭）</div>}
           <div className="composer-row">
+            <input
+              type="file"
+              ref={fileInputRef}
+              style={{ display: "none" }}
+              onChange={handleFileUpload}
+            />
+            <button
+              type="button"
+              className="attach-btn"
+              title="上传文件到工作区与当前会话"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadingFile}
+            >
+              {uploadingFile ? "⏳" : "📎"}
+            </button>
             <textarea value={draft} placeholder={`给 ${activeBot?.name || "Bot"} 发消息…`}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -2278,6 +2334,7 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
       local_approval: local.local_approval !== false,
       memory_enabled: local.memory_enabled !== false,
       local_allow_dirs: local.local_allow_dirs || [],
+      search_api_key: (local.search_api_key !== undefined ? local.search_api_key : "").trim(),
     };
     if (local.llm_api_key && local.llm_api_key.trim()) {
       payload.llm_api_key = local.llm_api_key.trim();
@@ -2397,6 +2454,20 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
                 />
                 同时将此模型应用于所有已创建的智能体助手（清除个体独立覆盖）
               </label>
+
+              <div className="settings-divider" />
+
+              <h3>联网搜索 API Key（可选）</h3>
+              <p className="hint">Agent 默认采用国内必应/360/搜狗多引擎自动级联搜索（免 Key 运行）。若需配置 Tavily / 博查 / Serper Pro 高阶搜索服务，可在此填入 API Key。</p>
+              <div className="key-input-row" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={local.search_api_key !== undefined ? local.search_api_key : (local.search_has_key ? local.search_api_key_masked : "")}
+                  placeholder={local.search_has_key ? local.search_api_key_masked : "tvly-... / sk-... (可选，留空免Key)"}
+                  onChange={(e) => change("search_api_key", e.target.value)}
+                  style={{ flex: 1 }}
+                />
+              </div>
 
               <div className="settings-divider" />
 

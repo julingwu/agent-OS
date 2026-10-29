@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pathlib
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, Request
 
 from ..agent import tools
 from .stream import require_device
@@ -65,3 +65,118 @@ def workspace_raw(
     except UnicodeDecodeError:
         raise HTTPException(status_code=415, detail="binary file; use download") from None
     return Response(content=text, media_type="text/plain; charset=utf-8")
+
+import base64
+import mimetypes
+import os
+import re
+import time
+from typing import Optional
+from fastapi import File, Form, UploadFile
+from pydantic import BaseModel
+from .. import artifacts, db, events as ev
+
+
+class WorkspaceUploadBody(BaseModel):
+    filename: str
+    data_b64: str
+    session_id: Optional[str] = None
+    bot_id: Optional[str] = None
+
+
+def _clean_filename(name: str) -> str:
+    raw = os.path.basename((name or "").replace("\\", "/")).strip()
+    raw = re.sub(r'[<>:"|?*]', "", raw).strip("./ ")
+    if not raw:
+        raw = f"upload_{int(time.time())}.bin"
+    return raw
+
+
+@router.post("/workspace/upload")
+async def workspace_upload(
+    request: Request,
+    device: dict = Depends(require_device),
+) -> dict:
+    """上传文件到 Bot 工作区 (uploads/ 目录) 并同时发布为 Artifact。支持 JSON Base64 与 Multipart。"""
+    data = b""
+    filename = ""
+    target_session = None
+    target_bot = None
+
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        file_obj = form.get("file")
+        if file_obj is not None:
+            filename = getattr(file_obj, "filename", "upload.bin")
+            data = await file_obj.read()
+        target_session = form.get("session_id")
+        target_bot = form.get("bot_id")
+    else:
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"invalid json body: {exc}")
+        filename = body.get("filename", "")
+        target_session = body.get("session_id")
+        target_bot = body.get("bot_id")
+        raw_b64 = str(body.get("data_b64") or "").strip()
+        if raw_b64.startswith("data:"):
+            raw_b64 = raw_b64.split(",", 1)[-1]
+        try:
+            data = base64.b64decode(raw_b64)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+
+    if not data or not filename:
+        raise HTTPException(status_code=400, detail="missing filename or empty data")
+
+    clean_name = _clean_filename(filename)
+    root = tools.WORKSPACE.resolve()
+    uploads_dir = root / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = uploads_dir / clean_name
+    if dest.exists():
+        stem, ext = os.path.splitext(clean_name)
+        clean_name = f"{stem}_{int(time.time())}{ext}"
+        dest = uploads_dir / clean_name
+
+    dest.write_bytes(data)
+
+    mime, _ = mimetypes.guess_type(clean_name)
+    mime = mime or "application/octet-stream"
+
+    art = artifacts.save_bytes(clean_name, data, kind=mime)
+
+    if target_session:
+        try:
+            with db.get_conn() as conn:
+                event = ev.emit(
+                    conn,
+                    bot_id=target_bot or "bot_chief",
+                    session_id=str(target_session),
+                    kind="artifact.attached",
+                    origin="user",
+                    payload={
+                        "artifact_id": art["id"],
+                        "name": art["name"],
+                        "kind": art["kind"],
+                        "bytes": art["bytes"],
+                        "url": art["url"],
+                        "workspace_path": f"uploads/{clean_name}",
+                    },
+                )
+                conn.commit()
+                ev.broadcaster.publish(event)
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "filename": clean_name,
+        "path": f"uploads/{clean_name}",
+        "bytes": len(data),
+        "artifact_id": art["id"],
+        "url": art["url"],
+    }

@@ -48,26 +48,8 @@ def _safe_decode(data: bytes | str | None) -> str:
 
 
 def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict:
-    if not cmd.strip():
-        raise ToolError("empty command")
-    low = cmd.lower()
-    for bad in BLOCKED:
-        if bad in low:
-            raise ToolError(f"blocked dangerous command pattern: {bad!r}")
-    workdir = _jail(cwd)
-    workdir.mkdir(parents=True, exist_ok=True)
-    try:
-        proc = subprocess.run(cmd, shell=True, cwd=str(workdir),
-                              capture_output=True, text=False,
-                              timeout=max(1, min(int(timeout_s), 900)))
-        stdout = _safe_decode(proc.stdout)[:MAX_OUTPUT]
-        stderr = _safe_decode(proc.stderr)[:MAX_OUTPUT]
-        return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
-                "stdout": stdout, "stderr": stderr}
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"timeout after {timeout_s}s"}
-    except Exception as exc:
-        return {"ok": False, "error": f"exec failed: {exc}"}
+    from . import ext_tools
+    return ext_tools.run_exec(cmd, cwd=cwd, timeout_s=timeout_s)
 
 
 def _fs_list(path: str | None = None) -> dict:
@@ -86,19 +68,10 @@ def _fs_list(path: str | None = None) -> dict:
             "items": items}
 
 
-def _fs_read(path: str, max_bytes: int = 200_000) -> dict:
-    target = _jail(path)
-    if not target.is_file():
-        return {"ok": False, "error": "not a file"}
-    data = target.read_bytes()[:max(1, min(int(max_bytes), 1_000_000))]
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        try:
-            text = data.decode("gb18030")
-        except (UnicodeDecodeError, LookupError):
-            return {"ok": False, "error": "binary file (not utf-8/gb18030)"}
-    return {"ok": True, "path": str(target.relative_to(WORKSPACE)), "content": text}
+def _fs_read(path: str, max_bytes: int = 200_000, start_line: int | None = None,
+             end_line: int | None = None) -> dict:
+    from . import doc_tools
+    return doc_tools.fs_read(path, start_line=start_line, end_line=end_line, max_bytes=max_bytes)
 
 
 def _fs_write(path: str, content: str) -> dict:
@@ -128,13 +101,97 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
     """
     args = args or {}
     if name == "exec":
-        return _run_exec(str(args.get("cmd", "")), args.get("cwd"), args.get("timeout_s", 180))
+        from . import ext_tools
+        return ext_tools.run_exec(str(args.get("cmd", "")), args.get("cwd"), args.get("timeout_s", 180))
     if name == "fs_list":
         return _fs_list(args.get("path"))
     if name == "fs_read":
-        return _fs_read(str(args.get("path", "")), args.get("max_bytes", 200_000))
+        from . import doc_tools
+        return doc_tools.fs_read(str(args.get("path", "")), start_line=args.get("start_line"),
+                                 end_line=args.get("end_line"), max_bytes=args.get("max_bytes", 200_000))
     if name == "fs_write":
         return _fs_write(str(args.get("path", "")), str(args.get("content", "")))
+    if name == "fs_edit":
+        from . import doc_tools
+        return doc_tools.fs_edit(str(args.get("path", "")), str(args.get("old_text", "")),
+                                 str(args.get("new_text", "")), bool(args.get("replace_all", False)))
+    if name == "glob_search":
+        from . import doc_tools
+        return doc_tools.glob_search(str(args.get("pattern", "*")), str(args.get("path", ".")))
+    if name == "grep_search":
+        from . import doc_tools
+        return doc_tools.grep_search(str(args.get("pattern", "")), str(args.get("path", ".")),
+                                     str(args.get("file_glob", "*")), int(args.get("context_lines", 1)),
+                                     int(args.get("max_matches", 80)))
+    if name == "doc_read":
+        from . import doc_tools
+        return doc_tools.doc_read(str(args.get("path", "")), max_chars=args.get("max_chars", 30000),
+                                  sheet=args.get("sheet"))
+    if name == "web_search":
+        from . import web_tools
+        return web_tools.web_search(str(args.get("query", "")), count=int(args.get("count", 8)))
+    if name == "web_fetch":
+        from . import web_tools
+        return web_tools.web_fetch(str(args.get("url", "")), max_chars=int(args.get("max_chars", 25000)))
+    if name == "browser_open":
+        from . import web_tools
+        return web_tools.browser_open(str(args.get("url", "")), wait_ms=int(args.get("wait_ms", 2500)),
+                                      screenshot=bool(args.get("screenshot", False)),
+                                      selector=args.get("selector"),
+                                      max_chars=int(args.get("max_chars", 20000)), emit=emit)
+    if name == "process_start":
+        from . import ext_tools
+        return ext_tools.process_start(str(args.get("cmd", "")), name=args.get("name"), cwd=args.get("cwd"),
+                                       bot_id=bot_id, session_id=session_id)
+    if name == "process_list":
+        from . import ext_tools
+        return ext_tools.process_list(bot_id=bot_id, state=args.get("state"))
+    if name == "process_logs":
+        from . import ext_tools
+        return ext_tools.process_logs(str(args.get("proc_id", "")), lines=int(args.get("lines", 50)))
+    if name == "process_stop":
+        from . import ext_tools
+        return ext_tools.process_stop(str(args.get("proc_id", "")))
+    if name == "todo_write":
+        from . import ext_tools
+        return ext_tools.todo_write(args.get("todos", []), session_id=session_id)
+    if name == "todo_read":
+        from . import ext_tools
+        return ext_tools.todo_read(session_id=session_id)
+    if name == "delegate_task":
+        from . import ext_tools
+        return ext_tools.delegate_task(args.get("tasks", []))
+    if name == "skill_save":
+        from . import ext_tools
+        return ext_tools.skill_save(str(args.get("name", "")), str(args.get("description", "")),
+                                    str(args.get("instructions", "")), bot_id=bot_id)
+    if name == "skill_delete":
+        from . import ext_tools
+        return ext_tools.skill_delete(str(args.get("name_or_id", "")), bot_id=bot_id)
+    if name == "routine_create":
+        from . import ext_tools
+        return ext_tools.routine_create(str(args.get("title", "")), str(args.get("prompt", "")),
+                                        str(args.get("schedule", "")), bot_id=bot_id, session_id=session_id)
+    if name == "routine_delete":
+        from . import ext_tools
+        return ext_tools.routine_delete(str(args.get("routine_id", "")))
+    if name == "publish_artifact":
+        from . import ext_tools
+        return ext_tools.publish_artifact(str(args.get("path", "")), name=args.get("name"),
+                                          mime=args.get("mime"), emit=emit)
+    if name == "computer_screenshot":
+        from . import ext_tools
+        return ext_tools.computer_screenshot(emit=emit)
+    if name == "computer_action":
+        from . import ext_tools
+        return ext_tools.computer_action(str(args.get("action", "")), args.get("params"))
+    if name == "mcp_list_tools":
+        from . import ext_tools
+        return ext_tools.mcp_list_tools(args.get("server_url"))
+    if name == "mcp_call":
+        from . import ext_tools
+        return ext_tools.mcp_call(str(args.get("tool_name", "")), args.get("arguments", {}),
+                                  server_url=args.get("server_url"))
     if name == "computer_info":
         return _computer_info()
     if name == "ask_human":
@@ -349,11 +406,221 @@ TOOL_SPECS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "fs_read",
-        "description": "读取工作区里的文本文件。",
+        "description": "读取工作区里的文件。支持文本分段/行号切片读取与自动解析各类 Office/PDF 文档。",
         "parameters": {"type": "object", "properties": {
-            "path": {"type": "string"},
-            "max_bytes": {"type": "integer"},
+            "path": {"type": "string", "description": "相对工作区的路径"},
+            "start_line": {"type": "integer", "description": "起始行号（1-indexed，可选）"},
+            "end_line": {"type": "integer", "description": "结束行号（1-indexed，可选）"},
+            "max_bytes": {"type": "integer", "description": "最大读取字节数限制，默认 200,000"},
         }, "required": ["path"]},
+    }},
+    {"type": "function", "function": {
+        "name": "fs_edit",
+        "description": "外科手术式精确替换工作区文本文件中的内容。old_text 须在目标文件中精准匹配且唯一。",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "相对工作区的文件路径"},
+            "old_text": {"type": "string", "description": "需要被替换的原文内容（精准匹配空格缩进）"},
+            "new_text": {"type": "string", "description": "替换后的新内容"},
+            "replace_all": {"type": "boolean", "description": "若为 true 则替换所有匹配项，默认 false"},
+        }, "required": ["path", "old_text", "new_text"]},
+    }},
+    {"type": "function", "function": {
+        "name": "glob_search",
+        "description": "在工作区内根据通配符模式（如 *.py, **/*.json）快速递归搜索文件路径。",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"type": "string", "description": "通配符模式，如 *.py 或 **/*.md"},
+            "path": {"type": "string", "description": "相对工作区的起始搜索目录，默认 ."},
+        }, "required": ["pattern"]},
+    }},
+    {"type": "function", "function": {
+        "name": "grep_search",
+        "description": "在工作区文本文件中搜索正则表达式或文本片段，返回行号与上下文前后行。",
+        "parameters": {"type": "object", "properties": {
+            "pattern": {"type": "string", "description": "要搜索的正则表达式或文本模式"},
+            "path": {"type": "string", "description": "相对工作区的搜索目录，默认 ."},
+            "file_glob": {"type": "string", "description": "文件类型过滤通配符，如 *.py 或 *.json，默认 *"},
+            "context_lines": {"type": "integer", "description": "匹配行前后展示的上下文行数，默认 1"},
+            "max_matches": {"type": "integer", "description": "最大匹配条数限制，默认 80"},
+        }, "required": ["pattern"]},
+    }},
+    {"type": "function", "function": {
+        "name": "doc_read",
+        "description": "解析各类文档、表格、幻灯片与压缩包内容：PDF, Word(.docx), Excel(.xlsx), PPTX, CSV, HTML, JSON, ZIP/TAR。",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "相对工作区的文件路径"},
+            "max_chars": {"type": "integer", "description": "最大提取字符数，默认 30000"},
+            "sheet": {"type": "string", "description": "Excel 工作表名称（可选，默认第一张表）"},
+        }, "required": ["path"]},
+    }},
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "实时多引擎联网搜索（国内必应、360、搜狗级联，获取最新资讯、行业事实与技术文档）。",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "搜索关键词或自然语言问题"},
+            "count": {"type": "integer", "description": "返回结果条数，默认 8 条"},
+        }, "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "web_fetch",
+        "description": "抓取目标 URL 网页并提取为排版规整的高质量 Markdown 正文（自动剥离广告导航并处理重定向）。",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string", "description": "目标网页的完整 HTTP/HTTPS 链接"},
+            "max_chars": {"type": "integer", "description": "提取正文的最大字符数，默认 25000"},
+        }, "required": ["url"]},
+    }},
+    {"type": "function", "function": {
+        "name": "browser_open",
+        "description": "在服务端启动无头 Chromium 浏览器完整渲染动态 JS 页面，支持 DOM 提取与网页全屏截图挂载。",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string", "description": "目标网页的完整 HTTP/HTTPS 链接"},
+            "wait_ms": {"type": "integer", "description": "等待页面 JS 加载渲染时间（毫秒），默认 2500"},
+            "screenshot": {"type": "boolean", "description": "是否同时截取全屏并挂载为图片产物，默认 false"},
+            "max_chars": {"type": "integer", "description": "DOM 提取文字上限，默认 20000"},
+        }, "required": ["url"]},
+    }},
+    {"type": "function", "function": {
+        "name": "process_start",
+        "description": "在后台以独立进程组启动长期运行的守护任务（如本地开发服务、耗时数据计算），不阻塞当前交互。",
+        "parameters": {"type": "object", "properties": {
+            "cmd": {"type": "string", "description": "要启动的后台命令"},
+            "name": {"type": "string", "description": "进程标识名（可选）"},
+            "cwd": {"type": "string", "description": "相对工作区的工作目录（可选）"},
+        }, "required": ["cmd"]},
+    }},
+    {"type": "function", "function": {
+        "name": "process_list",
+        "description": "查看当前活跃或历史后台进程状态与 PID。",
+        "parameters": {"type": "object", "properties": {
+            "state": {"type": "string", "description": "按状态筛选：running / exited / failed / stopped，缺省查全部"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "process_logs",
+        "description": "查看指定后台进程的最新输出日志片段。",
+        "parameters": {"type": "object", "properties": {
+            "proc_id": {"type": "string", "description": "进程 ID（如 proc_xxxx）"},
+            "lines": {"type": "integer", "description": "返回末尾行数，默认 50 行"},
+        }, "required": ["proc_id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "process_stop",
+        "description": "主动停止/杀死指定的后台运行进程。",
+        "parameters": {"type": "object", "properties": {
+            "proc_id": {"type": "string", "description": "进程 ID（如 proc_xxxx）"},
+        }, "required": ["proc_id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "todo_write",
+        "description": "持久化更新本会话的任务步骤清单（Checklist），保持长任务与复杂规划的状态对齐。",
+        "parameters": {"type": "object", "properties": {
+            "todos": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "task": {"type": "string"},
+                        "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                    },
+                    "required": ["task", "status"],
+                },
+                "description": "任务清单项列表",
+            },
+        }, "required": ["todos"]},
+    }},
+    {"type": "function", "function": {
+        "name": "todo_read",
+        "description": "读取当前会话的任务步骤清单，查看未完成或已完成的进度情况。",
+        "parameters": {"type": "object", "properties": {}},
+    }},
+    {"type": "function", "function": {
+        "name": "delegate_task",
+        "description": "将多个独立子任务并行分派给并发子代理（Subagent），最多支持 4 线程并发执行，聚合返回成果。",
+        "parameters": {"type": "object", "properties": {
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "goal": {"type": "string"},
+                        "context": {"type": "string"},
+                    },
+                    "required": ["goal"],
+                },
+                "description": "子任务列表（每个任务包含 goal 目标及 context 上下文）",
+            },
+        }, "required": ["tasks"]},
+    }},
+    {"type": "function", "function": {
+        "name": "skill_save",
+        "description": "将当前总结出的优质工作流程或专业指令固化保存为新技能（自演化沉淀）。",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "技能名称，如 深度行业调研流程"},
+            "description": {"type": "string", "description": "技能触发场景说明"},
+            "instructions": {"type": "string", "description": "技能执行详细指令（支持 {input} 占位符）"},
+        }, "required": ["name", "description", "instructions"]},
+    }},
+    {"type": "function", "function": {
+        "name": "skill_delete",
+        "description": "删除不再需要的技能。",
+        "parameters": {"type": "object", "properties": {
+            "name_or_id": {"type": "string", "description": "技能名称或 ID"},
+        }, "required": ["name_or_id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "routine_create",
+        "description": "为当前 Bot 创建定时或周期性自动执行任务（例行任务），如每日巡检或定时早报。",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "任务标题"},
+            "prompt": {"type": "string", "description": "触发时让 Bot 执行的指令提示词"},
+            "schedule": {"type": "string", "description": "调度表达式，如 interval:30m, interval:2h, daily:09:00"},
+        }, "required": ["title", "prompt", "schedule"]},
+    }},
+    {"type": "function", "function": {
+        "name": "routine_delete",
+        "description": "删除指定的例行任务。",
+        "parameters": {"type": "object", "properties": {
+            "routine_id": {"type": "string", "description": "例行任务 ID（如 rtn_xxxx）"},
+        }, "required": ["routine_id"]},
+    }},
+    {"type": "function", "function": {
+        "name": "publish_artifact",
+        "description": "将工作区内的报告、图表或二进制文件发布为可供用户下载和直接在会话中预览的产物（Artifact）。",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "工作区内的文件路径"},
+            "name": {"type": "string", "description": "展示文件名（可选）"},
+            "mime": {"type": "string", "description": "MIME 类型（可选，默认根据后缀自动探测）"},
+        }, "required": ["path"]},
+    }},
+    {"type": "function", "function": {
+        "name": "computer_screenshot",
+        "description": "截取当前服务器 X11 桌面图像并作为产物在聊天会话中直接展示给用户。",
+        "parameters": {"type": "object", "properties": {}},
+    }},
+    {"type": "function", "function": {
+        "name": "computer_action",
+        "description": "在服务器 X11 桌面上执行键鼠动作（click/move/type/key/drag/probe）。",
+        "parameters": {"type": "object", "properties": {
+            "action": {"type": "string", "enum": ["click", "move", "type", "key", "drag", "probe"]},
+            "params": {"type": "object", "description": "动作参数（坐标 x/y、按键 keys、输入 text 等）"},
+        }, "required": ["action"]},
+    }},
+    {"type": "function", "function": {
+        "name": "mcp_list_tools",
+        "description": "查看已配置的 MCP 服务工具或指定远程 MCP Server 支持的所有工具能力。",
+        "parameters": {"type": "object", "properties": {
+            "server_url": {"type": "string", "description": "可选的 MCP 服务 HTTP 端点 URL"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "mcp_call",
+        "description": "通过标准 MCP 协议调用外部服务器工具。",
+        "parameters": {"type": "object", "properties": {
+            "tool_name": {"type": "string", "description": "MCP 工具名称"},
+            "arguments": {"type": "object", "description": "传入工具的参数字典"},
+            "server_url": {"type": "string", "description": "可选的 MCP 服务 HTTP 端点 URL"},
+        }, "required": ["tool_name", "arguments"]},
     }},
     {"type": "function", "function": {
         "name": "fs_write",

@@ -1638,3 +1638,27 @@ input, textarea { font: inherit; }
   backdrop-filter: blur(4px) !important;
   z-index: 90 !important;
 }
+
+.attach-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  min-height: 42px;
+}
+.attach-btn:hover {
+  background: rgba(56, 232, 255, 0.12);
+  border-color: rgba(56, 232, 255, 0.4);
+}
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
