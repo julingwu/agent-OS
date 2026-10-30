@@ -280,8 +280,8 @@ export default function CyberFactorioDeck({
         return;
       }
 
-      // Default: 9-stage pipeline
-      const flowId = taskData.flow || (taskData.tplKey === "budget" ? "FLOW-ANALYSIS" : "FLOW-SOFTWARE");
+      // Default: AI 架构师自适应流水线
+      const flowId = taskData.flow || "adaptive";
       const res = await api.createProject({
         name: req.slice(0, 40) || "新流水线项目",
         requirement: req,

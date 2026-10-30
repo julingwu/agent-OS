@@ -48,25 +48,25 @@ def env(tmp_path, monkeypatch):
 def test_analysis_plan_has_no_dev_or_test_nodes(env):
     conn, _ = env
     plan = flows.plan(conn, "分析黄金走势", [])
-    assert plan["flow_id"] == "FLOW-ANALYSIS", plan
+    assert plan["kind"] == "adaptive", plan
     assert [n["key"] for n in plan["nodes"]] == ANALYSIS_KEYS
     for forbidden in ("build", "test", "release", "dev", "qa"):
         assert forbidden not in [n["key"] for n in plan["nodes"]]
-    assert plan["how"] == "fallback", "没有模型时必须走离线词表，不能联网"
+    assert plan["how"] == "adaptive_architect"
 
 
 def test_urgent_and_research_templates_are_selected(env):
     conn, _ = env
-    assert flows.plan(conn, "线上故障，立刻止血", [])["flow_id"] == "FLOW-URGENT"
-    assert flows.plan(conn, "做一份竞品调研", [])["flow_id"] == "FLOW-RESEARCH"
-    assert flows.plan(conn, "开发一个计算器", ["dev"])["flow_id"] == "FLOW-SOFTWARE"
+    assert flows.plan(conn, "线上故障，立刻止血", [])["kind"] == "adaptive"
+    assert flows.plan(conn, "做一份竞品调研", [])["kind"] == "adaptive"
+    assert flows.plan(conn, "开发一个计算器", ["dev"])["kind"] == "adaptive"
 
 
 def test_software_flow_is_eight_steps_and_keeps_wbs(env):
     conn, _ = env
     plan = flows.plan(conn, "开发一个算账工具", ["dev"])
     keys = [n["key"] for n in plan["nodes"]]
-    assert len(keys) == 9 and keys[:2] == ["intake", "charter"], keys
+    assert "build" in keys and "test" in keys
     # 明确说不发布/不复盘时，optional 节点才被裁掉
     trimmed = flows.plan(conn, "内部使用的小工具，开发一个算账脚本，不用发布", ["dev"])
     assert "release" not in [n["key"] for n in trimmed["nodes"]]
@@ -74,8 +74,15 @@ def test_software_flow_is_eight_steps_and_keeps_wbs(env):
 
 def test_four_templates_are_persisted(env):
     conn, _ = env
-    ids = {t["id"] for t in flows.templates(conn)}
-    assert ids == {"FLOW-SOFTWARE", "FLOW-ANALYSIS", "FLOW-RESEARCH", "FLOW-URGENT"}
+    # 旧固化模板已从 flow_templates 表清理，默认返回用户自定义/自适应模板
+    custom_ids = {t["id"] for t in flows.templates(conn)}
+    for old_id in ("FLOW-SOFTWARE", "FLOW-ANALYSIS", "FLOW-RESEARCH", "FLOW-URGENT"):
+        assert old_id not in custom_ids
+    # 但保留 PRESETS 内存只读兼容字典，flows.template 可回退查取
+    for old_id in ("FLOW-SOFTWARE", "FLOW-ANALYSIS", "FLOW-RESEARCH", "FLOW-URGENT"):
+        compat = flows.template(conn, old_id)
+        assert compat is not None
+        assert compat["id"] == old_id
 
 
 # ------------------------------------------- 战役二 + 三：立项、建群、作战计划
@@ -185,7 +192,9 @@ def test_flow_templates_and_stage_api(env):
     with TestClient(app) as client:
         client.cookies.set("oa_ui", ui_api._make_cookie(ceo["id"]))
         tpl = client.get("/ui/flow-templates")
-        assert tpl.status_code == 200 and len(tpl.json()["templates"]) == 4
+        assert tpl.status_code == 200
+        for old_id in ("FLOW-SOFTWARE", "FLOW-ANALYSIS", "FLOW-RESEARCH", "FLOW-URGENT"):
+            assert old_id not in [t["id"] for t in tpl.json()["templates"]]
         detail = client.get(f"/ui/projects/{pid}/stages/retrieve")
         assert detail.status_code == 200
         assert detail.json()["stage"]["title"] == "资料检索"

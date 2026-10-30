@@ -31,41 +31,81 @@ router = APIRouter()
 class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     requirement: str = Field(..., min_length=1)
-    flow: str | None = "FLOW-SOFTWARE"
+    flow: str | None = None
     use_llm_docs: int = 1
+
+ProjectCreatePayload = ProjectCreate
 
 
 @router.post("/projects")
 def create_project_route(payload: ProjectCreate, oa_ui: str | None = Depends(_token)):
-    """主动创建流水线项目：支持指定模板（FLOW-SOFTWARE/FLOW-ANALYSIS 等）与立项预算初始化"""
+    """主动创建流水线项目：支持需求自适应工序拆解与立项预算初始化"""
     who = _require(oa_ui)
     with get_conn() as conn:
         from ... import pipeline, flows, finance
+        from .. import dispatcher
         pipeline.ensure(conn)
         actor = _task_actor(conn, oa_ui, "task:write")
         entity_id = actor.get("legal_entity_id") or "LE-GROUP-HQ"
         tenant_id = actor.get("tenant_id") or "TENANT-HQ"
 
-        flow_id = payload.flow or "FLOW-SOFTWARE"
+        req_text = payload.requirement.strip()
+        plan = None
+        if payload.flow is None or payload.flow == "adaptive":
+            plan = flows.plan(conn, req_text)
+            flow_arg = plan
+            flow_id = plan.get("flow_id")
+        else:
+            flow_arg = payload.flow
+            flow_id = payload.flow
+
         created = pipeline.create_project(
             conn,
             name=payload.name.strip(),
-            requirement=payload.requirement.strip(),
+            requirement=req_text,
             entity=entity_id,
             owner=actor["id"],
             use_llm_docs=payload.use_llm_docs,
             tenant_id=tenant_id,
-            flow=flow_id,
+            flow=flow_arg,
         )
         pid = created["project_id"]
+        flow_id = created.get("flow_id") or flow_id
 
+        # 预算初始化
+        budget = None
         try:
-            tmpl = flows.template(conn, flow_id) if flow_id else None
-            nodes = tmpl.get("nodes") if tmpl else None
-            if not nodes:
-                nodes = [{"key": k, "kind": k, "role": "engineer", "title": t} for k, t in pipeline.STAGES]
-            finance.open_project(conn, pid, nodes, requirement=payload.requirement,
-                                 flow_id=flow_id or "", tenant_id=tenant_id)
+            if plan and plan.get("nodes"):
+                nodes = plan["nodes"]
+            else:
+                tmpl = flows.template(conn, flow_id) if flow_id else None
+                nodes = tmpl.get("nodes") if tmpl else None
+                if not nodes:
+                    nodes = flows.nodes(conn, pid)
+            budget = finance.open_project(conn, pid, nodes, requirement=req_text,
+                                          flow_id=flow_id or "", tenant_id=tenant_id)
+        except Exception:
+            pass
+
+        # 组织建群协同
+        try:
+            if plan:
+                group = dispatcher.open_group(conn, req_text, plan, entity_id=entity_id, tenant_id=tenant_id)
+                if group:
+                    store.add_message(
+                        conn,
+                        group["chat_id"],
+                        "agent",
+                        dispatcher.plan_message(pid, plan, group, budget=budget),
+                        author=dispatcher.CEO_TITLE,
+                        kind="plan",
+                        meta=json.dumps({
+                            "project_id": pid,
+                            "flow_id": flow_id,
+                            "nodes": [n["key"] for n in plan.get("nodes", [])],
+                            "budget_pool": budget.get("pool") if budget else None,
+                        }, ensure_ascii=False),
+                    )
         except Exception:
             pass
 
@@ -77,7 +117,6 @@ def create_project_route(payload: ProjectCreate, oa_ui: str | None = Depends(_to
         conn.commit()
 
         # 自动点火：立即拉起后台异步调度线程，推进流水线依次执行阶段！
-        req_text = payload.requirement.strip()
         # v5.3：把「本次请求所属的库」固定下来。后台线程若晚于 DB_PATH 变更才执行
         # （测试里下一个用例就会改），用 get_conn() 会连到别人的库，既造成跨用例写污染，
         # 也会让新用例建库时撞 database is locked。生产只有一个库，行为完全等价。
@@ -614,12 +653,12 @@ def delete_flow_template(flow_id: str, oa_ui: str | None = Depends(_token)):
             raise HTTPException(403, detail={"code": "Forbidden"})
         from ... import flows
         flows.ensure(conn)
-        row = conn.execute("SELECT id, name FROM flow_templates WHERE id=?", (flow_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, detail={"code": "FlowNotFound"})
         if flow_id in flows.PRESETS:
             raise HTTPException(409, detail={"code": "BuiltinFlowUndeletable",
                                              "message": "内置流程模板不可删除，只能停用自定义模板"})
+        row = conn.execute("SELECT id, name FROM flow_templates WHERE id=?", (flow_id,)).fetchone()
+        if row is None:
+            raise HTTPException(404, detail={"code": "FlowNotFound"})
         conn.execute("DELETE FROM flow_templates WHERE id=?", (flow_id,))
         write_audit(conn, legal_entity_id="LE-GROUP-HQ", verb="admin", actor=actor["id"],
                     layer="system", action="flow_template_deleted", target=flow_id,

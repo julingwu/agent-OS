@@ -475,7 +475,7 @@ export function AuthenticatedWorkspace({ me, sessionEpoch, refreshSession }) {
               onChat={openChat} onSelectTask={setFocusedTask} onNavigate={setTab}
               onNewTask={() => setTaskCreating(true)} tasksOnly={tab === "tasks"}
             />
-          ) : tab === "projects" ? <MissionControl Icon={Icon} onOpenChat={openChat} me={me} initialProjectId={selectedProjectId} />
+          ) : tab === "projects" ? <MissionControl Icon={Icon} onOpenChat={openChat} me={me} initialProjectId={selectedProjectId} onNavigate={setTab} />
           : tab === "finops" ? <FinOpsView />
           : tab === "evals" ? <EvalsView />
           : tab === "experience" ? <GovernanceView me={me} />

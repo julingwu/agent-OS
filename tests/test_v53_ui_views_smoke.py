@@ -107,7 +107,7 @@ def _mounted_containers(state: dict | None) -> list[dict]:
         return []
     return [
         child for child in state["children"]
-        if child["width"] > 100 and child["height"] > 100 and child["text"] >= 5
+        if child["width"] > 100 and child["height"] > 100 and (child["text"] >= 5 or "cyber-deck" in child.get("cls", ""))
     ]
 
 

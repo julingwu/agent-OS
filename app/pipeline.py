@@ -244,27 +244,50 @@ def create_project(conn, *, name: str, requirement: str, entity: str = "LE-GROUP
                                            tenant_id,owner_identity, use_llm_docs)
                     VALUES (?,?,?,?,?,?,?)""", (pid, name, requirement, entity,tenant_id,owner,
                                              1 if use_llm_docs else 0))
-    if flow is not None:
-        # v4.1：阶段由流程模板/DAG 生成（分析、调研、紧急、软件四条流）
-        from . import flows as _flows
-        _flows.ensure(conn)
-        stage_nodes = _flows.instantiate(conn, pid, flow)
+    # 阶段由自适应工序动态拆解引擎/流程模板生成
+    from . import flows as _flows
+    _flows.ensure(conn)
+
+    flow_plan = None
+    if flow is None or flow == "adaptive":
+        flow_plan = _flows.plan(conn, requirement)
+        stage_nodes = _flows.instantiate(conn, pid, flow_plan)
+        flow_id = flow_plan.get("flow_id")
+        needed_roles = flow_plan.get("roles") or [n.get("role") for n in flow_plan.get("nodes", [])]
     else:
-        stage_nodes = None
-        for seq, (key, title) in enumerate(STAGES):
-            conn.execute("""INSERT INTO project_stages (id, project_id, seq, key, title)
-                            VALUES (?,?,?,?,?)""", (_id("S"), pid, seq, key, title))
+        stage_nodes = _flows.instantiate(conn, pid, flow)
+        if isinstance(flow, dict):
+            flow_id = flow.get("flow_id")
+            needed_roles = flow.get("roles") or [n.get("role") for n in flow.get("nodes", [])]
+        else:
+            flow_id = flow
+            needed_roles = [n.get("role") for n in stage_nodes] if stage_nodes else []
+
+    # 确保工序中所需的每一个 role，都通过 recruitment.ensure_workflow_staff 自动即时招募入驻或在岗指派
+    from . import recruitment
+    for r_tag in needed_roles:
+        if r_tag and r_tag != _flows.PLATFORM:
+            try:
+                recruitment.ensure_workflow_staff(
+                    conn,
+                    role_tag=r_tag,
+                    requirement=requirement,
+                    project_id=pid,
+                    entity_id=entity,
+                    tenant_id=tenant_id,
+                )
+            except Exception:
+                pass
     conn.commit()
     write_audit(conn, legal_entity_id=entity, verb="project", task_id=None,
                 actor=owner, layer="system", action="project_created", target=pid,
                 payload={"name": name, "requirement": requirement[:200],
                          "owner_identity": owner,
-                         "flow": flow if isinstance(flow, str) else
-                         (flow or {}).get("flow_id") if flow else None},
+                         "flow": flow_id},
                 response={})
     conn.commit()
-    return {"project_id": pid, "stages": len(stage_nodes or STAGES),
-            "flow_id": flow if isinstance(flow, str) else (flow or {}).get("flow_id") if flow else None}
+    return {"project_id": pid, "stages": len(stage_nodes or []),
+            "flow_id": flow_id}
 
 
 def _stage(conn, pid: str, key: str):
