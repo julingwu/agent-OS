@@ -9,13 +9,24 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pathlib
+import re
+import secrets
 import subprocess
+from typing import Any
 
 from ..computer import screen
 
+logger = logging.getLogger("app.agent.tools")
+
 WORKSPACE = pathlib.Path(os.environ.get("M0_WORKSPACE") or "/opt/agent-os/workspace").resolve()
+TOOL_OUTPUTS_DIR = (WORKSPACE / ".tool_outputs").resolve()
+try:
+    TOOL_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 MAX_OUTPUT = 8000
 BLOCKED = ("rm -rf /", "mkfs", "dd if=/dev/zero of=/dev/", ":(){ :|:& };:",
@@ -195,14 +206,90 @@ def _ask_human(question: str, options: list[str] | None = None) -> dict:
             "options": options or []}
 
 
-def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
-             session_id: str | None = None) -> dict:
-    """执行一次工具调用。未知工具抛 ToolError（由 loop 变成 tool.result 失败）。
+def _offload_tool_output(name: str, result: Any, call_id: str | None = None) -> Any:
+    """Codex 风格双模载荷与沙箱落盘机制。
 
-    `emit(kind, payload)` 由 Agent 循环注入，本地电脑工具用它发审批卡。
-    `bot_id` 用于"记忆"这类必须知道自己是谁的工具。
-    `session_id` 用于会话级免审授权判定。
+    - 若 result 中包含大文本字段（如 stdout, content, text, html, data, body 等）或序列化后长度 > 1,500 字符：
+      - 将完整内容写入 .tool_outputs/step_{call_id[:12]}_{name}.log；
+      - 生成结构化紧凑视图字典返回给模型 Prompt 上下文；
+      - 保留其他必要元数据字段（如 artifact_id, path, status, chart_path 等）。
+    - 确保小输出（< 1500 字符）完全不受影响，保持原生返回。
     """
+    if not isinstance(result, dict):
+        return result
+
+    large_fields = ("stdout", "content", "text", "html", "data", "body", "output", "raw")
+    has_large_field = False
+    for k in large_fields:
+        val = result.get(k)
+        if isinstance(val, str) and len(val) > 1500:
+            has_large_field = True
+            break
+
+    try:
+        res_json = json.dumps(result, ensure_ascii=False)
+    except Exception:
+        res_json = str(result)
+
+    if len(res_json) <= 1500 and not has_large_field:
+        return result
+
+    cid = re.sub(r"[^a-zA-Z0-9_-]", "", str(call_id or secrets.token_hex(6)))[:12] or "step"
+    filename = f"step_{cid}_{name}.log"
+    out_file = TOOL_OUTPUTS_DIR / filename
+
+    raw_text = ""
+    for k in large_fields:
+        val = result.get(k)
+        if isinstance(val, str) and len(val) > 500:
+            raw_text = val
+            break
+        elif val is not None and not isinstance(val, (int, float, bool)) and len(str(val)) > 1000:
+            raw_text = json.dumps(val, ensure_ascii=False, indent=2) if isinstance(val, (dict, list)) else str(val)
+            break
+
+    if not raw_text:
+        raw_text = json.dumps(result, ensure_ascii=False, indent=2)
+
+    try:
+        TOOL_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(raw_text, encoding="utf-8")
+    except Exception as exc:
+        logger.warning(f"Failed to persist tool output to {out_file}: {exc}")
+
+    preview_raw = raw_text.strip()
+    if len(preview_raw) > 500:
+        preview_text = preview_raw[:500] + f"\n... [完整内容共 {len(raw_text)} 字符，已持久化至文件]"
+    else:
+        preview_text = preview_raw
+
+    compact = dict(result)
+    for k in large_fields:
+        if k in compact:
+            v = compact[k]
+            if isinstance(v, str) and len(v) > 500:
+                compact.pop(k, None)
+            elif isinstance(v, (dict, list)) and len(json.dumps(v, ensure_ascii=False)) > 500:
+                compact.pop(k, None)
+
+    output_rel_path = f".tool_outputs/{filename}"
+    compact["ok"] = result.get("ok", True)
+    compact["summary"] = preview_text
+    compact["output_file"] = output_rel_path
+    compact["total_chars"] = len(raw_text)
+    compact["_hint"] = "完整原始载荷已持久化至上述文件。如需查阅细节，请使用 fs_read (传行号切片) 或 grep_search 精准检索。"
+
+    if name == "exec" and "spillover_file" in result:
+        compact["spillover_file"] = result.get("spillover_file")
+        if "stdout" in result:
+            compact["stdout"] = result["stdout"]
+
+    return compact
+
+
+def _dispatch_tool(name: str, args: dict, *, emit=None, bot_id: str | None = None,
+                   session_id: str | None = None) -> dict:
+    """执行底层工具调用。"""
     args = args or {}
     if name == "exec":
         from . import ext_tools
@@ -337,6 +424,17 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
     if name == "recall":
         return _recall(bot_id, str(args.get("query", "")), _safe_int(args.get("limit") or 8, 8))
     raise ToolError(f"unknown tool: {name}")
+
+
+def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
+             session_id: str | None = None, call_id: str | None = None) -> dict:
+    """执行一次工具调用并经由 Codex 双模载荷引擎落盘超大输出。
+
+    - 正常小输出（< 1500 字符）原样返回；
+    - 超大输出自动持久化至 .tool_outputs/ 并返回包含 summary 与 output_file 的紧凑视图。
+    """
+    raw_res = _dispatch_tool(name, args, emit=emit, bot_id=bot_id, session_id=session_id)
+    return _offload_tool_output(name, raw_res, call_id=call_id)
 
 
 # ---------------------------------------------------------------- 长期记忆

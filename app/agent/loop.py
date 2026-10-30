@@ -28,7 +28,7 @@ from .. import bot_memory
 from .. import db
 from .. import events as ev
 from .. import llm
-from . import memory_writer, tools
+from . import blackboard, memory_writer, tools
 
 logger = logging.getLogger("app.agent.loop")
 
@@ -204,7 +204,8 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model):
 
 
 def _system_prompt(bot: dict, members: list[dict] | None = None,
-                   memories: list[dict] | None = None) -> str:
+                   memories: list[dict] | None = None,
+                   blackboard_block: str | None = None) -> str:
     persona = (bot or {}).get("persona") or "你是一个可靠的 AI 助手。"
     peers = [m for m in (members or []) if m["id"] != (bot or {}).get("id")]
     peer_line = ""
@@ -223,12 +224,12 @@ def _system_prompt(bot: dict, members: list[dict] | None = None,
         memory_line = (
             "\n你记得这些（你过去的长期记忆，可能过时；和用户最新说法冲突时以用户为准）：\n"
             f"{bullets}\n")
-    return (
+
+    # 1. 静态规范与核心原则（置顶以最大化命中 KV Prompt Cache）
+    static_body = (
         f"{persona}\n\n"
         "运行环境与执行策略（最高优先准则）：\n"
         "- 系统运行在专属云端 Linux 服务器，直连全网并配备强大的云端工程能力（多引擎实时联网、文件代码深度编辑、后台守护进程、子代理并行分派）。\n"
-        f"- 工作区：{tools.WORKSPACE}（文件工具只能访问这里）。\n"
-        f"- 当前时间：{_now()}\n"
         "- 【默认第一优先：云端服务器直接闭环执行】：所有信息检索（web_search/web_fetch）、代码执行与构建（exec/process_*）、数据挖掘与统计、文档解析（doc_read）、图表生成（render_chart）以及研报产出，必须 100% 默认在云端服务器直接执行并交付。\n"
         "- 【严禁推卸与做选择题】：严禁在能够自主执行时向用户提问“你选方案 A 还是方案 B”、“你要我怎么做”，绝不把执行责任推给用户；必须先动手跑出完整结果再汇报；只有在遇到不可逆的严重异常或凭据缺失时才调用 ask_human。\n"
         "- 【本地个人电脑（local_*）严格管控铁律】：local_* 系列工具专用于操作用户本人的本地桌面（如屏幕控制、操作本地客户端）。除非用户在当前提问中明确且主动输入了“在我电脑上”、“在我本机运行”、“打开我本地微信/Excel”、“读取我本机 D 盘”等显式指令，否则：绝对禁止主动提议“尝试在你本地电脑上执行/搜索”；绝对禁止向用户列出任何本地电脑操作选项；绝对禁止调用任何 local_* 工具！\n"
@@ -253,6 +254,16 @@ def _system_prompt(bot: dict, members: list[dict] | None = None,
         "9. 【记忆与偏好】：用户提及长期偏好与事实时用 remember 记下；遇到模糊问题先用 recall 查一下以往记忆。\n"
         "10. 【遵循沉淀流程】：接到具体任务先用 list_skills 查看已有技能，有匹配的用 use_skill 照章执行。\n"
     )
+
+    # 2. 动态易变环境、时间与黑板置于最底部（极大化命中云端 KV Cache）
+    dynamic_tail = [
+        f"- 工作区：{tools.WORKSPACE}（文件工具只能访问这里）。",
+        f"- 当前时间：{_now()}",
+    ]
+    if blackboard_block:
+        dynamic_tail.append(f"\n{blackboard_block}")
+
+    return static_body + "\n" + "\n".join(dynamic_tail)
 
 
 def _default_model(conn) -> str | None:
@@ -329,28 +340,206 @@ def _last_user_text(conn, session_id: str) -> str:
 
 
 
-def _compact_context(messages: list[dict], threshold: int = 100_000) -> list[dict]:
-    """Context Compaction Guard: 当所有消息总长度超出 threshold 时，自动折叠压缩较早轮次的 tool 输出。"""
-    total_len = sum(len(str(m.get("content") or "")) for m in messages)
-    if total_len <= threshold:
+def _estimate_text_tokens(text: str) -> int:
+    """估算单段文本的 Token 消耗，精确兼顾 CJK（中日韩字符）与代码/JSON/英文字符。"""
+    if not text:
+        return 0
+    cjk_count = 0
+    other_count = 0
+    for char in text:
+        cp = ord(char)
+        if (
+            0x4E00 <= cp <= 0x9FFF
+            or 0x3400 <= cp <= 0x4DBF
+            or 0x20000 <= cp <= 0x2A6DF
+            or 0xF900 <= cp <= 0xFAFF
+            or 0x3040 <= cp <= 0x309F
+            or 0x30A0 <= cp <= 0x30FF
+            or 0xAC00 <= cp <= 0xD7AF
+            or 0xFF00 <= cp <= 0xFFEF
+        ):
+            cjk_count += 1
+        else:
+            other_count += 1
+    # 中文字符按约 1.3 tokens/字，其他 ASCII 与代码按约 0.28 tokens/字估算
+    return int(cjk_count * 1.3 + other_count * 0.28) + 1
+
+
+def _estimate_tokens(messages: list[dict]) -> int:
+    """Token 精准估算函数：精确统计 CJK 与 ASCII/代码/JSON 格式开销。"""
+    if not messages:
+        return 0
+    total = 0
+    for m in messages:
+        total += 4  # 消息结构 framing 开销
+        content = m.get("content")
+        if isinstance(content, str):
+            total += _estimate_text_tokens(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict):
+                    total += _estimate_text_tokens(str(part.get("text", "") or ""))
+                elif isinstance(part, str):
+                    total += _estimate_text_tokens(part)
+
+        tool_calls = m.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tc in tool_calls:
+                total += 6
+                fn = tc.get("function") if isinstance(tc, dict) else {}
+                if isinstance(fn, dict):
+                    total += _estimate_text_tokens(str(fn.get("name", "")))
+                    total += _estimate_text_tokens(str(fn.get("arguments", "")))
+
+        rc = m.get("reasoning_content")
+        if rc:
+            total += _estimate_text_tokens(str(rc))
+    return total
+
+
+def _find_active_window_start(messages: list[dict], keep_recent_steps: int = 4) -> int:
+    """寻找活跃保护区（Active Window）起始下标。
+    
+    保护最近 keep_recent_steps 次工具往返（即最后约 8~10 条消息）100% 原始全保真。
+    """
+    if len(messages) <= 1:
+        return len(messages)
+    steps_seen = 0
+    for i in range(len(messages) - 1, 0, -1):
+        m = messages[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            steps_seen += 1
+            if steps_seen >= keep_recent_steps:
+                return i
+    return 1
+
+
+def adaptive_compact_context(
+    messages: list[dict],
+    keep_recent_steps: int = 4,
+    target_tokens: int = 32_000,
+) -> list[dict]:
+    """对标 Claude Code 的自适应微压缩引擎（三级微剪枝 + 活跃窗口全保真）。
+
+    1. 活跃保护区（Active Window）：最近 keep_recent_steps 步工具往返 100% 全保真，绝不剪枝；
+    2. Phase 1: 规则微剪枝（Rule-based Micro-Pruning，零 LLM 消耗）：
+       对 4 步之前的旧工具输出保留索引、状态、错误信息与关键结论，绝不抹成空壳；
+    3. Phase 2: 宏观阶段折叠（Macro-Compaction）：
+       若微剪枝后仍超预算，将早期连续探索步骤折叠为阶段成果摘要，严格维持 assistant 与 tool 语法对齐。
+    """
+    if not messages:
         return messages
 
-    cut_point = max(1, len(messages) - 4)
-    for i in range(1, cut_point):
+    current_tokens = _estimate_tokens(messages)
+    if current_tokens <= target_tokens:
+        return messages
+
+    cutoff_idx = _find_active_window_start(messages, keep_recent_steps)
+    if cutoff_idx <= 1:
+        # 所有消息均在活跃窗口保护区内，绝不剪枝
+        return messages
+
+    # --- Phase 1: 规则微剪枝 (Rule-based Micro-Pruning) ---
+    for i in range(1, cutoff_idx):
         msg = messages[i]
-        if msg.get("role") == "tool":
-            c = str(msg.get("content") or "")
-            if len(c) > 400:
-                try:
-                    data = json.loads(c)
-                    summary = f"ok={data.get('ok')}, error={data.get('error', '')}"
-                except Exception:
-                    summary = c[:100].replace("\n", " ")
-                msg["content"] = f"[历史工具结果已折叠压缩: 原长 {len(c)} 字符，概要: {summary}]"
-                total_len -= (len(c) - len(msg["content"]))
-                if total_len <= threshold * 0.7:
-                    break
-    return messages
+        if msg.get("role") != "tool":
+            continue
+        c = msg.get("content")
+        if not c:
+            continue
+
+        raw_str = str(c)
+        if len(raw_str) <= 350:
+            continue
+
+        # 尝试作为结构化 JSON 解析
+        data = None
+        try:
+            data = json.loads(raw_str) if isinstance(c, str) else (c if isinstance(c, dict) else None)
+        except Exception:
+            data = None
+
+        if isinstance(data, dict):
+            # 若已包含 output_file，说明是 Codex 双模载荷，保留索引与精炼 summary
+            if data.get("output_file"):
+                summary = str(data.get("summary") or "")
+                if len(summary) > 250:
+                    summary = summary[:250] + "..."
+                pruned_dict = {
+                    "ok": data.get("ok", True),
+                    "summary": summary,
+                    "output_file": data.get("output_file"),
+                    "total_chars": data.get("total_chars"),
+                    "_hint": "完整原始载荷已持久化至上述文件，可用 fs_read 切片精准检索。",
+                }
+                msg["content"] = json.dumps(pruned_dict, ensure_ascii=False)
+            else:
+                # 普通长 JSON：提取核心状态、错误信息与前 200 字符结论
+                ok_val = data.get("ok", True)
+                err_val = data.get("error", "")
+                preview = ""
+                for k in ("stdout", "content", "text", "body", "data", "results", "matches"):
+                    if k in data and data[k]:
+                        preview = str(data[k])[:200]
+                        break
+                if not preview:
+                    preview = json.dumps(data, ensure_ascii=False)[:200]
+                notice = f"[早期工具输出已做微剪枝保留核心结论，原长 {len(raw_str)} 字符] ok={ok_val}"
+                if err_val:
+                    notice += f", error={err_val}"
+                if data.get("path"):
+                    notice += f", path={data.get('path')}"
+                msg["content"] = f"{notice}\n关键摘要: {preview}"
+        else:
+            # 纯文本微剪枝：保留前 200 字符结论
+            msg["content"] = f"[早期工具输出已做微剪枝保留核心结论，原长 {len(raw_str)} 字符]\n{raw_str[:200]}..."
+
+    # 检查 Phase 1 后的 Token 数
+    current_tokens = _estimate_tokens(messages)
+    if current_tokens <= target_tokens:
+        return messages
+
+    # --- Phase 2: 宏观阶段折叠 (Macro-Compaction) ---
+    # 将早期连续探索步骤（messages[2:cutoff_idx]）折叠为阶段成果摘要
+    early_tools_called: list[str] = []
+    for m in messages[1:cutoff_idx]:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                fn = tc.get("function") if isinstance(tc, dict) else {}
+                name = fn.get("name") if isinstance(fn, dict) else "tool"
+                if name:
+                    early_tools_called.append(str(name))
+
+    tools_summary = "、".join(dict.fromkeys(early_tools_called)) if early_tools_called else "多项工具检索与探索"
+    checkpoint_summary = (
+        "【历史探索阶段性成果摘要】\n"
+        f"- 前期探索阶段已完成：调用了 {tools_summary} 进行环境探测与中间数据采集。\n"
+        "- 中间过程数据与文件均已确认；系统进入当前执行阶段，无缝承接后续核心交付任务。"
+    )
+
+    # 严格维持 assistant 与 tool 语法对齐
+    first_active = messages[cutoff_idx]
+    if first_active.get("role") == "assistant":
+        updated_first = dict(first_active)
+        orig_c = updated_first.get("content") or ""
+        updated_first["content"] = f"{checkpoint_summary}\n\n{orig_c}".strip() if orig_c else checkpoint_summary
+        new_messages = [messages[0]]
+        if len(messages) > 1 and messages[1].get("role") == "user":
+            new_messages.append(messages[1])
+        new_messages.append(updated_first)
+        new_messages.extend(messages[cutoff_idx + 1:])
+        return new_messages
+
+    checkpoint_msg = {"role": "assistant", "content": checkpoint_summary}
+    new_messages = [messages[0]]
+    if len(messages) > 1 and messages[1].get("role") == "user":
+        new_messages.append(messages[1])
+    new_messages.append(checkpoint_msg)
+    new_messages.extend(messages[cutoff_idx:])
+    return new_messages
+
+
+_compact_context = adaptive_compact_context
 
 def _diagnose_error(err_str: str) -> tuple[str, str]:
     err_lower = err_str.lower()
@@ -408,11 +597,22 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                     turn_id=turn_id, payload={"input_event_id": ev.cursor(conn), "hops": hops})
     members = _session_members(conn, session_id)
     last_user = _last_user_text(conn, session_id)
+
+    # 会话级黑板管理与断点接力看板 (Hermes Session Blackboard)
+    board = blackboard.get_blackboard(conn, session_id)
+    is_cont = blackboard.is_continuation_intent(last_user)
+    if is_cont:
+        board_block = blackboard.format_blackboard_prompt(board)
+    else:
+        board_block = None
+        if last_user and not last_user.startswith("【同事"):
+            blackboard.save_blackboard(conn, session_id, last_goal=last_user)
+
     memories: list[dict] = []
     if bot_memory.enabled(conn):
         memories = bot_memory.search(conn, bot_id, last_user, limit=8)
     messages = [{"role": "system",
-                 "content": _system_prompt(bot, members, memories)}]
+                 "content": _system_prompt(bot, members, memories, blackboard_block=board_block)}]
     messages.extend(build_bot_history(conn, session_id, bot_id))
     if task_hint:
         messages.append({"role": "user", "content": task_hint})
@@ -512,11 +712,14 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                     emit=lambda kind, payload: _emit(
                         conn, bot_id=bot_id, session_id=session_id,
                         turn_id=turn_id, kind=kind, payload=payload),
+                    call_id=call_id,
                 )
                 ok = bool(result.get("ok", True)) and not result.get("status")
             except Exception as exc:
                 result, ok = {"ok": False, "error": f"工具执行异常: {exc}"}, False
             executed_steps_summary.append(f"{name} ({'成功' if ok else '失败'})")
+            # 记录工具执行产物与步骤到 Hermes 黑板
+            blackboard.record_tool_artifact_and_step(conn, session_id, name, args, result)
             sanitized_res = _sanitize_tool_result_for_event(result)
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="tool.result",
                   turn_id=turn_id, payload={
@@ -564,6 +767,12 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     if final_text:
         _emit(conn, bot_id=bot_id, session_id=session_id, kind="message.bot",
               turn_id=turn_id, payload={"text": final_text})
+        if status == "done":
+            if step >= MAX_STEPS - 1:
+                hint_str = f"已达单轮上限（{MAX_STEPS}步），完成工具：{', '.join(executed_steps_summary[-4:])}，待回复「继续」接力" if executed_steps_summary else "已达单轮安全上限，待继续执行"
+            else:
+                hint_str = "本轮任务已交付，待用户评估或发出下一步指令"
+            blackboard.save_blackboard(conn, session_id, next_step_hint=hint_str)
         # 长期记忆：从这一轮里抽稳定事实/偏好（失败不影响对话）
         if status == "done" and bot_memory.enabled(conn):
             try:
