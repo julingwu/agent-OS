@@ -157,7 +157,7 @@ def _chat_blocking_with_progress(conn, messages, *, bot_id, session_id, turn_id,
 
 
 def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
-                   tools_specs=None):
+                   tools_specs=None, temperature=0.3):
     """优先流式：边生成边发 message.delta（瞬态，不落库），让界面真的"在打字"。
 
     回落策略是硬的：
@@ -208,7 +208,7 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
 
     try:
         it = llm.chat_stream(messages, tools=tools_specs,
-                             temperature=0.3, model=model)
+                             temperature=temperature, model=model)
         last_flush = time.monotonic()
         last_thought_flush = time.monotonic()
         for kind, payload in it:
@@ -249,14 +249,119 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
         return _chat_blocking_with_progress(conn, messages, bot_id=bot_id,
                                             session_id=session_id, turn_id=turn_id,
                                             model=model, tools_specs=tools_specs,
-                                            temperature=0.3)
+                                            temperature=temperature)
     finally:
         keepalive_timer.cancel()
 
 
+# ================================================================
+# 动态风格旋钮系统 (Dynamic Style Knob: Strict / Insight / Fun)
+# 对标 Grok 标杆特性，支持在严谨极客、商业智囊与幽默犀利间丝滑切换
+# ================================================================
+
+STYLE_GUIDES: dict[str, str] = {
+    "strict": (
+        "【当前交互风格：极客严谨模式 (Strict Geek)】\n"
+        "- 【第一性原理与零套话废话】：恪守第一性原理，彻底剔除套话、废话与一切公关辞令，直击技术本质与底层事实。\n"
+        "- 【量化精确口径与直面不确定性】：所有数据结论必须注明量化精确口径、统计区间与推导假设；直面不确定性，边界未知或不可测时坦诚直言，严禁含糊模糊。\n"
+        "- 【代码生产级标准】：代码必须满足生产级工程标准，配备完备的边界防御、异常处理、类型契约与验证测试。\n"
+        "- 【冷峻硬核极客】：以系统架构师与技术专家的高密度、客观严密风格直接交付成果。"
+    ),
+    "insight": (
+        "【当前交互风格：洞察智囊模式 (Insight Partner)】\n"
+        "- 【合伙人/CEO/首席研究员视角】：站在合伙人、CEO 与首席战略研究员高阶维度，穿透业务表象直击产业竞争与商业本质。\n"
+        "- 【多情景测算大表】：战略推演与关键测算必须提供多情景测算大表（乐观 / 中性 / 悲观三套情景假设、敏感性分析与收益/下行风险测算）。\n"
+        "- 【风险对冲与落地动作】：提供深度的博弈推演与风险对冲方案，并列出明确具体、切实可落地的战术行动清单。\n"
+        "- 【格局宏阔智囊】：兼具战略远见与严密量化推演，言之有物，运筹帷幄。"
+    ),
+    "fun": (
+        "【当前交互风格：诙谐犀利模式 / Grok 灵魂 (Fun & Grok)】\n"
+        "- 【马斯克与 Grok 经典犀利幽默】：注入埃隆·马斯克与 Grok 标志性的犀利幽默、反讽戏谑与科技机智，敢于辛辣调侃公关黑话与行业套路，金句频出。\n"
+        "- 【底层逻辑与技术事实 100% 硬核严谨】：幽默诙谐只是表达外壳，底层逻辑推导、量化指标与技术事实 100% 绝对硬核严谨，绝不牺牲专业深度与事实真实性。\n"
+        "- 【平等智趣互动】：打破死板教条与刻板说教，用生动比喻与锐利洞见与用户进行高智商、妙趣横生的智趣对话。"
+    ),
+}
+# 支持别名映射
+STYLE_GUIDES["grok"] = STYLE_GUIDES["fun"]
+
+STYLE_TEMPERATURES: dict[str, float] = {
+    "strict": 0.2,
+    "insight": 0.4,
+    "fun": 0.7,
+}
+STYLE_TEMPERATURES["grok"] = 0.7
+
+
+def get_style_temperature(style_mode: str | None) -> float:
+    """获取风格模式对应的模型推导采样温度（strict 0.2 / insight 0.4 / fun 0.7）。"""
+    if not style_mode:
+        return STYLE_TEMPERATURES["insight"]
+    mode = str(style_mode).lower().strip()
+    return STYLE_TEMPERATURES.get(mode, 0.4)
+
+
+def detect_style_mode(user_text: str | None) -> str | None:
+    """智能检测用户输入中显式指定的风格模式（Grok 标杆特性）。
+
+    支持指令与标签：
+    - 前缀指令：/fun, /strict, /insight, /grok (映射为 fun)
+    - 结构化标签：[style:fun], [style:strict], [style:insight], [style:grok]
+    - 中文风格标签：风格:诙谐, 风格:严谨, 风格:洞察, 风格：诙谐, 风格:幽默, 风格:犀利 等
+    """
+    if not user_text:
+        return None
+    raw = str(user_text).strip()
+
+    # 1. 匹配前缀指令，如 /fun, /strict, /insight, /grok
+    prefix_m = re.match(r"^/(fun|strict|insight|grok)\b", raw, re.IGNORECASE)
+    if prefix_m:
+        cmd = prefix_m.group(1).lower()
+        return "fun" if cmd == "grok" else cmd
+
+    # 2. 匹配中英文方括号标签，如 [style:fun], 【style:strict】, [style=insight]
+    tag_m = re.search(r"[\[【]style\s*[:=]\s*(fun|strict|insight|grok)[\]】]", raw, re.IGNORECASE)
+    if tag_m:
+        tag = tag_m.group(1).lower()
+        return "fun" if tag == "grok" else tag
+
+    # 3. 匹配中文风格标记，如 风格:诙谐, 风格：严谨, 风格:洞察, [风格:幽默] 等
+    cn_m = re.search(
+        r"(?:[\[【])?风格\s*[:：]\s*(诙谐|幽默|犀利|严谨|极客|洞察|智囊|fun|strict|insight|grok)(?:[\]】])?",
+        raw,
+        re.IGNORECASE,
+    )
+    if cn_m:
+        kw = cn_m.group(1).lower()
+        if kw in ("诙谐", "幽默", "犀利", "fun", "grok"):
+            return "fun"
+        if kw in ("严谨", "极客", "strict"):
+            return "strict"
+        if kw in ("洞察", "智囊", "insight"):
+            return "insight"
+
+    return None
+
+
+def strip_style_command(text: str | None) -> str:
+    """清理用户文本中的风格指令前缀与标签，返回干净的任务意图正文。"""
+    if not text:
+        return ""
+    cleaned = text
+    cleaned = re.sub(r"^\s*/(fun|strict|insight|grok)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[\[【]style\s*[:=]\s*(fun|strict|insight|grok)[\]】]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"(?:[\[【])?风格\s*[:：]\s*(?:诙谐|幽默|犀利|严谨|极客|洞察|智囊|fun|strict|insight|grok)(?:[\]】])?",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip()
+
+
 def _system_prompt(bot: dict, members: list[dict] | None = None,
                    memories: list[dict] | None = None,
-                   blackboard_block: str | None = None) -> str:
+                   blackboard_block: str | None = None,
+                   style_mode: str | None = None) -> str:
     persona = (bot or {}).get("persona") or "你是一个可靠的 AI 助手。"
     peers = [m for m in (members or []) if m["id"] != (bot or {}).get("id")]
     peer_line = ""
@@ -306,11 +411,13 @@ def _system_prompt(bot: dict, members: list[dict] | None = None,
         "10. 【遵循沉淀流程】：接到具体任务先用 list_skills 查看已有技能，有匹配的用 use_skill 照章执行。\n"
     )
 
-    # 2. 动态易变环境、时间与黑板置于最底部（极大化命中云端 KV Cache）
+    # 2. 动态易变环境、时间、风格指南与黑板置于最底部（极大化命中云端 KV Cache）
     dynamic_tail = [
         f"- 工作区：{tools.WORKSPACE}（文件工具只能访问这里）。",
         f"- 当前时间：{_now()}",
     ]
+    if style_mode and style_mode in STYLE_GUIDES:
+        dynamic_tail.append(f"\n{STYLE_GUIDES[style_mode]}")
     if blackboard_block:
         dynamic_tail.append(f"\n{blackboard_block}")
 
@@ -674,6 +781,19 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     # 会话级黑板管理与断点接力看板 (Hermes Session Blackboard)
     board = blackboard.get_blackboard(conn, session_id)
     is_cont = blackboard.is_continuation_intent(last_user)
+
+    # 动态风格旋钮检测与持久化 (Dynamic Style Knob: Strict / Insight / Fun)
+    detected_style = detect_style_mode(last_user)
+    if detected_style:
+        style_mode = detected_style
+        # 用户显式指定新风格时，持久化记录到黑板，供本轮与后续轮次沿用
+        blackboard.save_blackboard(conn, session_id, style_mode=style_mode)
+    else:
+        # 继承黑板持久化记录的风格，默认回退至 insight 洞察智囊模式
+        style_mode = board.get("style_mode") or "insight"
+
+    temperature = get_style_temperature(style_mode)
+
     if is_cont:
         board_block = blackboard.format_blackboard_prompt(board)
     else:
@@ -685,7 +805,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     if bot_memory.enabled(conn):
         memories = bot_memory.search(conn, bot_id, last_user, limit=8)
     messages = [{"role": "system",
-                 "content": _system_prompt(bot, members, memories, blackboard_block=board_block)}]
+                 "content": _system_prompt(bot, members, memories, blackboard_block=board_block, style_mode=style_mode)}]
     messages.extend(build_bot_history(conn, session_id, bot_id))
     if task_hint:
         messages.append({"role": "user", "content": task_hint})
@@ -727,7 +847,8 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
             )
             resp = _chat_streamed(conn, messages, bot_id=bot_id,
                                   session_id=session_id, turn_id=turn_id,
-                                  model=model, tools_specs=effective_tools)
+                                  model=model, tools_specs=effective_tools,
+                                  temperature=temperature)
         except Exception as exc:                       # noqa: BLE001 - 模型失败要有兜底
             err_str = str(exc)
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="error",
@@ -770,7 +891,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                             {"role": "assistant", "content": "", "reasoning_content": reasoning},
                             {"role": "user", "content": "请根据你上面的思考推导，直接输出最终回答正文。"}
                         ]
-                        retry_resp = llm.chat(retry_messages, tools=None, temperature=0.3, model=model, max_tokens=4096)
+                        retry_resp = llm.chat(retry_messages, tools=None, temperature=temperature, model=model, max_tokens=4096)
                         if retry_resp and retry_resp.get("message", {}).get("content"):
                             final_text = retry_resp["message"]["content"].strip()
                     except Exception as e:
@@ -790,7 +911,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                             final_text = reasoning[:1200]
                 else:
                     try:
-                        retry_resp = llm.chat(messages, tools=None, temperature=0.3, model=model)
+                        retry_resp = llm.chat(messages, tools=None, temperature=temperature, model=model)
                         if retry_resp and retry_resp.get("message", {}).get("content"):
                             final_text = retry_resp["message"]["content"].strip()
                     except Exception as e:

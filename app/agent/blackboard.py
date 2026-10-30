@@ -51,6 +51,7 @@ def init_blackboard_schema(conn) -> None:
                 artifacts_json TEXT DEFAULT '[]',
                 completed_steps_json TEXT DEFAULT '[]',
                 next_step_hint TEXT DEFAULT '',
+                style_mode TEXT DEFAULT '',
                 updated_at TEXT DEFAULT ''
             );
             """
@@ -58,6 +59,12 @@ def init_blackboard_schema(conn) -> None:
         conn.commit()
     except Exception as exc:
         logger.warning(f"[Blackboard] init schema failed: {exc}")
+
+    try:
+        conn.execute("ALTER TABLE session_blackboard ADD COLUMN style_mode TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
 
 
 def get_blackboard(conn, session_id: str) -> dict[str, Any]:
@@ -70,7 +77,7 @@ def get_blackboard(conn, session_id: str) -> dict[str, Any]:
         try:
             init_blackboard_schema(conn)
             row = conn.execute(
-                "SELECT session_id, last_goal, artifacts_json, completed_steps_json, next_step_hint, updated_at "
+                "SELECT session_id, last_goal, artifacts_json, completed_steps_json, next_step_hint, style_mode, updated_at "
                 "FROM session_blackboard WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
@@ -90,6 +97,7 @@ def get_blackboard(conn, session_id: str) -> dict[str, Any]:
                     "artifacts": arts,
                     "completed_steps": steps,
                     "next_step_hint": r.get("next_step_hint") or "",
+                    "style_mode": r.get("style_mode") or "",
                     "updated_at": r.get("updated_at") or "",
                 }
         except Exception as exc:
@@ -107,6 +115,7 @@ def get_blackboard(conn, session_id: str) -> dict[str, Any]:
                     "artifacts": data.get("artifacts") or [],
                     "completed_steps": data.get("completed_steps") or [],
                     "next_step_hint": data.get("next_step_hint") or "",
+                    "style_mode": data.get("style_mode") or "",
                     "updated_at": data.get("updated_at") or "",
                 }
         except Exception as exc:
@@ -123,6 +132,7 @@ def save_blackboard(
     artifacts: list[dict[str, Any]] | None = None,
     completed_steps: list[str] | None = None,
     next_step_hint: str | None = None,
+    style_mode: str | None = None,
 ) -> dict[str, Any]:
     """更新并持久化会话黑板。"""
     if not session_id:
@@ -131,6 +141,8 @@ def save_blackboard(
     current = get_blackboard(conn, session_id)
     if last_goal is not None and last_goal.strip():
         current["last_goal"] = last_goal.strip()
+    if style_mode is not None and style_mode.strip():
+        current["style_mode"] = style_mode.strip()
     if artifacts is not None:
         # 路径去重
         existing_paths = {a.get("path") for a in current["artifacts"] if isinstance(a, dict)}
@@ -152,13 +164,14 @@ def save_blackboard(
             init_blackboard_schema(conn)
             conn.execute(
                 """
-                INSERT INTO session_blackboard (session_id, last_goal, artifacts_json, completed_steps_json, next_step_hint, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO session_blackboard (session_id, last_goal, artifacts_json, completed_steps_json, next_step_hint, style_mode, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     last_goal = excluded.last_goal,
                     artifacts_json = excluded.artifacts_json,
                     completed_steps_json = excluded.completed_steps_json,
                     next_step_hint = excluded.next_step_hint,
+                    style_mode = excluded.style_mode,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -167,6 +180,7 @@ def save_blackboard(
                     json.dumps(current["artifacts"], ensure_ascii=False),
                     json.dumps(current["completed_steps"], ensure_ascii=False),
                     current["next_step_hint"],
+                    current.get("style_mode") or "",
                     current["updated_at"],
                 ),
             )
@@ -328,5 +342,6 @@ def _empty_blackboard(session_id: str) -> dict[str, Any]:
         "artifacts": [],
         "completed_steps": [],
         "next_step_hint": "",
+        "style_mode": "",
         "updated_at": _now(),
     }

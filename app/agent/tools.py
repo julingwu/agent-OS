@@ -401,6 +401,15 @@ def _dispatch_tool(name: str, args: dict, *, emit=None, bot_id: str | None = Non
             max_chars=_safe_int(args.get("max_chars", 25000), 25000),
             render_js=_safe_bool(args.get("render_js", False), False)
         )
+    if name in ("deep_research", "deep_search"):
+        from . import deep_research
+        return deep_research.run_deep_research(
+            topic=str(args.get("topic") or args.get("query") or ""),
+            depth=str(args.get("depth") or "standard"),
+            focus_areas=args.get("focus_areas"),
+            publish_report=_safe_bool(args.get("publish_report", True), True),
+            session_id=session_id or str(args.get("session_id") or ""),
+        )
     if name == "browser_open":
         from . import web_tools
         return web_tools.browser_open(str(args.get("url", "")), wait_ms=_safe_int(args.get("wait_ms", 2500), 2500),
@@ -466,6 +475,22 @@ def _dispatch_tool(name: str, args: dict, *, emit=None, bot_id: str | None = Non
             python_code=args.get("python_code"),
             theme=str(args.get("theme") or "modern"),
             emit=emit,
+        )
+    if name in ("fetch_social_pulse", "social_pulse"):
+        from . import social_tools
+        return social_tools.fetch_social_pulse(
+            platform=str(args.get("platform") or "all"),
+            limit=_safe_int(args.get("limit") or 15, 15)
+        )
+    if name in ("generate_image", "generate_image_tool"):
+        from . import image_tools
+        return image_tools.generate_image_tool(
+            prompt=str(args.get("prompt") or ""),
+            title=str(args.get("title") or ""),
+            style=str(args.get("style") or "illustration"),
+            aspect_ratio=str(args.get("aspect_ratio") or "16:9"),
+            session_id=str(session_id or ""),
+            workspace_path=str(args.get("workspace_path") or ""),
         )
     if name == "render_diagram":
         from . import ext_tools
@@ -811,6 +836,26 @@ TOOL_SPECS: list[dict] = [
         }, "required": ["url"]},
     }},
     {"type": "function", "function": {
+        "name": "deep_research",
+        "description": "自主多轮交叉验证深度研报工作流（DeepSearch）。针对复杂课题自动多维拆解、多源并发检索、权威信源脱水、交叉核验并生成工业级结构化研报与产物。",
+        "parameters": {"type": "object", "properties": {
+            "topic": {"type": "string", "description": "调研课题或主题"},
+            "depth": {"type": "string", "enum": ["quick", "standard", "deep"], "description": "调研深度，默认 standard"},
+            "focus_areas": {"type": "array", "items": {"type": "string"}, "description": "重点关注的维度或领域列表"},
+            "publish_report": {"type": "boolean", "description": "是否自动发布研报为 Artifact 产物，默认 true"},
+        }, "required": ["topic"]},
+    }},
+    {"type": "function", "function": {
+        "name": "deep_search",
+        "description": "自主多轮交叉验证深度研报工作流（DeepResearch 兼容别名）。针对复杂课题自动多维拆解、多源并发检索、权威信源脱水、交叉核验并生成工业级结构化研报与产物。",
+        "parameters": {"type": "object", "properties": {
+            "topic": {"type": "string", "description": "调研课题或主题"},
+            "depth": {"type": "string", "enum": ["quick", "standard", "deep"], "description": "调研深度，默认 standard"},
+            "focus_areas": {"type": "array", "items": {"type": "string"}, "description": "重点关注的维度或领域列表"},
+            "publish_report": {"type": "boolean", "description": "是否自动发布研报为 Artifact 产物，默认 true"},
+        }, "required": ["topic"]},
+    }},
+    {"type": "function", "function": {
         "name": "browser_open",
         "description": "在服务端启动无头 Chromium 浏览器完整渲染动态 JS 页面，支持 DOM 提取与网页全屏截图挂载。",
         "parameters": {"type": "object", "properties": {
@@ -997,6 +1042,54 @@ TOOL_SPECS: list[dict] = [
                 "description": "配色主题：modern(现代科技暗调), financial(彭博金融高对比), academic(经典学术纯白)，默认 modern",
             },
         }, "required": ["title", "diagram_type", "code"]},
+    }},
+    {"type": "function", "function": {
+        "name": "social_pulse",
+        "description": "社交情绪脉搏与全网热点透视工具（Grok 标杆特性）。多源聚合微博热搜、知乎热榜、百度热搜与财经实时快讯，支持全局与分平台洞察，生成结构化 Markdown 舆情表格与情绪风向研判。",
+        "parameters": {"type": "object", "properties": {
+            "platform": {
+                "type": "string",
+                "enum": ["all", "weibo", "zhihu", "baidu", "finance"],
+                "description": "目标平台，可选 all(全网多平台聚合), weibo(微博实时热搜), zhihu(知乎热榜), baidu(百度热搜), finance(财经快讯)，默认 all",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "拉取条数（1 ~ 50，默认 15）",
+            },
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "fetch_social_pulse",
+        "description": "社交情绪脉搏与全网热点透视工具（Grok 标杆特性）。多源聚合微博热搜、知乎热榜、百度热搜与财经实时快讯，支持全局与分平台洞察，生成结构化 Markdown 舆情表格与情绪风向研判。",
+        "parameters": {"type": "object", "properties": {
+            "platform": {
+                "type": "string",
+                "enum": ["all", "weibo", "zhihu", "baidu", "finance"],
+                "description": "目标平台，可选 all(全网多平台聚合), weibo(微博实时热搜), zhihu(知乎热榜), baidu(百度热搜), finance(财经快讯)，默认 all",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "拉取条数（1 ~ 50，默认 15）",
+            },
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "generate_image",
+        "description": "AI 视觉图画生成与渲染工具（Grok 标杆特性）。支持双模生图（Pro API / 离线高雅艺术降级），生成高清科技/艺术卡片，自动集成至 AgentOS 产物系统并返回 Markdown 引用。",
+        "parameters": {"type": "object", "properties": {
+            "prompt": {"type": "string", "description": "生图提示词与画面描述"},
+            "title": {"type": "string", "description": "画作主标题，如 赛博朋克深空巡航"},
+            "style": {
+                "type": "string",
+                "enum": ["cyberpunk", "photorealistic", "illustration", "minimalist_infographic"],
+                "description": "画作艺术风格：cyberpunk(赛博朋克/电光霓虹), photorealistic(摄影逼真/电影光影), illustration(艺术插画/星河梦幻), minimalist_infographic(极简信息图/拓扑图表)，默认 illustration",
+            },
+            "aspect_ratio": {
+                "type": "string",
+                "enum": ["16:9", "1:1", "4:3", "9:16"],
+                "description": "画面宽高比，默认 16:9",
+            },
+        }, "required": ["prompt"]},
     }},
     {"type": "function", "function": {
         "name": "computer_screenshot",
@@ -1240,10 +1333,20 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset({
 })
 
 DOMAIN_TOOL_PACKS: dict[str, list[str]] = {
+    "RESEARCH": [
+        "deep_research",
+        "deep_search",
+        "social_pulse",
+        "fetch_social_pulse",
+    ],
     "VISUAL": [
         "render_chart",
         "render_diagram",
+        "generate_image",
+        "fetch_social_pulse",
+        "social_pulse",
         "publish_artifact",
+        "deep_research",
     ],
     "BROWSER": [
         "browser_open",
@@ -1295,10 +1398,15 @@ DOMAIN_TOOL_PACKS: dict[str, list[str]] = {
 }
 
 DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "RESEARCH": (
+        "调研", "研报", "深研", "尽调", "研究", "deep research", "deep search", "deepsearch", "deep_research",
+        "热搜", "热榜", "热点", "微博", "知乎", "趋势", "社交情绪", "trending", "social_pulse", "舆情", "脉搏",
+    ),
     "VISUAL": (
         "图表", "画图", "走势", "对比", "架构", "流程图", "时序图",
         "柱状图", "折线图", "饼图", "甘特图", "思维导图", "产物",
         "可视化", "看板", "chart", "diagram", "artifact", "visual",
+        "生图", "作图", "插画", "配图", "海报", "generate image", "flux", "dall-e", "midjourney",
     ),
     "BROWSER": (
         "浏览器", "交互", "登录", "点击", "输入", "翻页", "网页",
@@ -1322,8 +1430,12 @@ DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 BOT_ROLE_PACKS: dict[str, tuple[str, ...]] = {
+    "RESEARCH": (
+        "分析师", "研究员", "调研", "智囊", "自媒体", "顾问", "咨询", "专家", "媒体", "公关",
+    ),
     "VISUAL": (
         "数据分析", "研报", "分析师", "架构师", "研究员", "财务", "图表", "报告", "规划", "咨询",
+        "设计", "自媒体", "导演", "美工", "运营", "插画师", "视觉", "原画",
     ),
     "CODE": (
         "开发", "工程师", "后端", "前端", "测试", "运维", "dev", "qa", "ops", "coder", "架构",
