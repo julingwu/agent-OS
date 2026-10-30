@@ -146,7 +146,8 @@ def _chat_blocking_with_progress(conn, messages, *, bot_id, session_id, turn_id,
         pool.shutdown(wait=False)
 
 
-def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model):
+def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
+                   tools_specs=None):
     """优先流式：边生成边发 message.delta（瞬态，不落库），让界面真的"在打字"。
 
     回落策略是硬的：
@@ -155,6 +156,9 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model):
       * 任何情况下都不把内部异常当回答写给用户。
     """
     import time
+
+    if tools_specs is None:
+        tools_specs = tools.get_effective_tool_specs()
 
     buf: list[str] = []
     acc: list[str] = []          # 已发给用户的全部内容（半截失败时就是最终结果）
@@ -172,7 +176,7 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model):
               turn_id=turn_id, payload={"text": text, "seq": seq})
 
     try:
-        it = llm.chat_stream(messages, tools=tools.TOOL_SPECS,
+        it = llm.chat_stream(messages, tools=tools_specs,
                              temperature=0.3, model=model)
         last_flush = time.monotonic()
         for kind, payload in it:
@@ -199,7 +203,7 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model):
         # 一个字都没吐出来：静默回落到非流式（带 5 秒心跳进度）
         return _chat_blocking_with_progress(conn, messages, bot_id=bot_id,
                                             session_id=session_id, turn_id=turn_id,
-                                            model=model, tools_specs=tools.TOOL_SPECS,
+                                            model=model, tools_specs=tools_specs,
                                             temperature=0.3)
 
 
@@ -235,7 +239,7 @@ def _system_prompt(bot: dict, members: list[dict] | None = None,
         "- 【本地个人电脑（local_*）严格管控铁律】：local_* 系列工具专用于操作用户本人的本地桌面（如屏幕控制、操作本地客户端）。除非用户在当前提问中明确且主动输入了“在我电脑上”、“在我本机运行”、“打开我本地微信/Excel”、“读取我本机 D 盘”等显式指令，否则：绝对禁止主动提议“尝试在你本地电脑上执行/搜索”；绝对禁止向用户列出任何本地电脑操作选项；绝对禁止调用任何 local_* 工具！\n"
         f"{peer_line}{memory_line}\n"
         "核心工作原则与能力（非常重要）：\n"
-        "1. 【全网实时互联】：你具备完整的互联网检索与网页阅读能力（web_search、web_fetch、browser_open）。"
+        "1. 【全网实时互联】：你具备完整的互联网检索与网页交互能力（web_search、web_fetch、browser_open、browser_interact）。"
         "严禁宣称自己“无法联网”或“知识受限于截止日期”。凡遇到最新资讯、行业动态、时事事实、第三方库文档或专业知识，"
         "必须主动调用 web_search 获取实时事实。\n"
         "2. 【代码与文档深度工程】：工作区支持 glob_search 通配、grep_search 正则搜索、fs_read 精确行号切片、"
@@ -418,6 +422,8 @@ def adaptive_compact_context(
     messages: list[dict],
     keep_recent_steps: int = 4,
     target_tokens: int = 32_000,
+    threshold: int | None = None,
+    **kwargs,
 ) -> list[dict]:
     """对标 Claude Code 的自适应微压缩引擎（三级微剪枝 + 活跃窗口全保真）。
 
@@ -429,6 +435,26 @@ def adaptive_compact_context(
     """
     if not messages:
         return messages
+
+    if threshold is not None:
+        total_len = sum(len(str(m.get("content") or "")) for m in messages)
+        if total_len > threshold:
+            cut_point = max(1, len(messages) - 4)
+            for i in range(1, cut_point):
+                msg = messages[i]
+                if msg.get("role") == "tool":
+                    c = str(msg.get("content") or "")
+                    if len(c) > 400:
+                        try:
+                            data = json.loads(c)
+                            summary = f"ok={data.get('ok')}, error={data.get('error', '')}"
+                        except Exception:
+                            summary = c[:100].replace("\n", " ")
+                        msg["content"] = f"[历史工具结果已折叠压缩: 原长 {len(c)} 字符，概要: {summary}]"
+                        total_len -= (len(c) - len(msg["content"]))
+                        if total_len <= threshold * 0.7:
+                            break
+            return messages
 
     current_tokens = _estimate_tokens(messages)
     if current_tokens <= target_tokens:
@@ -640,13 +666,19 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     total_prompt = total_completion = 0
     status, final_text = "done", ""
     executed_steps_summary: list[str] = []
+    active_tools: set[str] = set()
 
     for step in range(MAX_STEPS):
         try:
             messages = _compact_context(messages)
+            effective_tools = tools.get_effective_tool_specs(
+                bot=bot,
+                user_text=last_user,
+                active_tools=active_tools,
+            )
             resp = _chat_streamed(conn, messages, bot_id=bot_id,
                                   session_id=session_id, turn_id=turn_id,
-                                  model=model)
+                                  model=model, tools_specs=effective_tools)
         except Exception as exc:                       # noqa: BLE001 - 模型失败要有兜底
             err_str = str(exc)
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="error",
@@ -698,6 +730,8 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
         for call in tool_calls:
             fn = (call.get("function") or {})
             name = fn.get("name") or "unknown"
+            if name != "unknown":
+                active_tools.add(name)
             call_id = call.get("id") or f"call_{step}"
             try:
                 args = json.loads(fn.get("arguments") or "{}")

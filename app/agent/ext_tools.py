@@ -74,6 +74,7 @@ def run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict[str
 
     workdir = tools._jail(cwd)
     workdir.mkdir(parents=True, exist_ok=True)
+    safe_env = tools.sanitize_env()
 
     try:
         proc = subprocess.run(
@@ -82,6 +83,7 @@ def run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict[str
             cwd=str(workdir),
             capture_output=True,
             text=False,
+            env=safe_env,
             timeout=max(1, min(int(timeout_s), 900)),
         )
         full_stdout = _safe_decode(proc.stdout)
@@ -130,6 +132,8 @@ def run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict[str
 def process_start(cmd: str, name: str | None = None, cwd: str | None = None,
                   bot_id: str | None = None, session_id: str | None = None) -> dict[str, Any]:
     """启动一个持久化后台进程（服务端独立进程组，不受连接中断影响）。"""
+    workdir = tools._jail(cwd)
+    workdir.mkdir(parents=True, exist_ok=True)
     with db.get_conn() as conn:
         try:
             info = processes.start(
@@ -137,7 +141,7 @@ def process_start(cmd: str, name: str | None = None, cwd: str | None = None,
                 bot_id=bot_id or "bot_chief",
                 cmd=cmd,
                 name=name,
-                cwd=cwd,
+                cwd=str(workdir),
                 session_id=session_id,
             )
             return {"ok": True, "process": info}

@@ -301,18 +301,23 @@ def _command_text(argv: list[str]) -> str:
 
 
 def _resolve_cwd(cwd) -> pathlib.Path:
+    ws_root = pathlib.Path(os.path.realpath(str(get_workspace_root()))).resolve()
     if cwd:
         text = str(cwd)
         if "\x00" in text:
             raise ValueError("cwd 不允许包含 NUL 字节")
         candidate = pathlib.Path(os.path.expanduser(text))
         if not candidate.is_absolute():
-            candidate = get_workspace_root() / candidate
-        candidate = candidate.resolve()
+            candidate = ws_root / candidate
+        candidate = pathlib.Path(os.path.realpath(str(candidate))).resolve()
+        try:
+            candidate.relative_to(ws_root)
+        except ValueError:
+            raise ValueError(f"cwd escapes workspace: {cwd}")
         if not candidate.is_dir():
             raise ValueError(f"cwd 不是已存在的目录：{candidate}")
         return candidate
-    return get_workspace_root().resolve()
+    return ws_root
 
 
 def log_dir() -> pathlib.Path:
@@ -361,9 +366,11 @@ def start(conn, *, bot_id: str, cmd, session_id: str | None = None,
                   else log_dir() / f"{process_id}.log")
     target_log.parent.mkdir(parents=True, exist_ok=True)
 
-    child_env = os.environ.copy()
+    from .agent.tools import sanitize_env
+    child_env = sanitize_env(os.environ.copy())
     if env:
         child_env.update({str(k): str(v) for k, v in env.items()})
+        child_env = sanitize_env(child_env)
 
     popen_kwargs: dict = {
         "stdin": subprocess.DEVNULL,

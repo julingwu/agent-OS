@@ -697,3 +697,17 @@ def browser_open(url: str, wait_ms: int = 2500, screenshot: bool = False,
         "chars": len(content),
         "screenshot": screenshot_art,
     }
+
+
+def browser_interact(url: str, actions: list[dict] | None = None, wait_ms: int = 2500,
+                     screenshot: bool = True, max_chars: int = 25000, emit=None) -> dict:
+    """多步无头浏览器交互与视觉快照执行引擎。"""
+    from .browser_tools import browser_interact as _browser_interact
+    return _browser_interact(
+        url=url,
+        actions=actions,
+        wait_ms=wait_ms,
+        screenshot=screenshot,
+        max_chars=max_chars,
+        emit=emit,
+    )

@@ -78,10 +78,62 @@ def _safe_bool(val: object, default: bool = False) -> bool:
     return bool(val)
 
 
+SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
+    "DEEPSEEK_API_KEY",
+    "OPENAI_API_KEY",
+    "TAVILY_API_KEY",
+    "BOCHA_API_KEY",
+    "SERPER_API_KEY",
+    "AGENT_SECRET",
+    "M0_AGENT_SECRET",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+    "DASHSCOPE_API_KEY",
+    "MOONSHOT_API_KEY",
+    "SECRET_KEY",
+    "JWT_SECRET",
+    "DATABASE_URL",
+    "AWS_SECRET_ACCESS_KEY",
+    "AZURE_OPENAI_API_KEY",
+})
+
+SENSITIVE_ENV_SUFFIXES: tuple[str, ...] = (
+    "_API_KEY",
+    "_SECRET",
+    "_SECRET_KEY",
+    "_ACCESS_TOKEN",
+    "_PRIVATE_KEY",
+)
+
+
+def sanitize_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    """清洗子进程环境变量，剥离敏感 API 密钥与系统凭据，防御环境变量意外泄露。"""
+    raw = dict(base_env if base_env is not None else os.environ)
+    clean: dict[str, str] = {}
+    for k, v in raw.items():
+        uk = k.upper()
+        if uk in SENSITIVE_ENV_KEYS:
+            continue
+        if any(uk.endswith(suffix) for suffix in SENSITIVE_ENV_SUFFIXES):
+            continue
+        clean[k] = v
+    return clean
+
+
 def _jail(path: str | None) -> pathlib.Path:
-    root = WORKSPACE.resolve()
-    target = (root / (path or ".")).resolve()
-    if target != root and root not in target.parents:
+    """严格限制路径必须在 WORKSPACE 目录内部，严禁通过 ../ 或绝对路径逃逸出系统工作区。"""
+    raw = str(path or ".").strip()
+    if not raw:
+        raw = "."
+    if "\x00" in raw:
+        raise ToolError(f"path contains NUL byte: {path!r}")
+
+    root = pathlib.Path(os.path.realpath(str(WORKSPACE))).resolve()
+    target = pathlib.Path(os.path.realpath(str(root / raw))).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
         raise ToolError(f"path escapes workspace: {path}")
     return target
 
@@ -99,9 +151,12 @@ def _safe_decode(data: bytes | str | None) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict:
+def _exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict:
     from . import ext_tools
     return ext_tools.run_exec(cmd, cwd=cwd, timeout_s=timeout_s)
+
+
+_run_exec = _exec
 
 
 def _extract_path(args_or_path: Any) -> str:
@@ -292,8 +347,7 @@ def _dispatch_tool(name: str, args: dict, *, emit=None, bot_id: str | None = Non
     """执行底层工具调用。"""
     args = args or {}
     if name == "exec":
-        from . import ext_tools
-        return ext_tools.run_exec(str(args.get("cmd", "")), args.get("cwd"), _safe_int(args.get("timeout_s", 180), 180))
+        return _exec(str(args.get("cmd", "")), args.get("cwd"), _safe_int(args.get("timeout_s", 180), 180))
     if name == "fs_list":
         return _fs_list(_extract_path(args) or args.get("path"))
     if name == "fs_read":
@@ -312,6 +366,27 @@ def _dispatch_tool(name: str, args: dict, *, emit=None, bot_id: str | None = Non
                                      _safe_int(args.get("max_matches", 80), 80))
     if name == "doc_read":
         return _doc_read(args)
+    if name == "code_outline":
+        from . import code_tools
+        return code_tools.code_outline(
+            _extract_path(args) or str(args.get("path", "")),
+            max_depth=_safe_int(args.get("max_depth", 2), 2),
+        )
+    if name == "code_symbols":
+        from . import code_tools
+        return code_tools.code_symbols(
+            str(args.get("query", "")),
+            path=_extract_path(args) or str(args.get("path", ".")),
+            symbol_type=str(args.get("symbol_type", "all")),
+            max_results=_safe_int(args.get("max_results", 50), 50),
+        )
+    if name == "code_references":
+        from . import code_tools
+        return code_tools.code_references(
+            str(args.get("symbol", "")),
+            path=_extract_path(args) or str(args.get("path", ".")),
+            max_results=_safe_int(args.get("max_results", 40), 40),
+        )
     if name == "web_search":
         from . import web_tools
         return web_tools.web_search(
@@ -332,6 +407,16 @@ def _dispatch_tool(name: str, args: dict, *, emit=None, bot_id: str | None = Non
                                       screenshot=_safe_bool(args.get("screenshot", False), False),
                                       selector=args.get("selector"),
                                       max_chars=_safe_int(args.get("max_chars", 20000), 20000), emit=emit)
+    if name == "browser_interact":
+        from . import browser_tools
+        return browser_tools.browser_interact(
+            str(args.get("url", "")),
+            actions=args.get("actions"),
+            wait_ms=_safe_int(args.get("wait_ms", 2500), 2500),
+            screenshot=_safe_bool(args.get("screenshot", True), True),
+            max_chars=_safe_int(args.get("max_chars", 25000), 25000),
+            emit=emit,
+        )
     if name == "process_start":
         from . import ext_tools
         return ext_tools.process_start(str(args.get("cmd", "")), name=args.get("name"), cwd=args.get("cwd"),
@@ -681,6 +766,33 @@ TOOL_SPECS: list[dict] = [
         }, "required": ["path"]},
     }},
     {"type": "function", "function": {
+        "name": "code_outline",
+        "description": "提取单个代码文件的高密度符号大纲（类、函数、起止行号与文档注释），秒懂千行代码全貌且几乎不消耗 Token。",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "相对工作区的文件路径"},
+            "max_depth": {"type": "integer", "description": "展开符号深度层级，默认 2"},
+        }, "required": ["path"]},
+    }},
+    {"type": "function", "function": {
+        "name": "code_symbols",
+        "description": "递归检索工程内的类和函数定义符号，支持模糊搜索，返回精确文件名、行号与签名。",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "符号搜索关键词（如 _compact_context、SessionBlackboard），缺省返回全部"},
+            "path": {"type": "string", "description": "相对工作区的搜索目录，默认 ."},
+            "symbol_type": {"type": "string", "enum": ["all", "class", "function", "method", "struct", "interface"], "description": "符号类型过滤，默认 all"},
+            "max_results": {"type": "integer", "description": "最大返回数量限制，默认 50"},
+        }},
+    }},
+    {"type": "function", "function": {
+        "name": "code_references",
+        "description": "检索指定符号在全工程源码中的所有导入（import）、定义（def）与调用点引用。",
+        "parameters": {"type": "object", "properties": {
+            "symbol": {"type": "string", "description": "要检索的符号名称（如 SessionBlackboard）"},
+            "path": {"type": "string", "description": "相对工作区的搜索目录，默认 ."},
+            "max_results": {"type": "integer", "description": "最大返回数量限制，默认 40"},
+        }, "required": ["symbol"]},
+    }},
+    {"type": "function", "function": {
         "name": "web_search",
         "description": "实时多引擎联网搜索（国内必应、360、搜狗级联，获取最新资讯、行业事实与技术文档）。",
         "parameters": {"type": "object", "properties": {
@@ -706,6 +818,21 @@ TOOL_SPECS: list[dict] = [
             "wait_ms": {"type": "integer", "description": "等待页面 JS 加载渲染时间（毫秒），默认 2500"},
             "screenshot": {"type": "boolean", "description": "是否同时截取全屏并挂载为图片产物，默认 false"},
             "max_chars": {"type": "integer", "description": "DOM 提取文字上限，默认 20000"},
+        }, "required": ["url"]},
+    }},
+    {"type": "function", "function": {
+        "name": "browser_interact",
+        "description": "多步无头浏览器交互与视觉快照执行引擎。支持打开网页、点击元素、输入文本、滚动翻页、定向DOM提取、并捕获视觉快照产物。",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string", "description": "起始网页的完整 HTTP/HTTPS 链接"},
+            "actions": {
+                "type": "array",
+                "description": "动作执行序列，支持 navigate, click, type, scroll, wait, extract, screenshot",
+                "items": {"type": "object"}
+            },
+            "wait_ms": {"type": "integer", "description": "初始页面加载等待时间（毫秒），默认 2500"},
+            "screenshot": {"type": "boolean", "description": "是否生成视觉快照产物，默认 true"},
+            "max_chars": {"type": "integer", "description": "返回 Markdown 字符上限，默认 25000"},
         }, "required": ["url"]},
     }},
     {"type": "function", "function": {
@@ -1084,3 +1211,188 @@ TOOL_SPECS: list[dict] = [
         "parameters": {"type": "object", "properties": {}},
     }},
 ]
+
+
+# ================================================================
+# 工具 Schema 动态分级懒加载体系 (Tiered Tool Schema Dynamic Loading)
+# 对标 Claude Code / Hermes 分级加载架构，按需挂载工具 Schema
+# ================================================================
+
+CORE_TOOL_NAMES: frozenset[str] = frozenset({
+    "fs_read",
+    "fs_write",
+    "fs_edit",
+    "fs_list",
+    "exec",
+    "web_search",
+    "web_fetch",
+    "ask_human",
+    "remember",
+    "recall",
+    "list_skills",
+    "use_skill",
+    "skill_save",
+    "code_outline",
+    "code_symbols",
+    "todo_write",
+    "todo_read",
+    "doc_read",
+})
+
+DOMAIN_TOOL_PACKS: dict[str, list[str]] = {
+    "VISUAL": [
+        "render_chart",
+        "render_diagram",
+        "publish_artifact",
+    ],
+    "BROWSER": [
+        "browser_open",
+        "browser_interact",
+    ],
+    "PROCESS": [
+        "process_start",
+        "process_list",
+        "process_logs",
+        "process_stop",
+    ],
+    "CODE": [
+        "code_references",
+        "glob_search",
+        "grep_search",
+    ],
+    "LOCAL_DESKTOP": [
+        "local_info",
+        "local_list",
+        "local_read",
+        "local_write",
+        "local_exec",
+        "local_apps",
+        "local_open",
+        "local_windows",
+        "local_focus",
+        "local_type",
+        "local_keys",
+        "local_click",
+        "local_close",
+        "local_screenshot",
+        "local_run_cmd",
+        "local_read_file",
+        "local_write_file",
+        "local_screen_stream_start",
+    ],
+    "ADVANCED_CODEX": [
+        "computer_screenshot",
+        "computer_action",
+        "mcp_list_tools",
+        "mcp_call",
+        "delegate_task",
+        "skill_delete",
+        "routine_create",
+        "routine_delete",
+        "list_routines",
+        "computer_info",
+    ],
+}
+
+DOMAIN_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "VISUAL": (
+        "图表", "画图", "走势", "对比", "架构", "流程图", "时序图",
+        "柱状图", "折线图", "饼图", "甘特图", "思维导图", "产物",
+        "可视化", "看板", "chart", "diagram", "artifact", "visual",
+    ),
+    "BROWSER": (
+        "浏览器", "交互", "登录", "点击", "输入", "翻页", "网页",
+        "页面", "快照", "截图", "抓取", "爬虫", "browser", "scrape", "crawl",
+    ),
+    "PROCESS": (
+        "进程", "后台", "守护", "启动服务", "运行服务", "杀掉",
+        "停止进程", "查看日志", "process", "daemon", "server",
+    ),
+    "CODE": (
+        "代码", "符号", "引用", "函数", "类", "实现", "搜索",
+        "查找", "正则", "grep", "glob", "code", "symbol", "reference",
+    ),
+    "LOCAL_DESKTOP": (
+        "电脑", "本机", "微信", "桌面", "窗口", "客户端",
+        "本地运行", "在我电脑", "在我本机", "local", "desktop",
+    ),
+    "ADVANCED_CODEX": (
+        "mcp", "子代理", "分派", "例程", "routine", "delegate", "computer",
+    ),
+}
+
+BOT_ROLE_PACKS: dict[str, tuple[str, ...]] = {
+    "VISUAL": (
+        "数据分析", "研报", "分析师", "架构师", "研究员", "财务", "图表", "报告", "规划", "咨询",
+    ),
+    "CODE": (
+        "开发", "工程师", "后端", "前端", "测试", "运维", "dev", "qa", "ops", "coder", "架构",
+    ),
+    "PROCESS": (
+        "开发", "工程师", "后端", "测试", "运维", "dev", "qa", "ops", "coder",
+    ),
+    "ADVANCED_CODEX": (
+        "chief", "总监", "管理者", "专家",
+    ),
+}
+
+
+def get_effective_tool_specs(
+    bot: dict | None = None,
+    user_text: str = "",
+    active_tools: list[str] | set[str] | None = None,
+) -> list[dict]:
+    """根据 Bot 角色设定、用户输入意图关键词与上下文动态加载工具 Schema，对标 Claude Code 分级懒加载。
+
+    - 基础核心工具（CORE_TOOL_NAMES）始终保留；
+    - 根据 Bot 设定自动挂载领域工具包（如数据分析挂载 VISUAL，开发挂载 CODE / PROCESS）；
+    - 根据用户消息关键词即时激活特定工具包（如“画图”激活 VISUAL，“浏览器”激活 BROWSER）；
+    - 维持上一轮已调用的工具常驻（active_tools）。
+    """
+    spec_map = {
+        spec["function"]["name"]: spec
+        for spec in TOOL_SPECS
+        if isinstance(spec, dict) and "function" in spec and "name" in spec["function"]
+    }
+    selected_names: set[str] = set()
+
+    # 1. 基础核心工具（Core Tools）始终全量加载
+    for name in CORE_TOOL_NAMES:
+        if name in spec_map:
+            selected_names.add(name)
+
+    # 2. 根据 Bot 角色/身份设定自动挂载领域工具包
+    bot = bot or {}
+    bot_info = " ".join(
+        str(bot.get(k) or "")
+        for k in ("name", "persona", "prompt", "tag", "role", "industry", "skills")
+    ).lower()
+
+    for pack_name, role_keywords in BOT_ROLE_PACKS.items():
+        if any(kw in bot_info for kw in role_keywords):
+            for tool_name in DOMAIN_TOOL_PACKS.get(pack_name, []):
+                if tool_name in spec_map:
+                    selected_names.add(tool_name)
+
+    # 3. 根据用户输入文本中的意图关键词即时挂载工具包
+    user_lower = str(user_text or "").lower()
+    if user_lower:
+        for pack_name, keywords in DOMAIN_KEYWORDS.items():
+            if any(kw in user_lower for kw in keywords):
+                for tool_name in DOMAIN_TOOL_PACKS.get(pack_name, []):
+                    if tool_name in spec_map:
+                        selected_names.add(tool_name)
+
+    # 4. 保留上下文已调用或显式激活的工具常驻
+    if active_tools:
+        for t in active_tools:
+            if t in spec_map:
+                selected_names.add(t)
+            if t in DOMAIN_TOOL_PACKS:
+                for tool_name in DOMAIN_TOOL_PACKS[t]:
+                    if tool_name in spec_map:
+                        selected_names.add(tool_name)
+
+    # 保持与全局 TOOL_SPECS 相同的相对顺序
+    return [spec for spec in TOOL_SPECS if spec.get("function", {}).get("name") in selected_names]
+
