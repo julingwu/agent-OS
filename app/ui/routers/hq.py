@@ -7,22 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ...db import get_conn
-from ... import finops, telemetry, tenant, tenancy
+from ... import finops, recruitment, telemetry, tenant, tenancy
 from .. import approval_access, roles as roles_mod, store
 from ..common import _token, _require, _task_actor
+from ...recruitment import map_dept, DEPT_PATTERNS
 
 router = APIRouter()
-
-DEPT_PATTERNS = [
-    (0, re.compile(r"产品|PM|需求|项目经理|规划", re.I)),
-    (1, re.compile(r"设计|UI|UX|视觉|美工|插画", re.I)),
-    (2, re.compile(r"市场|文案|营销|品牌|内容|推广|新媒体|撰稿", re.I)),
-    (3, re.compile(r"运营|SRE|运维|客服|增长|社群|活动", re.I)),
-    (4, re.compile(r"研发|开发|工程|前端|后端|Python|架构|算法|量化|测试|QA|代码|极客|小码|小测", re.I)),
-    (5, re.compile(r"人事|HR|招聘|培训|组织|研究", re.I)),
-    (6, re.compile(r"财务|金融|会计|税务|核算|成本|投研|小财", re.I)),
-    (7, re.compile(r"法务|合规|审计|行政|风控|合同|安全", re.I)),
-]
 
 STAGE_DEPT_MAP = {
     "intake": 0, "charter": 0, "workshop": -1, "wbs": 0,
@@ -38,12 +28,40 @@ def _has_table(conn, table_name: str) -> bool:
         return False
 
 
-def map_dept(title: str, name: str = "", entity_name: str = "") -> int:
-    text = f"{title or ''} {name or ''} {entity_name or ''}"
-    for idx, pat in DEPT_PATTERNS:
-        if pat.search(text):
-            return idx
-    return 4
+class AutoStaffIn(BaseModel):
+    entity_id: str = "LE-GROUP-HQ"
+    tenant_id: str = "TENANT-HQ"
+
+
+@router.post("/hq/auto-staff")
+def hq_auto_staff(payload: AutoStaffIn | None = None, oa_ui: str | None = Depends(_token)):
+    """主动触发 8 大部门组织编制巡检与人事部自动招聘工作流。"""
+    entity_id = payload.entity_id if payload else "LE-GROUP-HQ"
+    tenant_id = payload.tenant_id if payload else "TENANT-HQ"
+    with get_conn() as conn:
+        store.ensure(conn)
+        roles_mod.ensure(conn)
+        if oa_ui:
+            try:
+                actor = _task_actor(conn, oa_ui, "task:*")
+                tenant.resolve(actor, entity_id)
+                if tenancy.of_entity(conn, entity_id) != actor["tenant_id"]:
+                    raise HTTPException(403, detail={"code": "TenantMismatch"})
+                tenant_id = actor["tenant_id"]
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        staffing_before = recruitment.inspect_department_staffing(conn, entity_id=entity_id)
+        recruited = recruitment.trigger_auto_recruitment(conn, entity_id=entity_id, tenant_id=tenant_id)
+        staffing_after = recruitment.inspect_department_staffing(conn, entity_id=entity_id)
+    return {
+        "ok": True,
+        "recruited": recruited,
+        "staffing_before": staffing_before,
+        "staffing_after": staffing_after,
+        "count": len(recruited),
+    }
 
 
 class HireRoleIn(BaseModel):
@@ -108,13 +126,8 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
                 pass
 
         # ------------------------------------------------------------------ 1. Employees
-        if _has_table(conn, "ai_employees"):
-            active_emp_count = conn.execute(
-                "SELECT COUNT(*) as c FROM ai_employees WHERE COALESCE(status,'online') != 'fired'"
-            ).fetchone()["c"]
-            if active_emp_count < 3:
-                for seed_row in roles_mod.SEED:
-                    roles_mod.instantiate(conn, seed_row[0], "LE-GROUP-HQ")
+        # 组织编制闭环巡检：自动检测 8 大部门缺编并由人事部执行招聘考核任务入驻
+        recruitment.trigger_auto_recruitment(conn, entity_id="LE-GROUP-HQ", tenant_id="TENANT-HQ")
 
         has_chats = _has_table(conn, "chats")
         if has_chats:
@@ -141,7 +154,7 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
 
         employees = []
         for r in emp_rows:
-            dept_idx = map_dept(r['title'], r['name'], r['entity_name'])
+            dept_idx = map_dept(r['title'], r['name'], r['entity_name'], r['role_id'] or "")
 
             # Busy check: active/assigned task or active project stage
             task_busy = conn.execute("""
@@ -500,11 +513,12 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
         """).fetchall()
         for r in tk_rows:
             d_idx = map_dept(r['pos_title'], r['emp_name'])
+            t_title = (r['title'] or r['id'] or '')[:30]
             feed_events.append({
                 "time": r['updated_at'] or r['created_at'],
                 "actor": r['emp_name'] or "任务引擎",
                 "dept_idx": d_idx,
-                "text": f"任务「{r['title'][:30]}」进入 {r['state']}",
+                "text": f"任务「{t_title}」进入 {r['state']}",
                 "kind": "task",
                 "nav_tab": "tasks",
                 "target_id": r['id'],
@@ -567,6 +581,37 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
                     "target_id": r['id'],
                 })
 
+        # Recruitment dynamic events
+        if _has_table(conn, "ai_audit_logs"):
+            rec_rows = conn.execute("""
+                SELECT id, action, target, payload, created_at
+                FROM ai_audit_logs
+                WHERE verb = 'recruitment'
+                ORDER BY created_at DESC LIMIT 15
+            """).fetchall()
+            for r in rec_rows:
+                pl = {}
+                if r['payload']:
+                    try:
+                        import json as _json
+                        pl = _json.loads(r['payload']) if isinstance(r['payload'], str) else (r['payload'] or {})
+                    except Exception:
+                        pass
+                dept_name = pl.get("dept_name") or "业务部"
+                role_name = pl.get("role_name") or "AI员工"
+                emp_id = pl.get("employee_id") or r['target'] or ""
+                dept_idx = pl.get("dept_idx", 3)
+                broadcast = pl.get("broadcast") or f"【人事部】🎉 已完成{dept_name}负责人选拔与工位入驻：{role_name}（{emp_id}），工位已点亮！"
+                feed_events.append({
+                    "time": r['created_at'],
+                    "actor": "人事部",
+                    "dept_idx": dept_idx,
+                    "text": broadcast,
+                    "kind": "recruitment",
+                    "nav_tab": "tasks",
+                    "target_id": pl.get("task_id") or r['id'],
+                })
+
         # Sort newest-first & slice 25
         feed_events.sort(key=lambda x: str(x['time'] or ''), reverse=True)
         feed = feed_events[:25]
@@ -580,4 +625,5 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
         "standalone_tasks": standalone_tasks,
         "kpis": kpis,
         "feed": feed,
+        "logs": feed,
     }

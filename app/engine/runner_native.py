@@ -340,6 +340,10 @@ class NativeKernel:
         }
         self._append_live(rec)
         telemetry.emit("RUN_TRACE_EVENT", run_id=self.run_id, kind="thought", content=text)
+        try:
+            trace.record(self.conn, self.run_id, kind="thinking", name="模型思考", detail=text)
+        except Exception:
+            pass
 
     def emit_tool_call(self, tool_id: str, title: str, raw_input: dict) -> None:
         self.st["tool_calls"] += 1
@@ -372,6 +376,10 @@ class NativeKernel:
         }
         self._append_live(rec)
         telemetry.emit("RUN_TRACE_EVENT", run_id=self.run_id, kind="tool_call", title=title, rawInput=raw_input)
+        try:
+            trace.record(self.conn, self.run_id, kind="tool", name=title, detail=json.dumps(raw_input, ensure_ascii=False))
+        except Exception:
+            pass
 
     def emit_tool_result(self, tool_id: str, title: str, output: str, ok: bool = True) -> None:
         rec = {
@@ -385,6 +393,10 @@ class NativeKernel:
         }
         self._append_live(rec)
         telemetry.emit("RUN_TRACE_EVENT", run_id=self.run_id, kind="tool_result", title=title, output=output, ok=ok)
+        try:
+            trace.record(self.conn, self.run_id, kind="tool", name=f"{title}_result", status="ok" if ok else "failed", detail=(output or "")[:500])
+        except Exception:
+            pass
 
     def _meter(self, delta: int) -> None:
         """模板模式的估算式记账。LLM 模式下真实 usage 已单独上报，不再叠加估算值。"""
@@ -415,6 +427,10 @@ class NativeKernel:
             }
         }
         self._append_live(rec)
+        try:
+            trace.record(self.conn, self.run_id, kind="model", name="模型回答", detail=text[:500])
+        except Exception:
+            pass
 
     # ------------------------------------------------------------- Sandbox Tools
     def write_file(self, rel_path: str, content: str) -> dict:
@@ -640,7 +656,25 @@ class NativeKernel:
         wrote = False
         max_turns = int(os.environ.get("M0_LLM_MAX_TURNS") or 8)
         for _turn in range(max_turns):
-            resp = llm.chat(messages, tools=_LLM_TOOLS)
+            resp = None
+            try:
+                # 优先尝试流式获取，以实时吐出思考与消息
+                content_chunks: list[str] = []
+                for event, data in llm.chat_stream(messages, tools=_LLM_TOOLS):
+                    if event == "delta":
+                        content_chunks.append(data)
+                    elif event == "final":
+                        resp = data
+                if resp:
+                    msg = resp.get("message") or {}
+                    if msg.get("reasoning_content"):
+                        self.emit_thought(str(msg["reasoning_content"]))
+            except Exception:
+                resp = None
+
+            if not resp:
+                resp = llm.chat(messages, tools=_LLM_TOOLS)
+
             if not resp:
                 raise LLMUnavailable("empty_response")
             usage = resp.get("usage") or {}
@@ -653,6 +687,9 @@ class NativeKernel:
             assistant: dict = {"role": "assistant"}
             if msg.get("content"):
                 assistant["content"] = msg["content"]
+            if msg.get("reasoning_content"):
+                assistant["reasoning_content"] = msg["reasoning_content"]
+                self.emit_thought(str(msg["reasoning_content"]))
             if calls:
                 assistant["tool_calls"] = calls
             messages.append(assistant)
@@ -660,6 +697,7 @@ class NativeKernel:
                 if msg.get("content"):
                     self.emit_message(str(msg["content"])[:2000])
                 break
+            self.emit_thought(f"模型计划调用 {len(calls)} 个工具推进构建...")
             for call in calls:
                 fn = (call or {}).get("function") or {}
                 name = str(fn.get("name") or "")
@@ -1219,6 +1257,18 @@ def execute_native(conn, run_id: str, *, task_id: str, entity: str, actor: str,
                    pause_at_tokens: int | None = None) -> dict:
     """Execute run with the in-process NativeKernel."""
     started = time.time()
+    if not trace.exists(conn, run_id):
+        prow = conn.execute("SELECT project_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        pid = prow["project_id"] if prow else None
+        trace.start(conn, run_id=run_id, task_id=task_id, agent_id=actor, project_id=pid)
+
+    conn.execute(
+        "UPDATE task_runs SET runner=?, state='running', session_id=?"
+        " WHERE id=? AND state NOT IN ('cancelled', 'failed')",
+        (runner or "native", "native-" + run_id, run_id)
+    )
+    conn.commit()
+
     kernel = NativeKernel(conn, run_id=run_id, task_id=task_id, entity=entity,
                           actor=actor, prompt=prompt, est_tokens=est_tokens,
                           timeout=timeout, pause_at_tokens=pause_at_tokens)

@@ -69,6 +69,9 @@ SEED = [
     ("ROLE-RESEARCH", "研究员", "research",
      "你是研究员。先给来源与口径，再给结论；查不到就写清楚缺口，不要编。",
      "deepseek-chat", "检索,取证,来源核验", "web_fetch,file_write", "research_notes.md", 0),
+    ("ROLE-HR", "人事主管", "hr",
+     "你是 HRD。负责组织招聘、岗位画像、绩效与团队激励。",
+     "deepseek-chat", "招聘,岗位画像,薪酬,绩效", "file_write", "job_description.md", 0),
 ]
 
 
@@ -81,6 +84,10 @@ TAG_WORDS: dict[str, tuple[str, ...]] = {
     "qa": ("测试", "验收", "复现", "缺陷", "qa"),
     "translate": ("翻译", "英文", "中译英", "英译中", "translate"),
     "research": ("研究", "调研", "检索", "取证", "查资料", "行情", "文献", "考据", "论文"),
+    "hr": ("人事", "招聘", "hr", "hrd", "面试", "绩效", "岗位", "入职"),
+    "ops": ("运维", "sre", "监控", "发布", "部署", "运营", "上线"),
+    "legal": ("法务", "合规", "合同", "条款", "审计"),
+    "product": ("产品", "prd", "需求", "立项"),
 }
 
 

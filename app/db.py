@@ -183,6 +183,7 @@ MIGRATIONS = [
     ("ai_employees", "api_key", "ALTER TABLE ai_employees ADD COLUMN api_key TEXT"),
     ("ai_employees", "api_base", "ALTER TABLE ai_employees ADD COLUMN api_base TEXT"),
     ("tasks", "owner_employee_id", "ALTER TABLE tasks ADD COLUMN owner_employee_id TEXT"),
+    ("tasks", "stage", "ALTER TABLE tasks ADD COLUMN stage TEXT"),
     ("chat_members", "state", "ALTER TABLE chat_members ADD COLUMN state TEXT DEFAULT 'active'"),
     ("ai_employees", "preset", "ALTER TABLE ai_employees ADD COLUMN preset TEXT DEFAULT 'standard'"),
     ("ai_employees", "role_id", "ALTER TABLE ai_employees ADD COLUMN role_id TEXT"),
