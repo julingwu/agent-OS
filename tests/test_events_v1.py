@@ -79,11 +79,10 @@ def test_emit_validates_required_payload_keys(conn):
         emit(conn, kind="tool.call", payload={"tool": "exec"})  # 缺 call_id
 
 
-def test_emit_rejects_oversize_payload(conn):
-    from app.events import EventError
-
-    with pytest.raises(EventError, match="too large"):
-        emit(conn, kind="message.bot", payload={"text": "x" * 9000})
+def test_emit_truncates_oversize_payload(conn):
+    ev = emit(conn, kind="message.bot", payload={"text": "x" * 40000})
+    assert ev.payload.get("_payload_truncated") is True
+    assert len(ev.payload["text"]) <= 1100
 
 
 # ---------------------------------------------------------------- 幂等

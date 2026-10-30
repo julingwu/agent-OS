@@ -93,6 +93,21 @@ def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict:
     return ext_tools.run_exec(cmd, cwd=cwd, timeout_s=timeout_s)
 
 
+def _extract_path(args_or_path: Any) -> str:
+    """提取文件路径，支持 path、file、filename、filepath 别名容错。"""
+    if isinstance(args_or_path, dict):
+        raw = (
+            args_or_path.get("path")
+            or args_or_path.get("file")
+            or args_or_path.get("filename")
+            or args_or_path.get("filepath")
+            or ""
+        )
+    else:
+        raw = args_or_path or ""
+    return str(raw).strip()
+
+
 def _fs_list(path: str | None = None) -> dict:
     safe_path = str(path or ".")
     target = _jail(safe_path)
@@ -110,15 +125,29 @@ def _fs_list(path: str | None = None) -> dict:
             "items": items}
 
 
-def _fs_read(path: str, max_bytes: int = 200_000, start_line: int | None = None,
-             end_line: int | None = None) -> dict:
+def _fs_read(path_or_args: dict | str | None, max_bytes: int = 200_000,
+             start_line: int | None = None, end_line: int | None = None) -> dict:
     from . import doc_tools
+    if isinstance(path_or_args, dict):
+        path = _extract_path(path_or_args)
+        start_line = _safe_int(path_or_args.get("start_line"), None) if path_or_args.get("start_line") is not None else start_line
+        end_line = _safe_int(path_or_args.get("end_line"), None) if path_or_args.get("end_line") is not None else end_line
+        max_bytes = _safe_int(path_or_args.get("max_bytes", max_bytes), max_bytes)
+    else:
+        path = _extract_path(path_or_args)
+    if not path:
+        return {"ok": False, "error": "path 不能为空: path (或 file/filename) 不能为空"}
     return doc_tools.fs_read(path, start_line=start_line, end_line=end_line, max_bytes=max_bytes)
 
 
-def _fs_write(path: str | None, content: str) -> dict:
-    if not path or not str(path).strip():
-        return {"ok": False, "error": "path 不能为空"}
+def _fs_write(path_or_args: dict | str | None, content: str = "") -> dict:
+    if isinstance(path_or_args, dict):
+        path = _extract_path(path_or_args)
+        content = str(path_or_args.get("content", content))
+    else:
+        path = _extract_path(path_or_args)
+    if not path:
+        return {"ok": False, "error": "path 不能为空: path (或 file/filename) 不能为空"}
     target = _jail(path)
     if target.exists() and target.is_dir():
         return {"ok": False, "error": f"目标路径是目录，无法写入: {path}"}
@@ -126,6 +155,35 @@ def _fs_write(path: str | None, content: str) -> dict:
     target.write_text(content, encoding="utf-8")
     return {"ok": True, "path": str(target.relative_to(WORKSPACE)),
             "bytes": len(content.encode("utf-8"))}
+
+
+def _fs_edit(path_or_args: dict | str | None, old_text: str = "", new_text: str = "",
+             replace_all: bool = False) -> dict:
+    from . import doc_tools
+    if isinstance(path_or_args, dict):
+        path = _extract_path(path_or_args)
+        old_text = str(path_or_args.get("old_text", old_text))
+        new_text = str(path_or_args.get("new_text", new_text))
+        replace_all = _safe_bool(path_or_args.get("replace_all", replace_all), replace_all)
+    else:
+        path = _extract_path(path_or_args)
+    if not path:
+        return {"ok": False, "error": "path 不能为空: path (或 file/filename) 不能为空"}
+    return doc_tools.fs_edit(path, old_text=old_text, new_text=new_text, replace_all=replace_all)
+
+
+def _doc_read(path_or_args: dict | str | None, max_chars: int = 30000,
+              sheet: str | None = None) -> dict:
+    from . import doc_tools
+    if isinstance(path_or_args, dict):
+        path = _extract_path(path_or_args)
+        max_chars = _safe_int(path_or_args.get("max_chars", max_chars), max_chars)
+        sheet = path_or_args.get("sheet", sheet)
+    else:
+        path = _extract_path(path_or_args)
+    if not path:
+        return {"ok": False, "error": "path 不能为空: path (或 file/filename) 不能为空"}
+    return doc_tools.doc_read(path, max_chars=max_chars, sheet=sheet)
 
 
 def _computer_info() -> dict:
@@ -150,32 +208,23 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
         from . import ext_tools
         return ext_tools.run_exec(str(args.get("cmd", "")), args.get("cwd"), _safe_int(args.get("timeout_s", 180), 180))
     if name == "fs_list":
-        return _fs_list(args.get("path"))
+        return _fs_list(_extract_path(args) or args.get("path"))
     if name == "fs_read":
-        from . import doc_tools
-        start_line = _safe_int(args.get("start_line"), None) if args.get("start_line") is not None else None
-        end_line = _safe_int(args.get("end_line"), None) if args.get("end_line") is not None else None
-        max_bytes = _safe_int(args.get("max_bytes", 200_000), 200_000)
-        return doc_tools.fs_read(str(args.get("path", "")), start_line=start_line,
-                                 end_line=end_line, max_bytes=max_bytes)
+        return _fs_read(args)
     if name == "fs_write":
-        return _fs_write(args.get("path"), str(args.get("content", "")))
+        return _fs_write(args)
     if name == "fs_edit":
-        from . import doc_tools
-        return doc_tools.fs_edit(str(args.get("path", "")), str(args.get("old_text", "")),
-                                 str(args.get("new_text", "")), _safe_bool(args.get("replace_all", False), False))
+        return _fs_edit(args)
     if name == "glob_search":
         from . import doc_tools
-        return doc_tools.glob_search(str(args.get("pattern", "*")), str(args.get("path", ".")))
+        return doc_tools.glob_search(str(args.get("pattern", "*")), _extract_path(args) or str(args.get("path", ".")))
     if name == "grep_search":
         from . import doc_tools
-        return doc_tools.grep_search(str(args.get("pattern", "")), str(args.get("path", ".")),
+        return doc_tools.grep_search(str(args.get("pattern", "")), _extract_path(args) or str(args.get("path", ".")),
                                      str(args.get("file_glob", "*")), _safe_int(args.get("context_lines", 1), 1),
                                      _safe_int(args.get("max_matches", 80), 80))
     if name == "doc_read":
-        from . import doc_tools
-        return doc_tools.doc_read(str(args.get("path", "")), max_chars=_safe_int(args.get("max_chars", 30000), 30000),
-                                  sheet=args.get("sheet"))
+        return _doc_read(args)
     if name == "web_search":
         from . import web_tools
         return web_tools.web_search(

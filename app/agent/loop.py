@@ -18,15 +18,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from datetime import datetime
+from typing import Any
 
 from .. import bot_memory
 from .. import db
 from .. import events as ev
 from .. import llm
 from . import memory_writer, tools
+
+logger = logging.getLogger("app.agent.loop")
 
 MAX_STEPS = 30
 HISTORY_EVENTS = 24
@@ -54,11 +58,63 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
-def _emit(conn, **kw) -> ev.Event:
-    event = ev.emit(conn, **kw)
-    conn.commit()
-    ev.broadcaster.publish(event)
-    return event
+def _emit(conn, **kw) -> ev.Event | None:
+    try:
+        event = ev.emit(conn, **kw)
+        conn.commit()
+        ev.broadcaster.publish(event)
+        return event
+    except Exception as e:
+        logger.warning(f"[_emit] 事件广播异常已安全拦截，不影响主流程: {e}")
+        return None
+
+
+def _sanitize_tool_args_for_event(args: dict) -> dict:
+    """脱敏与精简工具参数，避免超大文本炸毁事件通道与前端 UI。"""
+    if not isinstance(args, dict):
+        return args
+    sanitized: dict[str, Any] = {}
+    for k, v in args.items():
+        if isinstance(v, str) and len(v) > 1200:
+            sanitized[k] = v[:1200] + f"\n... [完整内容共 {len(v)} 字符，已送入工具安全执行]"
+        elif isinstance(v, dict):
+            sanitized[k] = _sanitize_tool_args_for_event(v)
+        elif isinstance(v, list):
+            sanitized[k] = [
+                (x[:1200] + f"\n... [完整内容共 {len(x)} 字符，已送入工具安全执行]")
+                if isinstance(x, str) and len(x) > 1200
+                else (_sanitize_tool_args_for_event(x) if isinstance(x, dict) else x)
+                for x in v
+            ]
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
+def _sanitize_tool_result_for_event(res: Any) -> Any:
+    """工具返回结果截断预览，避免超大输出塞爆事件流。"""
+    if isinstance(res, str):
+        if len(res) > 2000:
+            return res[:2000] + f"\n... [完整内容共 {len(res)} 字符，已截断显示]"
+        return res
+    if isinstance(res, dict):
+        sanitized: dict[str, Any] = {}
+        for k, v in res.items():
+            if isinstance(v, str) and len(v) > 2000:
+                sanitized[k] = v[:2000] + f"\n... [完整内容共 {len(v)} 字符，已截断显示]"
+            elif isinstance(v, dict):
+                sanitized[k] = _sanitize_tool_result_for_event(v)
+            elif isinstance(v, list):
+                sanitized[k] = [
+                    (x[:2000] + f"\n... [完整内容共 {len(x)} 字符，已截断显示]")
+                    if isinstance(x, str) and len(x) > 2000
+                    else (_sanitize_tool_result_for_event(x) if isinstance(x, dict) else x)
+                    for x in v
+                ]
+            else:
+                sanitized[k] = v
+        return sanitized
+    return res
 
 
 STREAM_FLUSH_CHARS = 48
@@ -378,7 +434,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
         _emit(conn, bot_id=bot_id, session_id=session_id, kind="turn.ended",
               turn_id=turn_id, payload={"status": "limit_exceeded",
                                         "prompt_tokens": 0, "completion_tokens": 0})
-        return {"turn_id": turn_id, "status": "limit_exceeded", "event_id": started.id,
+        return {"turn_id": turn_id, "status": "limit_exceeded", "event_id": started.id if started else 0,
                 "prompt_tokens": 0, "completion_tokens": 0}
 
     total_prompt = total_completion = 0
@@ -448,7 +504,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
             except json.JSONDecodeError:
                 args = {}
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="tool.call",
-                  turn_id=turn_id, payload={"tool": name, "args": args,
+                  turn_id=turn_id, payload={"tool": name, "args": _sanitize_tool_args_for_event(args),
                                             "call_id": call_id})
             try:
                 result = tools.dispatch(
@@ -461,10 +517,11 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
             except Exception as exc:
                 result, ok = {"ok": False, "error": f"工具执行异常: {exc}"}, False
             executed_steps_summary.append(f"{name} ({'成功' if ok else '失败'})")
+            sanitized_res = _sanitize_tool_result_for_event(result)
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="tool.result",
                   turn_id=turn_id, payload={
                       "call_id": call_id, "ok": ok,
-                      "summary": json.dumps(result, ensure_ascii=False)[:1200]})
+                      "summary": json.dumps(sanitized_res, ensure_ascii=False)[:1200]})
             messages.append({"role": "tool", "tool_call_id": call_id,
                              "content": json.dumps(result, ensure_ascii=False)[:20000]})
             messages = _compact_context(messages)
@@ -547,7 +604,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                   "limit": limit,
                   "state": "ok" if allowed else "exhausted"})
 
-    return {"turn_id": turn_id, "status": status, "event_id": started.id,
+    return {"turn_id": turn_id, "status": status, "event_id": started.id if started else 0,
             "prompt_tokens": total_prompt, "completion_tokens": total_completion}
 
 

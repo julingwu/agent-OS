@@ -74,6 +74,8 @@ def _safe_read_text(data: bytes) -> str:
 
 def doc_read(path: str, max_chars: int = 30000, sheet: str | None = None) -> dict[str, Any]:
     """解析各类文档、表格、幻灯片与压缩包内容。支持 PDF, DOCX, XLSX, PPTX, CSV, HTML, JSON, ZIP, TAR。"""
+    if not path or not str(path).strip():
+        return {"ok": False, "error": "path 不能为空: path (或 file/filename) 不能为空"}
     target = tools._jail(path)
     if not target.is_file():
         return {"ok": False, "error": f"文件不存在或不是普通文件: {path}"}
@@ -334,6 +336,8 @@ def fs_read(path: str, start_line: int | None = None, end_line: int | None = Non
     - 支持按行号切片（1-indexed），方便精确定位与查看长文件。
     - 兼容返回原有字段格式。
     """
+    if not path or not str(path).strip():
+        return {"ok": False, "error": "path 不能为空: path (或 file/filename) 不能为空"}
     target = tools._jail(path)
     if not target.is_file():
         return {"ok": False, "error": "not a file"}
@@ -392,6 +396,8 @@ def fs_edit(path: str, old_text: str, new_text: str, replace_all: bool = False) 
     - old_text 必须在目标文件中精准存在且默认具有全局唯一性。
     - 若出现多处匹配，必须传入 replace_all=True 或补充更长的上下文，防止意外多改。
     """
+    if not path or not str(path).strip():
+        return {"ok": False, "error": "path 不能为空: path (或 file/filename) 不能为空"}
     target = tools._jail(path)
     if not target.is_file():
         return {"ok": False, "error": f"file not found: {path}"}

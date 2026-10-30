@@ -17,16 +17,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
 import sqlite3
 import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
+
+logger = logging.getLogger("app.events")
 
 SCHEMA = pathlib.Path(__file__).with_name("schema_v1.sql")
 
-MAX_PAYLOAD_BYTES = 8 * 1024
+MAX_PAYLOAD_BYTES = 32 * 1024
 MAX_READ_LIMIT = 500
 DEFAULT_READ_LIMIT = 200
 SUBSCRIBER_QUEUE = 500
@@ -143,6 +147,32 @@ def now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 
+def _truncate_payload_long_strings(obj: Any) -> tuple[Any, bool]:
+    """智能自动截断 payload 中的长文本字段（>1000 字符）。"""
+    truncated = False
+    if isinstance(obj, str):
+        if len(obj) > 1000:
+            return obj[:1000] + "...[已截断显示]", True
+        return obj, False
+    if isinstance(obj, dict):
+        new_d = {}
+        for k, v in obj.items():
+            new_v, was_t = _truncate_payload_long_strings(v)
+            new_d[k] = new_v
+            if was_t:
+                truncated = True
+        return new_d, truncated
+    if isinstance(obj, list):
+        new_l = []
+        for item in obj:
+            new_v, was_t = _truncate_payload_long_strings(item)
+            new_l.append(new_v)
+            if was_t:
+                truncated = True
+        return new_l, truncated
+    return obj, False
+
+
 def emit(
     conn: sqlite3.Connection,
     *,
@@ -175,10 +205,28 @@ def emit(
 
     payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if len(payload_json.encode("utf-8")) > MAX_PAYLOAD_BYTES:
-        raise EventError(
-            f"payload too large for {kind}: >{MAX_PAYLOAD_BYTES}B; "
-            "write the object to an artifact and reference it instead"
+        logger.warning(
+            "payload too large for %s: %d bytes (limit %d), performing auto-truncation",
+            kind, len(payload_json.encode("utf-8")), MAX_PAYLOAD_BYTES,
         )
+        truncated_payload, _ = _truncate_payload_long_strings(dict(payload))
+        truncated_payload["_payload_truncated"] = True
+        payload = truncated_payload
+        payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        if len(payload_json.encode("utf-8")) > MAX_PAYLOAD_BYTES:
+            logger.warning(
+                "payload still too large for %s after truncation: %d bytes, falling back to minimal payload",
+                kind, len(payload_json.encode("utf-8")),
+            )
+            fallback = {"_warning": "payload too large", "keys": list(payload.keys())}
+            for req_k in REQUIRED_PAYLOAD.get(kind, ()):
+                if req_k in payload:
+                    val = payload[req_k]
+                    fallback[req_k] = val[:100] if isinstance(val, str) else val
+                else:
+                    fallback[req_k] = ""
+            payload = fallback
+            payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     actor = actor or {"type": "bot", "id": bot_id}
     ts = now_iso()
