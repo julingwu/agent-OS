@@ -184,29 +184,45 @@ def instantiate(conn, role_id: str, entity_id: str = "LE-GROUP-HQ") -> str:
     role = conn.execute("SELECT * FROM role_templates WHERE id=?", (role_id,)).fetchone()
     if role is None:
         raise ValueError(f"unknown role {role_id}")
-    exist = conn.execute(
-        """SELECT id FROM ai_employees WHERE role_id=? AND legal_entity_id=?
-           AND COALESCE(status,'online') <> 'fired' LIMIT 1""",
-        (role_id, entity_id)).fetchone()
-    if exist:
-        return exist["id"]
 
     slug = hashlib.sha1(f"{entity_id}:{role['name']}".encode()).hexdigest()[:6].upper()
     emp_id, pos_id = f"AI-{slug}", f"POS-{slug}"
-    conn.execute("""INSERT OR IGNORE INTO positions (id, legal_entity_id, title, pack_id, state)
-                    VALUES (?,?,?, 'content-v1', 'active')""",
+
+    exist = conn.execute(
+        """SELECT id, status FROM ai_employees WHERE (role_id=? OR id=?) AND legal_entity_id=?
+           ORDER BY CASE WHEN COALESCE(status,'online') != 'fired' THEN 0 ELSE 1 END LIMIT 1""",
+        (role_id, emp_id, entity_id)).fetchone()
+    if exist:
+        if exist["status"] == "fired":
+            conn.execute(
+                "UPDATE ai_employees SET status='online', model=?, soul=?, focus=? WHERE id=?",
+                (role["model"], role["prompt"] or f"你是{role['name']}。", "按判据交付", exist["id"]))
+            conn.execute("UPDATE identities SET state='active' WHERE employee_id=?", (exist["id"],))
+            conn.execute("UPDATE positions SET state='active' WHERE id=?", (pos_id,))
+            store.get_or_create_dm(conn, exist["id"], role["name"], entity_id)
+            conn.commit()
+        return exist["id"]
+
+    conn.execute("""INSERT INTO positions (id, legal_entity_id, title, pack_id, state)
+                    VALUES (?,?,?, 'content-v1', 'active')
+                    ON CONFLICT(id) DO UPDATE SET state='active'""",
                  (pos_id, entity_id, role["name"]))
     conn.execute("""INSERT INTO ai_employees
                     (id, legal_entity_id, name, position_id, model, soul, focus, status, role_id)
-                    VALUES (?,?,?,?,?,?,?,'online',?)""",
+                    VALUES (?,?,?,?,?,?,?,'online',?)
+                    ON CONFLICT(id) DO UPDATE SET status='online', model=excluded.model, soul=excluded.soul, role_id=excluded.role_id""",
                  (emp_id, entity_id, role["name"], pos_id, role["model"],
                   role["prompt"] or f"你是{role['name']}。", "按判据交付", role_id))
-    conn.execute("""INSERT INTO identities
-                    (id, name, role, legal_entity_id, secret, scopes, state, employee_id,tenant_id)
-                    VALUES (?,?,'agent',?,?, '["task:create","task:read","accept:judge"]',
-                            'active', ?,?)""",
-                 ("ID-" + secrets.token_hex(8), role["name"], entity_id,
-                  secrets.token_hex(16), emp_id, tenant_id))
+    exist_ident = conn.execute("SELECT id FROM identities WHERE employee_id=?", (emp_id,)).fetchone()
+    if exist_ident:
+        conn.execute("UPDATE identities SET state='active' WHERE employee_id=?", (emp_id,))
+    else:
+        conn.execute("""INSERT INTO identities
+                        (id, name, role, legal_entity_id, secret, scopes, state, employee_id, tenant_id)
+                        VALUES (?,?,'agent',?,?, '["task:create","task:read","accept:judge"]',
+                                'active', ?,?)""",
+                     ("ID-" + secrets.token_hex(8), role["name"], entity_id,
+                      secrets.token_hex(16), emp_id, tenant_id))
     store.get_or_create_dm(conn, emp_id, role["name"], entity_id)
     conn.commit()
     return emp_id

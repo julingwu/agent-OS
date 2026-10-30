@@ -276,6 +276,7 @@ def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
     return {
         "api_key": api_key,
         "chat_url": chat_url,
+        "base_url": stored_base or os.environ.get("MODEL_BASE_URL") or os.environ.get("LLM_API_BASE") or "https://api.deepseek.com",
         "model": resolved_model,
         "provider": provider,
         "has_key": bool(api_key),

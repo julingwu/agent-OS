@@ -119,8 +119,17 @@ def post_message(chat_id: str, payload: MessageIn, oa_ui: str | None = Depends(_
                                   author=dispatcher.CEO_TITLE)
                 return {"ok": True, "routed": False}
             actor = _task_actor(conn, oa_ui, "task:*")
-            result = dispatcher.route(conn, text, entity_id=tenant.entity_of(actor),
-                                      tenant_id=actor["tenant_id"], actor_id=actor["id"])
+            try:
+                result = dispatcher.route(conn, text, entity_id=tenant.entity_of(actor),
+                                          tenant_id=actor["tenant_id"], actor_id=actor["id"],
+                                          chat_id=chat_id)
+            except Exception as exc:
+                from ...errors import human_error
+                err_text = human_error(exc)
+                store.add_message(conn, chat_id, "agent",
+                                  f"派发失败: {err_text}",
+                                  author=dispatcher.CEO_TITLE)
+                return {"ok": False, "error": str(exc)}
             # v1.5：CEO 建的是项目，不再直接拉群跑任务；项目内的 WBS 才起 run
             return {"ok": True, "routed": True, **result}
     if kind == "group":

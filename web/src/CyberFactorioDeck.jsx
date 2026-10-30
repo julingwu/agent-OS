@@ -257,12 +257,8 @@ export default function CyberFactorioDeck({
 
       if (mode === "ceo") {
         const ceoChatId = (chats || []).find((c) => c.kind === "ceo")?.id || snapshot?.ceo_chat?.id;
-        if (ceoChatId) {
-          if (req) await api.send(ceoChatId, req);
-          const found = (chats || []).find((c) => c.id === ceoChatId) || { id: ceoChatId, title: "CEO 调度台", kind: "ceo" };
-          if (onOpenChat) onOpenChat(found);
-        } else if (onNavigate) {
-          onNavigate("chats");
+        if (req && ceoChatId) {
+          await api.send(ceoChatId, req);
         }
         await onWorkspaceChanged?.();
         await loadSnapshot();
@@ -276,11 +272,8 @@ export default function CyberFactorioDeck({
         if (!empChat && snapChatId) {
           empChat = { id: snapChatId, employee_id: empTarget, title: "员工私聊", kind: "dm" };
         }
-        if (empChat) {
-          if (req) await api.send(empChat.id, req);
-          if (onOpenChat) onOpenChat(empChat);
-        } else if (onNavigate) {
-          onNavigate("chats");
+        if (empChat && req) {
+          await api.send(empChat.id, req);
         }
         await onWorkspaceChanged?.();
         await loadSnapshot();

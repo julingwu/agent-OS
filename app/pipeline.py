@@ -870,6 +870,9 @@ def _flow_stage(conn, pid: str, key: str, requirement: str, llm_docs: bool) -> d
 
     from . import flows
     node = flows.node_of(conn, pid, key)
+    conn.execute("UPDATE wbs_items SET state='in_progress' WHERE project_id=? AND role_tag=? AND title=?",
+                 (pid, node.get("role"), node["title"]))
+    conn.commit()
     out: dict = {"role": node.get("role")}
     stub = (os.environ.get("M0_PIPELINE_EXEC", "1") != "1"
             or os.environ.get("M0_FLOW_EXEC", "1") != "1")
@@ -884,6 +887,9 @@ def _flow_stage(conn, pid: str, key: str, requirement: str, llm_docs: bool) -> d
     flows.blackboard_write(conn, pid=pid, stage_key=key,
                            role_tag=node.get("role") or "", title=node["title"],
                            content=text, file_path=path)
+    conn.execute("UPDATE wbs_items SET state='done' WHERE project_id=? AND role_tag=? AND title=?",
+                 (pid, node.get("role"), node["title"]))
+    conn.commit()
     out.update({"file": path, "blackboard": True})
     return out
 
@@ -973,8 +979,12 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
         raise finance.BudgetPause(
             f"阶段 {node['key']} 额度已耗尽（{stage_spent:,}/{quota_total:,}），等待追加预算",
             approval["id"], node["key"], approval["requested_tokens"])
+    ui_runner = os.environ.get("UI_RUNNER")
+    if not ui_runner:
+        import shutil
+        ui_runner = "acp" if shutil.which("dsh") else "native"
     out = dsh_adapter.execute_run(
-        conn, run_id, runner=os.environ.get("UI_RUNNER", "acp"),
+        conn, run_id, runner=ui_runner,
         budget_tokens=max(1000, left),
         pause_at_tokens=finance.pause_threshold(conn, pid, node["key"]))
     # v5.3：把「真实执行的内核」写回审计。task_runs.runner 建行时硬编码 'acp'，

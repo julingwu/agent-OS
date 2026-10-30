@@ -137,12 +137,12 @@ def assign(conn, pid: str, stage_key: str, employee_id: str, *,
 
 def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
           use_llm_docs: int = 0, tenant_id: str | None = None,
-          actor_id: str | None = None) -> dict:
+          actor_id: str | None = None, chat_id: str | None = None) -> dict:
     """一条需求 → 项目（按规划生成阶段）+ 协作群 + 作战计划 + 后台执行。"""
     from .. import flows, pipeline
     from ..tenancy import checked_entity_tenant
     tenant_id = checked_entity_tenant(conn, entity_id, tenant_id)
-    ceo_chat_id = ensure_ceo_chat(conn, tenant_id, entity_id)["id"]
+    ceo_chat_id = chat_id or ensure_ceo_chat(conn, tenant_id, entity_id)["id"]
 
     tags = roles.tags_of(text)
     how, reason = "keyword", ""
@@ -186,10 +186,7 @@ def route(conn, text: str, *, entity_id: str = "LE-GROUP-HQ",
                                           ensure_ascii=False))
 
     store.add_message(conn, ceo_chat_id, "agent",
-                      f"已立项 {pid}，流程【{plan['name']}】{len(plan['nodes'])} 步"
-                      f"（{'/'.join(n['title'] for n in plan['nodes'])}）。"
-                      f"预算池 {budget['pool']:,} tokens（弹性 {budget['elastic']:g}）。"
-                      f"标签【{'/'.join(tags) or '未识别'}】·{plan['how']}",
+                      f"已为您立项【{title}】（{pid}），规划流程【{plan['name']}】共 {len(plan['nodes'])} 步（{'/'.join(n['title'] for n in plan['nodes'])}）。\n\n已自动匹配各部门角色进入流水线协同推进，请在指挥舱或流水线实时关注产出！",
                       author=CEO_TITLE, kind="project",
                       meta=json.dumps({"project_id": pid, "flow_id": plan["flow_id"],
                                        "use_llm_docs": bool(use_llm_docs),

@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
+if os.path.exists("/opt/agent-os/app-src/.env"):
+    load_dotenv("/opt/agent-os/app-src/.env")
 import pathlib
 from contextlib import asynccontextmanager
 

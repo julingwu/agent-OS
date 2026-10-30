@@ -108,6 +108,14 @@ def get_hq_snapshot(oa_ui: str | None = Depends(_token)):
                 pass
 
         # ------------------------------------------------------------------ 1. Employees
+        if _has_table(conn, "ai_employees"):
+            active_emp_count = conn.execute(
+                "SELECT COUNT(*) as c FROM ai_employees WHERE COALESCE(status,'online') != 'fired'"
+            ).fetchone()["c"]
+            if active_emp_count < 3:
+                for seed_row in roles_mod.SEED:
+                    roles_mod.instantiate(conn, seed_row[0], "LE-GROUP-HQ")
+
         has_chats = _has_table(conn, "chats")
         if has_chats:
             emp_rows = conn.execute("""

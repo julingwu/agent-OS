@@ -91,6 +91,15 @@ def execute_kernel(conn: sqlite3.Connection, run_id: str, *, task_id: str,
 
     # 2. runner in ("acp", "dsh"): 强制拉起 ACP/DSH 通道
     if runner in ("acp", "dsh"):
+        import shutil
+        if not shutil.which("dsh"):
+            log.warning("[%s] DSH CLI not found on system, falling back to NativeKernel", run_id)
+            return runner_native.execute_native(
+                conn, run_id=run_id, task_id=task_id, entity=entity, actor=actor,
+                prompt=prompt, runner="native", resume_session=resume_session,
+                est_tokens=est_tokens, timeout=timeout, hb_interval=hb_interval,
+                pause_at_tokens=pause_at_tokens
+            )
         log.info("[%s] Routing directly to ACP runner (runner=%s)", run_id, runner)
         from . import runner_acp
         return runner_acp.execute_acp(

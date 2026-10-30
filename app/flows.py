@@ -381,12 +381,26 @@ def instantiate(conn, pid: str, plan_or_id: dict | str) -> list[dict]:
     else:
         nodes_ = plan_or_id["nodes"]
         flow_id = plan_or_id["flow_id"]
+    has_wbs = bool(conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wbs_items'").fetchone())
+    if not has_wbs:
+        try:
+            from . import pipeline
+            pipeline.ensure(conn)
+            has_wbs = True
+        except Exception:
+            pass
+    has_wbs_stage = any(n["key"] == "wbs" for n in nodes_)
     for seq, node in enumerate(nodes_):
         conn.execute(
             "INSERT INTO project_stages (id, project_id, seq, key, title, role_tag, node_kind,"
             " gate_name) VALUES (?,?,?,?,?,?,?,?)",
             (f"S-{uuid.uuid4().hex[:12]}", pid, seq, node["key"], node["title"],
              node["role"], node.get("kind") or "doc", node.get("gate") or ""))
+        if has_wbs and not has_wbs_stage:
+            wbs_code = f"WBS-{seq+1:02d}"
+            conn.execute("""INSERT OR IGNORE INTO wbs_items (id, project_id, code, title, role_tag, pack_id, state)
+                            VALUES (?,?,?,?,?, 'standard', 'todo')""",
+                         (f"WBS-{pid}-{seq+1}", pid, wbs_code, node["title"], node["role"]))
     conn.execute("UPDATE projects SET flow_id=? WHERE id=?", (flow_id, pid))
     conn.commit()
     return nodes(conn, pid)

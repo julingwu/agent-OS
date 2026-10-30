@@ -2617,8 +2617,11 @@ function submitTask() {
 
   if (BACKEND.ready) {
     if (mode === "ceo") {
-      toast("已交给 CEO 调度台协同会话：" + name);
-      if (bridge && (bridge.onNavigate || bridge.onNavigateTab)) (bridge.onNavigate || bridge.onNavigateTab)("chats");
+      say(CHIEF, "收到！已交由 CEO 调度台协同各部门推进：" + name, "ai", 4);
+      CHIEF.talkT = 3;
+      for (var i = 0; i < 3; i++) RINGS.push({ p: [HOLO[0], 0.7 + i * 0.35, HOLO[1]], c: "#00f0ff", t0: now + i * 0.2, r: 1.8 });
+      log("小枢", CHIEF_C, "已交由 CEO 调度台协同推进 · " + name, "g");
+      toast("已在指挥舱发起任务，CEO 调度台与流水线正协同推进中");
       if (bridge && bridge.onCreateTask) {
         bridge.onCreateTask({ name: name, requirement: name, mode: "ceo" });
       }
@@ -2627,7 +2630,11 @@ function submitTask() {
     if (mode === "direct") {
       var sel = $("tkEmp");
       var eId = sel ? sel.value : "";
-      toast("已直派执行任务：" + name);
+      say(CHIEF, "收到！已直接派发给执行岗位推进：" + name, "ai", 4);
+      CHIEF.talkT = 3;
+      for (var i = 0; i < 3; i++) RINGS.push({ p: [HOLO[0], 0.7 + i * 0.35, HOLO[1]], c: "#a855f7", t0: now + i * 0.2, r: 1.8 });
+      log("小枢", CHIEF_C, "已直接派发执行任务 · " + name, "g");
+      toast("已在指挥舱直派执行任务，正同步执行中：" + name);
       if (bridge && bridge.onCreateTask) {
         bridge.onCreateTask({ name: name, requirement: name, employeeId: eId, employee_id: eId, mode: "direct" });
       }
