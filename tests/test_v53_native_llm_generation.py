@@ -241,7 +241,7 @@ def test_llm_loop_generates_task_specific_artifacts(conn, monkeypatch):
     assert len(mock.requests) == 2
     first = mock.requests[0]
     assert [t["function"]["name"] for t in first.get("tools") or []] == [
-        "write_file", "read_file", "run_script"]
+        "write_file", "read_file", "run_script", "web_search", "render_chart"]
     assert "秋季护肤" in first["messages"][-1]["content"]
 
     # 2) 产物与任务主题一致，且不再残留 FinOps 字样

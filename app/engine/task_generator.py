@@ -336,6 +336,13 @@ ROLE_PACKS = {
     "qa": (TEMPLATE_REVIEW, "review_write", "review-v1"),
     "audit": (TEMPLATE_REVIEW, "review_write", "review-v1"),
     "legal": (TEMPLATE_REVIEW, "review_write", "review-v1"),
+    "design": (TEMPLATE_WEB, "web_write", "web-v1"),
+    "ui": (TEMPLATE_WEB, "web_write", "web-v1"),
+    "finance": (TEMPLATE_FINANCE, "finance_write", "finance-v1"),
+    "quant": (TEMPLATE_ANALYST, "analyst_write", "analyst-v1"),
+    "architect": (TEMPLATE_RESEARCH, "research_write", "research-v1"),
+    "hr": (TEMPLATE_RESEARCH, "research_write", "research-v1"),
+    "marketing": (TEMPLATE_RESEARCH, "content_write", "content-v1"),
 }
 
 
@@ -347,6 +354,10 @@ def _pack_by_id(conn: sqlite3.Connection, pack_id: str | None):
         return TEMPLATE_RESEARCH, "research_write", pack_id
     if pack_id in ("analyst-v1", "data-v1"):
         return TEMPLATE_ANALYST, "analyst_write", pack_id
+    if pack_id in ("web-v1", "web"):
+        return TEMPLATE_WEB, "web_write", pack_id
+    if pack_id in ("finance-v1", "finance"):
+        return TEMPLATE_FINANCE, "finance_write", pack_id
     prow = conn.execute("SELECT * FROM packs WHERE id = ? AND state = 'active'",
                         (pack_id,)).fetchone()
     if prow is None:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import fnmatch
+import io
 import json
 import logging
 import os
@@ -106,8 +107,28 @@ def doc_read(path: str, max_chars: int = 30000, sheet: str | None = None) -> dic
 
         if ext in (".docx", ".doc"):
             import docx
+            try:
+                from docx.opc.exceptions import PackageNotFoundError
+            except ImportError:
+                PackageNotFoundError = Exception
 
-            doc = docx.Document(str(target))
+            try:
+                doc = docx.Document(str(target))
+            except PackageNotFoundError:
+                return {
+                    "ok": False,
+                    "path": rel,
+                    "error": "检测到老版 Word 97-2003 (.doc) 二进制格式，python-docx 仅支持 .docx。建议将文件另存为 .docx 后解析。",
+                }
+            except Exception as exc:
+                if ext == ".doc" or "package" in str(exc).lower() or "not a word file" in str(exc).lower():
+                    return {
+                        "ok": False,
+                        "path": rel,
+                        "error": "检测到老版 Word 97-2003 (.doc) 二进制格式，python-docx 仅支持 .docx。建议将文件另存为 .docx 后解析。",
+                    }
+                raise
+
             elements = []
             for p in doc.paragraphs:
                 t = p.text.strip()
@@ -133,8 +154,28 @@ def doc_read(path: str, max_chars: int = 30000, sheet: str | None = None) -> dic
 
         if ext in (".xlsx", ".xls"):
             import openpyxl
+            try:
+                from openpyxl.utils.exceptions import InvalidFileException
+            except ImportError:
+                InvalidFileException = Exception
 
-            wb = openpyxl.load_workbook(str(target), data_only=True)
+            try:
+                wb = openpyxl.load_workbook(str(target), data_only=True)
+            except InvalidFileException:
+                return {
+                    "ok": False,
+                    "path": rel,
+                    "error": "检测到老版 Excel 97-2003 (.xls) 二进制格式，openpyxl 仅支持 .xlsx。建议将文件另存为 .xlsx 后解析。",
+                }
+            except Exception as exc:
+                if ext == ".xls" or "not a valid xlsx" in str(exc).lower() or "zip" in str(exc).lower() or "badzip" in str(exc).lower():
+                    return {
+                        "ok": False,
+                        "path": rel,
+                        "error": "检测到老版 Excel 97-2003 (.xls) 二进制格式，openpyxl 仅支持 .xlsx。建议将文件另存为 .xlsx 后解析。",
+                    }
+                raise
+
             sheet_names = wb.sheetnames
             selected_sheet = sheet if (sheet and sheet in sheet_names) else sheet_names[0]
             ws = wb[selected_sheet]
@@ -187,13 +228,14 @@ def doc_read(path: str, max_chars: int = 30000, sheet: str | None = None) -> dic
             }
 
         if ext == ".csv":
-            raw_bytes = target.read_bytes()[:max_chars * 2]
+            raw_bytes = target.read_bytes()[:limit * 2]
             text = _safe_read_text(raw_bytes)
             rows = []
-            reader = csv.reader(text.splitlines())
+            reader = csv.reader(io.StringIO(text))
             for idx, r in enumerate(reader):
                 if r:
-                    rows.append("| " + " | ".join(r) + " |")
+                    cleaned_cells = [c.replace("\r\n", " ").replace("\r", " ").replace("\n", " ").replace("|", "\\|") for c in r]
+                    rows.append("| " + " | ".join(cleaned_cells) + " |")
                 if idx >= 500:
                     rows.append("...[截断: 已达到 500 行]")
                     break

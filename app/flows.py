@@ -733,7 +733,7 @@ def blackboard_write(conn, *, pid: str, stage_key: str, role_tag: str, title: st
 
 def blackboard(conn, pid: str) -> list[dict]:
     rows = conn.execute(
-        "SELECT id,stage_key,role_tag,title,kind,file_path,substr(content,1,600) AS excerpt,"
+        "SELECT id,stage_key,role_tag,title,kind,file_path,substr(content,1,2000) AS excerpt,"
         "created_at FROM project_artifacts WHERE project_id=? ORDER BY rowid", (pid,)).fetchall()
     return [dict(r) for r in rows]
 

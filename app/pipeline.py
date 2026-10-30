@@ -864,7 +864,7 @@ def _run_stage(conn, pid: str, key: str, requirement: str) -> dict:
     return out
 
 
-def get_blackboard_context(conn, pid: str, max_chars: int = 1500) -> str:
+def get_blackboard_context(conn, pid: str, max_chars: int = 4000) -> str:
     """提取项目黑板中已有的上游阶段核心交付与共识，用于注入给下游任务。"""
     try:
         from . import flows
@@ -879,7 +879,7 @@ def get_blackboard_context(conn, pid: str, max_chars: int = 1500) -> str:
             role = it.get("role_tag") or "平台"
             excerpt = (it.get("excerpt") or "").strip()
             if excerpt:
-                lines.append(f"- [{it['stage_key']}] {role}·{title}: {excerpt[:240]}")
+                lines.append(f"- [{it['stage_key']}] {role}·{title}: {excerpt[:1000]}")
         if len(lines) <= 1:
             return ""
         ctx = "\n".join(lines)

@@ -21,9 +21,11 @@ import logging
 import mimetypes
 import os
 import pathlib
+import re
 import secrets
 import subprocess
 import tempfile
+import textwrap
 import time
 from typing import Any
 
@@ -191,11 +193,17 @@ def _ensure_todos_table(conn):
     conn.commit()
 
 
-def todo_write(todos: list[dict[str, Any]], session_id: str | None = None) -> dict[str, Any]:
+def todo_write(todos: list[Any], session_id: str | None = None) -> dict[str, Any]:
     """持久化记录当前会话的任务清单（todo list）。"""
     sid = session_id or "default_session"
     cleaned = []
-    for idx, item in enumerate(todos or []):
+    for idx, raw_item in enumerate(todos or []):
+        if isinstance(raw_item, str):
+            item = {"task": str(raw_item)}
+        elif isinstance(raw_item, dict):
+            item = raw_item
+        else:
+            item = {"task": str(raw_item)}
         cleaned.append({
             "id": item.get("id", idx + 1),
             "task": str(item.get("task") or item.get("content") or "").strip(),
@@ -243,7 +251,7 @@ def _get_subagent_tool_specs() -> list[dict]:
 
 def _run_single_subtask(task: dict[str, Any]) -> dict[str, Any]:
     tid = task.get("id") or secrets.token_hex(4)
-    goal = str(task.get("goal") or "").strip()
+    goal = str(task.get("goal") or task.get("task") or "").strip()
     context = str(task.get("context") or "").strip()
 
     system_prompt = (
@@ -314,10 +322,27 @@ def _run_single_subtask(task: dict[str, Any]) -> dict[str, Any]:
         return {"id": tid, "goal": goal, "status": "failed", "error": str(exc)}
 
 
-def delegate_task(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+def delegate_task(tasks: list[Any]) -> dict[str, Any]:
     """将多个独立子任务并行委派给子代理（Subagent），并发数上限 4。"""
     if not tasks:
         return {"ok": False, "error": "tasks 列表不能为空"}
+
+    normalized_tasks = []
+    for i, t in enumerate(tasks):
+        if isinstance(t, str):
+            normalized_tasks.append({"task": t, "id": i + 1, "goal": t})
+        elif isinstance(t, dict):
+            td = dict(t)
+            if "goal" not in td and "task" in td:
+                td["goal"] = td["task"]
+            if "id" not in td:
+                td["id"] = i + 1
+            normalized_tasks.append(td)
+        else:
+            st = str(t)
+            normalized_tasks.append({"task": st, "id": i + 1, "goal": st})
+
+    tasks = normalized_tasks
 
     max_workers = min(len(tasks), 4)
     results = []
@@ -446,25 +471,37 @@ CHART_THEMES = {
     "modern": {
         "fig_bg": "#0F172A",
         "ax_bg": "#1E293B",
+        "card_bg": "#1E293B",
+        "card_border": "#3B82F6",
         "text": "#F8FAFC",
+        "subtext": "#94A3B8",
         "grid": "#334155",
         "spine": "#475569",
+        "arrow": "#38BDF8",
         "palette": ["#6366F1", "#06B6D4", "#10B981", "#F59E0B", "#EC4899", "#8B5CF6", "#F43F5E", "#3B82F6"],
     },
     "financial": {
         "fig_bg": "#0A0E17",
         "ax_bg": "#121826",
+        "card_bg": "#1A2234",
+        "card_border": "#FF6B00",
         "text": "#F8FAFC",
+        "subtext": "#9CA3AF",
         "grid": "#1F2937",
         "spine": "#374151",
+        "arrow": "#00D2FF",
         "palette": ["#FF6B00", "#00D2FF", "#00E676", "#FFD600", "#FF3D71", "#9D4EDD", "#00F5D4", "#F72585"],
     },
     "academic": {
         "fig_bg": "#FFFFFF",
         "ax_bg": "#F8FAFC",
+        "card_bg": "#FFFFFF",
+        "card_border": "#2563EB",
         "text": "#0F172A",
+        "subtext": "#475569",
         "grid": "#E2E8F0",
         "spine": "#94A3B8",
+        "arrow": "#2563EB",
         "palette": ["#2563EB", "#475569", "#0D9488", "#DC2626", "#D97706", "#7C3AED", "#0284C7", "#64748B"],
     },
 }
@@ -772,6 +809,612 @@ def render_chart(
     except Exception as exc:
         log.exception("render_chart failed: %s", exc)
         return {"ok": False, "error": f"图表生成失败: {exc}"}
+    finally:
+        plt.close("all")
+
+
+# ---------------------------------------------------------------- 专业架构与业务流程图渲染 (render_diagram)
+def _clean_diagram_code(code: str) -> list[str]:
+    lines = []
+    for line in (code or "").strip().splitlines():
+        line = line.strip()
+        if not line or line.startswith("```"):
+            continue
+        if line.lower() in ("graph td", "graph lr", "graph tb", "flowchart td", "flowchart lr", "sequencediagram", "autonumber"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def _render_diagram_sequence(title: str, lines: list[str], t_cfg: dict) -> bytes:
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyBboxPatch
+
+    participants = []
+    messages = []
+    part_re = re.compile(r"^participant\s+([a-zA-Z0-9_\u4e00-\u9fa5]+)(?:\s+as\s+(.+))?$", re.IGNORECASE)
+    msg_re = re.compile(r"^([a-zA-Z0-9_\u4e00-\u9fa5]+)\s*(-{1,2}>{1,2})\s*([a-zA-Z0-9_\u4e00-\u9fa5]+)\s*:\s*(.*)$")
+
+    alias_map = {}
+    for line in lines:
+        pm = part_re.match(line)
+        if pm:
+            pid = pm.group(1).strip()
+            plabel = (pm.group(2) or pid).strip()
+            if pid not in participants:
+                participants.append(pid)
+            alias_map[pid] = plabel
+            continue
+
+        mm = msg_re.match(line)
+        if mm:
+            src = mm.group(1).strip()
+            arrow = mm.group(2).strip()
+            dst = mm.group(3).strip()
+            text = mm.group(4).strip()
+            is_dashed = "--" in arrow
+            if src not in participants:
+                participants.append(src)
+            if dst not in participants:
+                participants.append(dst)
+            messages.append({"src": src, "dst": dst, "text": text, "dashed": is_dashed})
+
+    if not participants:
+        participants = ["Client", "Server"]
+    if not messages:
+        messages = [{"src": participants[0], "dst": participants[-1], "text": "交互请求", "dashed": False}]
+
+    n_part = len(participants)
+    n_msg = len(messages)
+
+    fig_w = max(10, n_part * 2.8)
+    fig_h = max(6, 2.5 + n_msg * 0.9)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor=t_cfg["fig_bg"])
+    ax.set_facecolor(t_cfg["fig_bg"])
+    ax.set_xlim(-0.5, n_part - 0.5)
+    ax.set_ylim(-0.5, n_msg + 2.0)
+    ax.axis("off")
+
+    ax.text(
+        (n_part - 1) / 2.0, n_msg + 1.5, title,
+        ha="center", va="center", color=t_cfg["text"], fontsize=16, fontweight="bold",
+    )
+
+    y_top = n_msg + 0.6
+    y_bot = 0.2
+    p_x = {p: i for i, p in enumerate(participants)}
+    palette = t_cfg["palette"]
+
+    for i, p in enumerate(participants):
+        x = i
+        label = alias_map.get(p, p)
+        color = palette[i % len(palette)]
+        bbox = FancyBboxPatch(
+            (x - 0.55, y_top - 0.25), 1.1, 0.5,
+            boxstyle="round,pad=0.08,rounding_size=0.1",
+            facecolor=t_cfg["card_bg"], edgecolor=color, linewidth=2.0, zorder=3,
+        )
+        ax.add_patch(bbox)
+        ax.text(x, y_top, label, ha="center", va="center", color=t_cfg["text"], fontsize=11, fontweight="bold", zorder=4)
+
+        ax.plot([x, x], [y_top - 0.25, y_bot], color=t_cfg["spine"], linestyle="--", linewidth=1.5, zorder=1)
+
+        bbox_bot = FancyBboxPatch(
+            (x - 0.55, y_bot - 0.35), 1.1, 0.45,
+            boxstyle="round,pad=0.08,rounding_size=0.1",
+            facecolor=t_cfg["card_bg"], edgecolor=color, linewidth=1.5, zorder=3,
+        )
+        ax.add_patch(bbox_bot)
+        ax.text(x, y_bot - 0.12, label, ha="center", va="center", color=t_cfg["subtext"], fontsize=10, zorder=4)
+
+    for idx, msg in enumerate(messages):
+        y = y_top - 0.7 - idx * 0.85
+        x_src = p_x[msg["src"]]
+        x_dst = p_x[msg["dst"]]
+        dashed = msg["dashed"]
+        color = t_cfg["arrow"] if not dashed else palette[2]
+        style = "--" if dashed else "-"
+
+        dx = x_dst - x_src
+        offset = 0.08 if dx > 0 else -0.08
+        ax.annotate(
+            "",
+            xy=(x_dst - offset, y),
+            xytext=(x_src + offset, y),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                color=color,
+                linewidth=1.8,
+                linestyle=style,
+                mutation_scale=16,
+            ),
+            zorder=2,
+        )
+
+        x_mid = (x_src + x_dst) / 2.0
+        label_text = f"{idx + 1}. {msg['text']}"
+        ax.text(
+            x_mid, y + 0.18, label_text,
+            ha="center", va="bottom",
+            color=t_cfg["text"], fontsize=9.5, fontweight="normal",
+            bbox=dict(boxstyle="round,pad=0.2", facecolor=t_cfg["fig_bg"], edgecolor=t_cfg["grid"], linewidth=0.8),
+            zorder=4,
+        )
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor=t_cfg["fig_bg"])
+    plt.close("all")
+    return buf.getvalue()
+
+
+def _parse_flowchart_tokens(lines: list[str]) -> tuple[dict[str, dict], list[dict]]:
+    nodes = {}
+    edges = []
+
+    def _extract_node(token: str) -> tuple[str, str, str]:
+        token = token.strip()
+        m = re.match(r"^([a-zA-Z0-9_\u4e00-\u9fa5]+)\{([^}]+)\}$", token)
+        if m:
+            return m.group(1).strip(), m.group(2).strip(), "diamond"
+        m = re.match(r"^([a-zA-Z0-9_\u4e00-\u9fa5]+)\[([^\]]+)\]$", token)
+        if m:
+            return m.group(1).strip(), m.group(2).strip(), "rect"
+        m = re.match(r"^([a-zA-Z0-9_\u4e00-\u9fa5]+)\(([^)]+)\)$", token)
+        if m:
+            return m.group(1).strip(), m.group(2).strip(), "round"
+        raw = token.strip("[](){}\"' ")
+        return raw, raw, "rect"
+
+    for line in lines:
+        if "-->" in line or "->" in line:
+            edge_label = ""
+            if "-->|" in line:
+                m_edge = re.search(r"-->\|([^|]+)\|\s*", line)
+                if m_edge:
+                    edge_label = m_edge.group(1).strip()
+                    parts = line.split(m_edge.group(0))
+                    left_tok, right_tok = parts[0], parts[1]
+                else:
+                    parts = line.split("-->")
+                    left_tok, right_tok = parts[0], parts[1]
+            elif "--" in line and "-->" in line:
+                m_edge = re.search(r"--\s*([^-]+?)\s*-->", line)
+                if m_edge:
+                    edge_label = m_edge.group(1).strip()
+                    parts = re.split(r"--\s*[^-]+?\s*-->", line)
+                    left_tok, right_tok = parts[0], parts[1]
+                else:
+                    parts = line.split("-->")
+                    left_tok, right_tok = parts[0], parts[1]
+            elif "-->" in line:
+                parts = line.split("-->")
+                left_tok, right_tok = parts[0], parts[1]
+            else:
+                parts = line.split("->")
+                left_tok, right_tok = parts[0], parts[1]
+                if ":" in right_tok:
+                    rt_parts = right_tok.split(":", 1)
+                    right_tok = rt_parts[0]
+                    edge_label = rt_parts[1].strip()
+
+            src_id, src_label, src_shape = _extract_node(left_tok)
+            dst_id, dst_label, dst_shape = _extract_node(right_tok)
+
+            if src_id not in nodes:
+                nodes[src_id] = {"id": src_id, "label": src_label, "shape": src_shape}
+            elif src_label != src_id and nodes[src_id]["label"] == src_id:
+                nodes[src_id]["label"] = src_label
+                nodes[src_id]["shape"] = src_shape
+
+            if dst_id not in nodes:
+                nodes[dst_id] = {"id": dst_id, "label": dst_label, "shape": dst_shape}
+            elif dst_label != dst_id and nodes[dst_id]["label"] == dst_id:
+                nodes[dst_id]["label"] = dst_label
+                nodes[dst_id]["shape"] = dst_shape
+
+            edges.append({"src": src_id, "dst": dst_id, "label": edge_label})
+        else:
+            nid, nlabel, nshape = _extract_node(line)
+            if nid and nid not in nodes:
+                nodes[nid] = {"id": nid, "label": nlabel, "shape": nshape}
+
+    return nodes, edges
+
+
+def _render_diagram_flowchart(title: str, lines: list[str], t_cfg: dict) -> bytes:
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyBboxPatch, Polygon
+    import networkx as nx
+    import numpy as np
+
+    nodes, edges = _parse_flowchart_tokens(lines)
+    if not nodes:
+        nodes = {
+            "A": {"id": "A", "label": "开始", "shape": "round"},
+            "B": {"id": "B", "label": "执行处理", "shape": "rect"},
+            "C": {"id": "C", "label": "完成", "shape": "round"},
+        }
+        edges = [{"src": "A", "dst": "B", "label": ""}, {"src": "B", "dst": "C", "label": ""}]
+
+    G = nx.DiGraph()
+    for nid, n in nodes.items():
+        G.add_node(nid, **n)
+    for e in edges:
+        G.add_edge(e["src"], e["dst"], label=e.get("label", ""))
+
+    roots = [n for n in G.nodes if G.in_degree(n) == 0]
+    if not roots:
+        roots = [list(G.nodes)[0]]
+
+    node_layers = {}
+    visited = set()
+    queue = [(r, 0) for r in roots]
+    for r in roots:
+        node_layers[r] = 0
+
+    while queue:
+        curr, depth = queue.pop(0)
+        visited.add(curr)
+        for succ in G.successors(curr):
+            succ_depth = max(node_layers.get(succ, 0), depth + 1)
+            node_layers[succ] = succ_depth
+            if succ not in visited:
+                queue.append((succ, succ_depth))
+
+    for n in G.nodes:
+        if n not in node_layers:
+            node_layers[n] = 0
+
+    max_layer = max(node_layers.values()) if node_layers else 0
+    layers_dict: dict[int, list[str]] = {}
+    for n, l in node_layers.items():
+        layers_dict.setdefault(l, []).append(n)
+
+    pos = {}
+    for l_idx, n_list in layers_dict.items():
+        y = (max_layer - l_idx) * 1.8
+        count = len(n_list)
+        for i, n in enumerate(n_list):
+            x = (i - (count - 1) / 2.0) * 3.2
+            pos[n] = (x, y)
+
+    all_x = [p[0] for p in pos.values()]
+    all_y = [p[1] for p in pos.values()]
+    x_min, x_max = min(all_x) - 2.5, max(all_x) + 2.5
+    y_min, y_max = min(all_y) - 1.2, max(all_y) + 1.8
+
+    fig_w = max(11, (x_max - x_min) * 0.95)
+    fig_h = max(7, (y_max - y_min) * 1.1)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor=t_cfg["fig_bg"])
+    ax.set_facecolor(t_cfg["fig_bg"])
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.axis("off")
+
+    ax.text(
+        (x_min + x_max) / 2.0, y_max - 0.4, title,
+        ha="center", va="center", color=t_cfg["text"], fontsize=16, fontweight="bold",
+    )
+
+    palette = t_cfg["palette"]
+    card_w, card_h = 2.2, 0.9
+
+    for idx, (nid, n_info) in enumerate(nodes.items()):
+        if nid not in pos:
+            continue
+        x, y = pos[nid]
+        shape = n_info.get("shape", "rect")
+        label = n_info.get("label", nid)
+        wrapped_label = textwrap.fill(label, width=12)
+        color = palette[idx % len(palette)]
+
+        if shape == "diamond":
+            d_pts = np.array([
+                [x, y + card_h * 0.65],
+                [x + card_w * 0.65, y],
+                [x, y - card_h * 0.65],
+                [x - card_w * 0.65, y],
+            ])
+            poly = Polygon(d_pts, closed=True, facecolor=t_cfg["card_bg"], edgecolor=color, linewidth=2.0, zorder=3)
+            ax.add_patch(poly)
+            ax.text(x, y, wrapped_label, ha="center", va="center", color=t_cfg["text"], fontsize=10, fontweight="bold", zorder=4)
+        else:
+            rounding = 0.4 if shape == "round" else 0.12
+            bbox = FancyBboxPatch(
+                (x - card_w / 2.0, y - card_h / 2.0), card_w, card_h,
+                boxstyle=f"round,pad=0.08,rounding_size={rounding}",
+                facecolor=t_cfg["card_bg"], edgecolor=color, linewidth=2.0, zorder=3,
+            )
+            ax.add_patch(bbox)
+            ax.text(x, y, wrapped_label, ha="center", va="center", color=t_cfg["text"], fontsize=10.5, fontweight="bold", zorder=4)
+
+    for e in edges:
+        src, dst = e["src"], e["dst"]
+        if src not in pos or dst not in pos:
+            continue
+        x1, y1 = pos[src]
+        x2, y2 = pos[dst]
+        label = e.get("label", "")
+        dy = y2 - y1
+        dx = x2 - x1
+        rad = 0.15 if (dy >= 0 and abs(dx) < 0.1) else 0.0
+
+        ax.annotate(
+            "",
+            xy=(x2, y2 + (card_h * 0.55 if dy < 0 else -card_h * 0.55)),
+            xytext=(x1, y1 - (card_h * 0.55 if dy < 0 else -card_h * 0.55)),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                color=t_cfg["arrow"],
+                linewidth=1.8,
+                mutation_scale=15,
+                connectionstyle=f"arc3,rad={rad}",
+            ),
+            zorder=2,
+        )
+
+        if label:
+            mx = (x1 + x2) / 2.0 + (0.3 if dx == 0 else 0.0)
+            my = (y1 + y2) / 2.0
+            ax.text(
+                mx, my, label,
+                ha="center", va="center",
+                color=t_cfg["text"], fontsize=9,
+                bbox=dict(boxstyle="round,pad=0.2", facecolor=t_cfg["fig_bg"], edgecolor=t_cfg["grid"], linewidth=0.8),
+                zorder=5,
+            )
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor=t_cfg["fig_bg"])
+    plt.close("all")
+    return buf.getvalue()
+
+
+def _render_diagram_architecture(title: str, lines: list[str], t_cfg: dict) -> bytes:
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import FancyBboxPatch
+
+    layers = []
+    current_layer = None
+    explicit_arrows = []
+
+    for line in lines:
+        if "-->" in line or "->" in line:
+            parts = re.split(r"-{1,2}>", line)
+            if len(parts) >= 2:
+                explicit_arrows.append((parts[0].strip(), parts[1].strip()))
+            continue
+
+        m_layer = re.match(r"^(?:Layer|层级|架构层|Tier|层)\s*[:：]?\s*(.+)$", line, re.IGNORECASE)
+        if m_layer:
+            layer_raw = m_layer.group(1).strip()
+            m_comp = re.search(r"\[(.*?)\]", layer_raw)
+            if m_comp:
+                l_title = layer_raw[:m_comp.start()].strip()
+                comps = [c.strip() for c in m_comp.group(1).split(",") if c.strip()]
+                layers.append({"title": l_title or "架构分层", "components": comps})
+                current_layer = None
+            else:
+                current_layer = {"title": layer_raw, "components": []}
+                layers.append(current_layer)
+            continue
+
+        if current_layer is not None:
+            comps = [c.strip() for c in re.split(r"[,，|、]", line) if c.strip()]
+            current_layer["components"].extend(comps)
+        else:
+            comps = [c.strip() for c in re.split(r"[,，|、]", line) if c.strip()]
+            if comps:
+                layers.append({"title": "核心模块", "components": comps})
+
+    layers = [l for l in layers if l["components"]]
+    if not layers:
+        layers = [
+            {"title": "01 接入层 (Client)", "components": ["Web Portal", "Mobile iOS/Android", "小程序端"]},
+            {"title": "02 网关与安全 (Gateway & Security)", "components": ["Kong API 网关", "WAF 防火墙", "OAuth 2.0 鉴权"]},
+            {"title": "03 核心业务微服务 (Microservices)", "components": ["用户中心服务", "订单支付引擎", "智能调度服务", "审计中心"]},
+            {"title": "04 数据基础设施 (Data Infrastructure)", "components": ["MySQL 集群", "Redis 缓存", "Kafka 消息管道", "ElasticSearch"]},
+        ]
+
+    n_layers = len(layers)
+    max_comps = max(len(l["components"]) for l in layers)
+
+    fig_w = max(12, max_comps * 3.4)
+    fig_h = max(8, n_layers * 2.6 + 1.8)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor=t_cfg["fig_bg"])
+    ax.set_facecolor(t_cfg["fig_bg"])
+    ax.set_xlim(-1, fig_w + 1)
+    ax.set_ylim(-0.5, fig_h + 0.5)
+    ax.axis("off")
+
+    ax.text(
+        fig_w / 2.0, fig_h - 0.5, title,
+        ha="center", va="center", color=t_cfg["text"], fontsize=17, fontweight="bold",
+    )
+
+    palette = t_cfg["palette"]
+    card_centers = {}
+
+    for l_idx, layer in enumerate(layers):
+        y_top = fig_h - 1.5 - l_idx * 2.5
+        y_bot = y_top - 1.9
+        l_color = palette[l_idx % len(palette)]
+
+        container = FancyBboxPatch(
+            (0.5, y_bot), fig_w - 1.0, 1.9,
+            boxstyle="round,pad=0.1,rounding_size=0.15",
+            facecolor=t_cfg["ax_bg"], edgecolor=t_cfg["spine"], linewidth=1.2,
+            linestyle="--", alpha=0.9, zorder=1,
+        )
+        ax.add_patch(container)
+
+        ax.text(
+            1.0, y_top - 0.22, layer["title"],
+            ha="left", va="center", color=l_color, fontsize=11, fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.25", facecolor=t_cfg["fig_bg"], edgecolor=l_color, linewidth=1.2),
+            zorder=3,
+        )
+
+        comps = layer["components"]
+        n_c = len(comps)
+        c_width = min(2.8, (fig_w - 3.0) / max(1, n_c))
+        spacing = (fig_w - 2.5 - n_c * c_width) / max(1, n_c + 1)
+
+        for c_idx, c_name in enumerate(comps):
+            cx = 1.8 + (c_idx + 0.5) * c_width + c_idx * spacing
+            cy = y_bot + 0.75
+            card_centers[c_name] = (cx, cy)
+
+            card = FancyBboxPatch(
+                (cx - c_width / 2.0, cy - 0.45), c_width, 0.9,
+                boxstyle="round,pad=0.08,rounding_size=0.1",
+                facecolor=t_cfg["card_bg"], edgecolor=l_color, linewidth=1.8, zorder=3,
+            )
+            ax.add_patch(card)
+
+            wrapped_name = textwrap.fill(c_name, width=14)
+            ax.text(
+                cx, cy, wrapped_name,
+                ha="center", va="center", color=t_cfg["text"], fontsize=10, fontweight="bold", zorder=4,
+            )
+
+        if l_idx < n_layers - 1:
+            next_y_top = fig_h - 1.5 - (l_idx + 1) * 2.5
+            mid_x = fig_w / 2.0
+            ax.annotate(
+                "",
+                xy=(mid_x, next_y_top + 0.05),
+                xytext=(mid_x, y_bot - 0.05),
+                arrowprops=dict(
+                    arrowstyle="-|>",
+                    color=t_cfg["arrow"],
+                    linewidth=2.0,
+                    mutation_scale=16,
+                ),
+                zorder=2,
+            )
+
+    for src, dst in explicit_arrows:
+        if src in card_centers and dst in card_centers:
+            x1, y1 = card_centers[src]
+            x2, y2 = card_centers[dst]
+            ax.annotate(
+                "",
+                xy=(x2, y2),
+                xytext=(x1, y1),
+                arrowprops=dict(
+                    arrowstyle="-|>",
+                    color=t_cfg["arrow"],
+                    linewidth=1.8,
+                    mutation_scale=15,
+                    connectionstyle="arc3,rad=0.1",
+                ),
+                zorder=5,
+            )
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor=t_cfg["fig_bg"])
+    plt.close("all")
+    return buf.getvalue()
+
+
+def render_diagram(
+    title: str,
+    diagram_type: str,
+    code: str,
+    theme: str = "modern",
+    emit=None,
+) -> dict[str, Any]:
+    """专业架构师与产品经理图表绘制工具。
+    
+    支持图表类型：architecture (系统架构图), flowchart (业务流程图), sequence (时序交互图), custom_code (自定义代码)。
+    高分辨率输出 300 DPI 并自动发布为产物。
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import networkx as nx
+
+    plt.rcParams["font.sans-serif"] = [
+        "Noto Sans CJK SC",
+        "Noto Serif CJK SC",
+        "Microsoft YaHei",
+        "SimHei",
+        "DejaVu Sans",
+        "sans-serif",
+    ]
+    plt.rcParams["axes.unicode_minus"] = False
+
+    t_key = (theme or "modern").lower().strip()
+    t_cfg = CHART_THEMES.get(t_key) or CHART_THEMES["modern"]
+    dtype = (diagram_type or "architecture").lower().strip()
+
+    try:
+        if dtype == "custom_code" or (code and ("plt." in code or "import matplotlib" in code)):
+            if not code or not code.strip():
+                return {"ok": False, "error": "custom_code 模式下必须提供 code 代码"}
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                output_path = tmp.name
+            try:
+                scope = {
+                    "plt": plt,
+                    "matplotlib": matplotlib,
+                    "np": np,
+                    "nx": nx,
+                    "title": title,
+                    "theme": theme,
+                    "t_cfg": t_cfg,
+                    "output_path": output_path,
+                }
+                exec(code, scope)
+                if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+                    plt.savefig(output_path, dpi=300, bbox_inches="tight", facecolor=t_cfg["fig_bg"])
+                png_bytes = pathlib.Path(output_path).read_bytes()
+            finally:
+                try:
+                    os.remove(output_path)
+                except Exception:
+                    pass
+                plt.close("all")
+        elif dtype in ("sequence", "seq", "时序图", "顺序图"):
+            lines = _clean_diagram_code(code)
+            png_bytes = _render_diagram_sequence(title, lines, t_cfg)
+        elif dtype in ("flowchart", "flow", "流程图", "状态机"):
+            lines = _clean_diagram_code(code)
+            png_bytes = _render_diagram_flowchart(title, lines, t_cfg)
+        else:
+            lines = _clean_diagram_code(code)
+            png_bytes = _render_diagram_architecture(title, lines, t_cfg)
+
+        # 保存为产物
+        art = artifacts.save_bytes(name=f"{title}.png", data=png_bytes, kind="image/png")
+        if emit:
+            try:
+                emit("artifact.attached", {
+                    "artifact_id": art["id"],
+                    "name": art["name"],
+                    "kind": art["kind"],
+                    "bytes": art["bytes"],
+                    "url": art["url"],
+                })
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "artifact_id": art["id"],
+            "url": art["url"],
+            "name": art["name"],
+            "markdown": f"![{title}]({art['url']})",
+            "summary": f"已生成专业架构/流程图【{title}】并发布为产物",
+        }
+    except Exception as exc:
+        log.exception("render_diagram failed: %s", exc)
+        return {"ok": False, "error": f"架构/流程图生成失败: {exc}"}
     finally:
         plt.close("all")
 

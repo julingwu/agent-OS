@@ -327,7 +327,7 @@ def _search_chromium_fallback(query: str, max_results: int) -> list[dict]:
     try:
         cmd = [
             browser,
-            "--headless",
+            "--headless=new",
             "--disable-gpu",
             "--no-sandbox",
             "--dump-dom",
@@ -515,35 +515,75 @@ def web_fetch(url: str, max_chars: int = 20000, render_js: bool = False) -> dict
     title = ""
     markdown_content = ""
 
+    MAX_CONTENT_LENGTH = 15 * 1024 * 1024  # 15MB
+
     try:
         with httpx.Client(headers=HEADERS, timeout=15.0, follow_redirects=True, trust_env=False) as client:
-            resp = client.get(raw_url)
-            final_url = str(resp.url)
+            with client.stream("GET", raw_url) as resp:
+                if resp.status_code >= 400:
+                    return {"ok": False, "error": f"网页请求失败 HTTP {resp.status_code}"}
+
+                cl_header = resp.headers.get("content-length")
+                if cl_header:
+                    try:
+                        if int(cl_header) > MAX_CONTENT_LENGTH:
+                            return {"ok": False, "error": f"网页内容过大 ({cl_header} 字节)，超过 15MB 限制"}
+                    except (ValueError, TypeError):
+                        pass
+
+                chunks = []
+                total_bytes = 0
+                for chunk in resp.iter_bytes():
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_CONTENT_LENGTH:
+                        return {"ok": False, "error": "网页内容超过 15MB 限制，已终止下载"}
+                    chunks.append(chunk)
+
+                content_bytes = b"".join(chunks)
+                final_url = str(resp.url)
+                content_type = resp.headers.get("content-type", "").lower()
+                encoding = resp.encoding or "utf-8"
 
             # Check Sogou meta-refresh redirect
-            if "sogou.com/link" in final_url and ("window.location.replace" in resp.text or 'http-equiv="refresh"' in resp.text):
-                m = re.search(r'replace\("([^"]+)"\)', resp.text) or re.search(r'url=\'?([^\'"]+)', resp.text)
+            text_preview = content_bytes[:4096].decode("utf-8", errors="ignore")
+            if "sogou.com/link" in final_url and ("window.location.replace" in text_preview or 'http-equiv="refresh"' in text_preview):
+                m = re.search(r'replace\("([^"]+)"\)', text_preview) or re.search(r'url=\'?([^\'"]+)', text_preview)
                 if m:
                     target_url = m.group(1)
                     if target_url.startswith("/"):
                         target_url = urllib.parse.urljoin(final_url, target_url)
-                    resp = client.get(target_url)
-                    final_url = str(resp.url)
+                    with client.stream("GET", target_url) as resp2:
+                        if resp2.status_code >= 400:
+                            return {"ok": False, "error": f"网页请求失败 HTTP {resp2.status_code}"}
+                        cl2 = resp2.headers.get("content-length")
+                        if cl2:
+                            try:
+                                if int(cl2) > MAX_CONTENT_LENGTH:
+                                    return {"ok": False, "error": f"网页内容过大 ({cl2} 字节)，超过 15MB 限制"}
+                            except (ValueError, TypeError):
+                                pass
+                        chunks2 = []
+                        tb2 = 0
+                        for chunk in resp2.iter_bytes():
+                            tb2 += len(chunk)
+                            if tb2 > MAX_CONTENT_LENGTH:
+                                return {"ok": False, "error": "网页内容超过 15MB 限制，已终止下载"}
+                            chunks2.append(chunk)
+                        content_bytes = b"".join(chunks2)
+                        final_url = str(resp2.url)
+                        content_type = resp2.headers.get("content-type", "").lower()
+                        encoding = resp2.encoding or "utf-8"
 
-            content_type = resp.headers.get("content-type", "").lower()
             if "json" in content_type:
                 try:
-                    data = resp.json()
+                    data = json.loads(content_bytes.decode(encoding, errors="replace"))
                     formatted = json.dumps(data, ensure_ascii=False, indent=2)
                     return {"ok": True, "url": final_url, "title": "JSON Response",
                             "content": formatted[:limit], "chars": len(formatted[:limit])}
                 except Exception:
                     pass
 
-            # Detect encoding
-            encoding = resp.encoding or "utf-8"
-            html_text = resp.content.decode(encoding, errors="replace")
-
+            html_text = content_bytes.decode(encoding, errors="replace")
             soup = BeautifulSoup(html_text, "html.parser")
             title_tag = soup.find("title")
             title = title_tag.get_text(strip=True) if title_tag else ""
@@ -593,7 +633,7 @@ def browser_open(url: str, wait_ms: int = 2500, screenshot: bool = False,
         tmp_png = os.path.join(tmpdir, "shot.png")
         cmd = [
             browser,
-            "--headless",
+            "--headless=new",
             "--disable-gpu",
             "--no-sandbox",
             "--window-size=1280,800",

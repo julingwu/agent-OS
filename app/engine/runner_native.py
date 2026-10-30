@@ -110,6 +110,25 @@ _LLM_TOOLS: list[dict] = [
                      "description": "传给脚本的参数（可选）"},
         }, "required": ["path"]},
     }},
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "允许流水线工序在沙箱中搜索实时互联网信息，返回相关网页标题与摘要。",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "搜索关键词或短语"},
+        }, "required": ["query"]},
+    }},
+    {"type": "function", "function": {
+        "name": "render_chart",
+        "description": "生成专业数据图表 PNG，自动保存至沙箱工作区并作为阶段交付物。",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "图表标题"},
+            "chart_type": {"type": "string", "enum": ["bar", "line", "pie", "scatter", "area", "radar", "custom_code"],
+                           "description": "图表类型：bar, line, pie, scatter, area, radar, custom_code"},
+            "data": {"type": "object", "description": "图表数据，包含 categories 与 series"},
+            "theme": {"type": "string", "description": "主题风格：modern, financial, academic"},
+            "python_code": {"type": "string", "description": "当 chart_type 为 custom_code 时的 matplotlib 代码"},
+        }, "required": ["title", "chart_type"]},
+    }},
 ]
 
 
@@ -433,9 +452,11 @@ class NativeKernel:
             pass
 
     # ------------------------------------------------------------- Sandbox Tools
-    def write_file(self, rel_path: str, content: str) -> dict:
+    def write_file(self, rel_path: str, content: str | bytes) -> dict:
+        is_bytes = isinstance(content, bytes)
+        raw_bytes = content if is_bytes else content.encode("utf-8")
         tool_id = "call_" + uuid.uuid4().hex[:12]
-        self.emit_tool_call(tool_id, "write_file", {"path": rel_path, "bytes": len(content.encode("utf-8"))})
+        self.emit_tool_call(tool_id, "write_file", {"path": rel_path, "bytes": len(raw_bytes)})
         
         clean_name = pathlib.Path(rel_path).name
         self.proj_dir.mkdir(parents=True, exist_ok=True)
@@ -443,11 +464,16 @@ class NativeKernel:
         dest_proj = self.proj_dir / clean_name
         dest_ws = self.ws / clean_name
         
-        dest_proj.write_text(content, encoding="utf-8")
-        if dest_proj != dest_ws:
-            dest_ws.write_text(content, encoding="utf-8")
+        if is_bytes:
+            dest_proj.write_bytes(content)
+            if dest_proj != dest_ws:
+                dest_ws.write_bytes(content)
+        else:
+            dest_proj.write_text(content, encoding="utf-8")
+            if dest_proj != dest_ws:
+                dest_ws.write_text(content, encoding="utf-8")
             
-        sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        sha = hashlib.sha256(raw_bytes).hexdigest()
         self.writes.append(clean_name)
         self.writes.append(str(dest_ws))
         
@@ -461,16 +487,17 @@ class NativeKernel:
                     stage_key=self.task_info.get("stage", "build"),
                     role_tag=self.task_info.get("pack_id", "dev"),
                     title=f"交付物生成: {clean_name}",
-                    content=content[:3000],
+                    content=(content[:3000] if isinstance(content, str)
+                             else f"[图表产物: {clean_name}, {len(raw_bytes)} 字节]"),
                     file_path=str(dest_proj)
                 )
             except Exception:
                 pass
                 
-        out_msg = f"文件已成功保存: {clean_name} ({len(content.encode('utf-8')):,} bytes, sha256:{sha[:8]})"
+        out_msg = f"文件已成功保存: {clean_name} ({len(raw_bytes):,} bytes, sha256:{sha[:8]})"
         self.emit_tool_result(tool_id, "write_file", out_msg, ok=True)
-        self._meter(1200 + len(content) // 4)
-        return {"ok": True, "path": str(dest_proj), "size": len(content.encode("utf-8"))}
+        self._meter(1200 + len(raw_bytes) // 4)
+        return {"ok": True, "path": str(dest_proj), "size": len(raw_bytes)}
 
     def read_file(self, rel_path: str) -> str:
         tool_id = "call_" + uuid.uuid4().hex[:12]
@@ -640,6 +667,43 @@ class NativeKernel:
                     "exit_code": res.get("exit_code"),
                     "stdout": (res.get("stdout") or "")[:2000],
                     "stderr": (res.get("stderr") or "")[:2000]}
+        if name == "web_search":
+            from ..agent import web_tools
+            tool_id = "call_" + uuid.uuid4().hex[:12]
+            q = str(args.get("query") or "")
+            self.emit_tool_call(tool_id, "web_search", {"query": q})
+            res = web_tools.web_search(q, max_results=5)
+            summary = (f"搜索完成，获取 {len(res.get('results') or [])} 条结果"
+                       if res.get("ok") else f"搜索失败: {res.get('error')}")
+            self.emit_tool_result(tool_id, "web_search", summary, ok=bool(res.get("ok")))
+            self._meter(600)
+            return res
+        if name == "render_chart":
+            from ..agent import ext_tools
+            from .. import artifacts
+            title = str(args.get("title") or "chart").strip()
+            chart_type = str(args.get("chart_type") or "bar").strip()
+            data = args.get("data")
+            python_code = args.get("python_code")
+            theme = str(args.get("theme") or "modern").strip()
+            res = ext_tools.render_chart(
+                title=title,
+                chart_type=chart_type,
+                data=data,
+                python_code=python_code,
+                theme=theme,
+            )
+            if not res.get("ok"):
+                return res
+            try:
+                art_path, _ = artifacts.resolve(res["artifact_id"])
+                chart_bytes = art_path.read_bytes()
+                filename = f"{title}.png" if not title.lower().endswith(".png") else title
+                write_res = self.write_file(filename, chart_bytes)
+                res["sandbox_path"] = write_res.get("path")
+            except Exception as exc:
+                res["write_error"] = str(exc)
+            return res
         return {"ok": False, "error": f"unknown tool: {name}"}
 
     def execute_llm_build(self) -> None:
@@ -667,7 +731,9 @@ class NativeKernel:
                         resp = data
                 if resp:
                     msg = resp.get("message") or {}
-                    if msg.get("reasoning_content"):
+                    if not msg.get("content") and not msg.get("tool_calls"):
+                        resp = None
+                    elif msg.get("reasoning_content"):
                         self.emit_thought(str(msg["reasoning_content"]))
             except Exception:
                 resp = None
@@ -713,7 +779,7 @@ class NativeKernel:
                     raise
                 except Exception as exc:            # noqa: BLE001 - 单个工具失败不能中断循环
                     result = {"ok": False, "error": str(exc)}
-                if name == "write_file" and result.get("ok"):
+                if (name == "write_file" or (name == "render_chart" and result.get("sandbox_path"))) and result.get("ok"):
                     wrote = True
                 messages.append({"role": "tool",
                                  "tool_call_id": call.get("id") or "",

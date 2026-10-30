@@ -26,6 +26,47 @@ class ToolError(RuntimeError):
     pass
 
 
+def _safe_int(val: object, default: object = 0) -> object:
+    """安全转换为整型，防御 None、空字符串、浮点与非法字符串输入。"""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return int(val)
+    if isinstance(val, (int, float)):
+        try:
+            return int(val)
+        except (ValueError, OverflowError):
+            return default
+    s = str(val).strip()
+    if not s:
+        return default
+    try:
+        return int(s)
+    except ValueError:
+        try:
+            return int(float(s))
+        except (ValueError, OverflowError):
+            return default
+
+
+def _safe_bool(val: object, default: bool = False) -> bool:
+    """安全转换为布尔型，兼容 'true'/'false'/'1'/'0' 等字符串与 None。"""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("true", "1", "yes", "y", "t"):
+            return True
+        if s in ("false", "0", "no", "n", "f", ""):
+            return False
+        return default
+    return bool(val)
+
+
 def _jail(path: str | None) -> pathlib.Path:
     root = WORKSPACE.resolve()
     target = (root / (path or ".")).resolve()
@@ -53,7 +94,8 @@ def _run_exec(cmd: str, cwd: str | None = None, timeout_s: int = 180) -> dict:
 
 
 def _fs_list(path: str | None = None) -> dict:
-    target = _jail(path)
+    safe_path = str(path or ".")
+    target = _jail(safe_path)
     if not target.exists():
         return {"ok": False, "error": "not found"}
     if target.is_file():
@@ -74,8 +116,12 @@ def _fs_read(path: str, max_bytes: int = 200_000, start_line: int | None = None,
     return doc_tools.fs_read(path, start_line=start_line, end_line=end_line, max_bytes=max_bytes)
 
 
-def _fs_write(path: str, content: str) -> dict:
+def _fs_write(path: str | None, content: str) -> dict:
+    if not path or not str(path).strip():
+        return {"ok": False, "error": "path 不能为空"}
     target = _jail(path)
+    if target.exists() and target.is_dir():
+        return {"ok": False, "error": f"目标路径是目录，无法写入: {path}"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     return {"ok": True, "path": str(target.relative_to(WORKSPACE)),
@@ -102,51 +148,54 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
     args = args or {}
     if name == "exec":
         from . import ext_tools
-        return ext_tools.run_exec(str(args.get("cmd", "")), args.get("cwd"), args.get("timeout_s", 180))
+        return ext_tools.run_exec(str(args.get("cmd", "")), args.get("cwd"), _safe_int(args.get("timeout_s", 180), 180))
     if name == "fs_list":
         return _fs_list(args.get("path"))
     if name == "fs_read":
         from . import doc_tools
-        return doc_tools.fs_read(str(args.get("path", "")), start_line=args.get("start_line"),
-                                 end_line=args.get("end_line"), max_bytes=args.get("max_bytes", 200_000))
+        start_line = _safe_int(args.get("start_line"), None) if args.get("start_line") is not None else None
+        end_line = _safe_int(args.get("end_line"), None) if args.get("end_line") is not None else None
+        max_bytes = _safe_int(args.get("max_bytes", 200_000), 200_000)
+        return doc_tools.fs_read(str(args.get("path", "")), start_line=start_line,
+                                 end_line=end_line, max_bytes=max_bytes)
     if name == "fs_write":
-        return _fs_write(str(args.get("path", "")), str(args.get("content", "")))
+        return _fs_write(args.get("path"), str(args.get("content", "")))
     if name == "fs_edit":
         from . import doc_tools
         return doc_tools.fs_edit(str(args.get("path", "")), str(args.get("old_text", "")),
-                                 str(args.get("new_text", "")), bool(args.get("replace_all", False)))
+                                 str(args.get("new_text", "")), _safe_bool(args.get("replace_all", False), False))
     if name == "glob_search":
         from . import doc_tools
         return doc_tools.glob_search(str(args.get("pattern", "*")), str(args.get("path", ".")))
     if name == "grep_search":
         from . import doc_tools
         return doc_tools.grep_search(str(args.get("pattern", "")), str(args.get("path", ".")),
-                                     str(args.get("file_glob", "*")), int(args.get("context_lines", 1)),
-                                     int(args.get("max_matches", 80)))
+                                     str(args.get("file_glob", "*")), _safe_int(args.get("context_lines", 1), 1),
+                                     _safe_int(args.get("max_matches", 80), 80))
     if name == "doc_read":
         from . import doc_tools
-        return doc_tools.doc_read(str(args.get("path", "")), max_chars=args.get("max_chars", 30000),
+        return doc_tools.doc_read(str(args.get("path", "")), max_chars=_safe_int(args.get("max_chars", 30000), 30000),
                                   sheet=args.get("sheet"))
     if name == "web_search":
         from . import web_tools
         return web_tools.web_search(
             str(args.get("query", "")),
             search_type=str(args.get("search_type") or "all"),
-            max_results=int(args.get("max_results") or args.get("count") or 8)
+            max_results=_safe_int(args.get("max_results") or args.get("count") or 8, 8)
         )
     if name == "web_fetch":
         from . import web_tools
         return web_tools.web_fetch(
             str(args.get("url", "")),
-            max_chars=int(args.get("max_chars", 25000)),
-            render_js=bool(args.get("render_js", False))
+            max_chars=_safe_int(args.get("max_chars", 25000), 25000),
+            render_js=_safe_bool(args.get("render_js", False), False)
         )
     if name == "browser_open":
         from . import web_tools
-        return web_tools.browser_open(str(args.get("url", "")), wait_ms=int(args.get("wait_ms", 2500)),
-                                      screenshot=bool(args.get("screenshot", False)),
+        return web_tools.browser_open(str(args.get("url", "")), wait_ms=_safe_int(args.get("wait_ms", 2500), 2500),
+                                      screenshot=_safe_bool(args.get("screenshot", False), False),
                                       selector=args.get("selector"),
-                                      max_chars=int(args.get("max_chars", 20000)), emit=emit)
+                                      max_chars=_safe_int(args.get("max_chars", 20000), 20000), emit=emit)
     if name == "process_start":
         from . import ext_tools
         return ext_tools.process_start(str(args.get("cmd", "")), name=args.get("name"), cwd=args.get("cwd"),
@@ -156,7 +205,7 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
         return ext_tools.process_list(bot_id=bot_id, state=args.get("state"))
     if name == "process_logs":
         from . import ext_tools
-        return ext_tools.process_logs(str(args.get("proc_id", "")), lines=int(args.get("lines", 50)))
+        return ext_tools.process_logs(str(args.get("proc_id", "")), lines=_safe_int(args.get("lines", 50), 50))
     if name == "process_stop":
         from . import ext_tools
         return ext_tools.process_stop(str(args.get("proc_id", "")))
@@ -197,6 +246,15 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
             theme=str(args.get("theme") or "modern"),
             emit=emit,
         )
+    if name == "render_diagram":
+        from . import ext_tools
+        return ext_tools.render_diagram(
+            title=str(args.get("title") or "架构图"),
+            diagram_type=str(args.get("diagram_type") or "architecture"),
+            code=str(args.get("code") or ""),
+            theme=str(args.get("theme") or "modern"),
+            emit=emit,
+        )
     if name == "computer_screenshot":
         from . import ext_tools
         return ext_tools.computer_screenshot(emit=emit)
@@ -225,10 +283,10 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
         return _local_tool(name, args, emit, session_id=session_id)
     if name == "remember":
         return _remember(bot_id, str(args.get("content", "")),
-                         str(args.get("kind") or "fact"), args.get("importance", 1),
+                         str(args.get("kind") or "fact"), _safe_int(args.get("importance", 1), 1),
                          str(args.get("topic") or ""))
     if name == "recall":
-        return _recall(bot_id, str(args.get("query", "")), int(args.get("limit") or 8))
+        return _recall(bot_id, str(args.get("query", "")), _safe_int(args.get("limit") or 8, 8))
     raise ToolError(f"unknown tool: {name}")
 
 
@@ -387,7 +445,7 @@ def _local_tool(name: str, args: dict, emit, session_id: str | None = None) -> d
             return {"ok": False, "error": "用户拒绝了这次本地操作"}
     if name == 'local_exec':
         args = dict(args)
-        args['timeout_s'] = max(1, min(int(args.get('timeout_s') or 60), 150))
+        args['timeout_s'] = max(1, min(_safe_int(args.get('timeout_s') or 60, 60), 150))
         result = local_bridge.call(device_id, name, args, timeout=args['timeout_s'] + 10)
     else:
         result = local_bridge.call(device_id, name, args)
@@ -399,7 +457,7 @@ def _local_tool(name: str, args: dict, emit, session_id: str | None = None) -> d
                     "artifact_id": art.get("id", ""),
                     "name": art.get("name") or "截图",
                     "kind": art.get("kind") or "image/png",
-                    "bytes": int(art.get("bytes") or 0),
+                    "bytes": _safe_int(art.get("bytes") or 0, 0),
                     "url": art.get("url") or f"/v1/artifacts/{art.get('id', '')}",
                 })
             except Exception:                        # noqa: BLE001 - 事件失败不该吞掉工具结果
@@ -643,6 +701,28 @@ TOOL_SPECS: list[dict] = [
                 "description": "研报风格主题：modern(现代科技暗调/蓝紫绿金), financial(彭博金融/高对比暗调), academic(经典学术黑白灰/纯白洁净)，默认 modern",
             },
         }, "required": ["title", "chart_type"]},
+    }},
+    {"type": "function", "function": {
+        "name": "render_diagram",
+        "description": "专业架构师与产品经理图表绘制工具。将系统架构图(architecture)、业务流程图(flowchart)、交互时序图(sequence)或自定义 Python 绘图代码渲染为高分辨率(300 DPI)高质感矢量卡片与流程箭头图片产物。"
+                       "自动支持研报级现代暗调(modern)、金融(financial)、学术(academic)主题配色，自动挂载为图片产物并返回 Markdown 引用。",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "图表主标题，如 系统微服务架构图 或 用户下单交互时序图"},
+            "diagram_type": {
+                "type": "string",
+                "enum": ["architecture", "flowchart", "sequence", "custom_code"],
+                "description": "图表类型：architecture(分层系统架构图), flowchart(流程图/状态机), sequence(时序交互图), custom_code(自定义代码)",
+            },
+            "code": {
+                "type": "string",
+                "description": "图表定义文本或代码。支持类似 Mermaid 语法的节点与连线（如 A[客户端] --> B{鉴权网关} --> C[业务服务]），时序语法（如 User -> Gateway: 登录），分层语法（Layer: 接入层 [Web, App]），或自定义 Matplotlib 绘图代码。",
+            },
+            "theme": {
+                "type": "string",
+                "enum": ["modern", "financial", "academic"],
+                "description": "配色主题：modern(现代科技暗调), financial(彭博金融高对比), academic(经典学术纯白)，默认 modern",
+            },
+        }, "required": ["title", "diagram_type", "code"]},
     }},
     {"type": "function", "function": {
         "name": "computer_screenshot",

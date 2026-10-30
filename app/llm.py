@@ -253,6 +253,26 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
                             continue
                         raise RuntimeError(f"http_{r.status_code}: {text[:200]}")
 
+                    ctype = (r.headers.get("content-type") or "").lower()
+                    if "text/event-stream" not in ctype and "application/x-ndjson" not in ctype:
+                        raw = r.read().decode("utf-8", "replace")
+                        try:
+                            data = json.loads(raw)
+                        except Exception:
+                            data = {}
+                        choice = (data.get("choices") or [{}])[0]
+                        msg = choice.get("message") or {}
+                        if "reasoning_content" in msg or "reasoning" in msg:
+                            msg.setdefault("reasoning_content", msg.get("reasoning_content") or msg.get("reasoning"))
+                        u = data.get("usage") or {}
+                        rec = {"prompt_tokens": int(u.get("prompt_tokens") or 0),
+                               "completion_tokens": int(u.get("completion_tokens") or 0)}
+                        _record_usage("agent", rec)
+                        if msg.get("content"):
+                            yield "delta", msg["content"]
+                        yield "final", {"message": msg, "usage": rec, "finish_reason": choice.get("finish_reason")}
+                        return
+
                     for line in r.iter_lines():
                         if not line or not line.startswith("data:"):
                             continue
