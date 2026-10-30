@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 from datetime import datetime
@@ -32,7 +33,16 @@ from . import blackboard, memory_writer, tools
 
 logger = logging.getLogger("app.agent.loop")
 
-MAX_STEPS = 30
+
+def _get_max_steps() -> int:
+    try:
+        val = int(os.environ.get("AGENT_MAX_STEPS", 30))
+        return val if val > 0 else 30
+    except (ValueError, TypeError):
+        return 30
+
+
+MAX_STEPS = _get_max_steps()
 HISTORY_EVENTS = 24
 MAX_HOPS = 3
 MAX_GROUP_TARGETS = 3
@@ -165,6 +175,8 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
     seq = 0
     started = False
 
+    thought_buf: list[str] = []
+
     def flush(force: bool = False) -> None:
         nonlocal seq
         if not buf:
@@ -175,25 +187,58 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
         _emit(conn, bot_id=bot_id, session_id=session_id, kind="message.delta",
               turn_id=turn_id, payload={"text": text, "seq": seq})
 
+    def flush_thought(force: bool = False) -> None:
+        if not thought_buf:
+            return
+        t_text = "".join(thought_buf)
+        thought_buf.clear()
+        _emit(conn, bot_id=bot_id, session_id=session_id, kind="thought.delta",
+              turn_id=turn_id, payload={"text": t_text})
+
+    first_chunk_received = threading.Event()
+
+    def on_heartbeat():
+        if not first_chunk_received.is_set():
+            _emit(conn, bot_id=bot_id, session_id=session_id, kind="thought.delta",
+                  turn_id=turn_id, payload={"text": "正在深度思考与推导..."})
+
+    keepalive_timer = threading.Timer(3.0, on_heartbeat)
+    keepalive_timer.daemon = True
+    keepalive_timer.start()
+
     try:
         it = llm.chat_stream(messages, tools=tools_specs,
                              temperature=0.3, model=model)
         last_flush = time.monotonic()
+        last_thought_flush = time.monotonic()
         for kind, payload in it:
+            first_chunk_received.set()
+            keepalive_timer.cancel()
             if kind == "final":
+                flush_thought(force=True)
                 flush(force=True)
                 return payload
-            buf.append(payload)
-            acc.append(payload)
-            started = True
-            now = time.monotonic()
-            if (now - last_flush >= STREAM_FLUSH_SECONDS
-                    or sum(len(x) for x in buf) >= STREAM_FLUSH_CHARS):
-                flush()
-                last_flush = now
+            if kind == "thought":
+                thought_buf.append(payload)
+                now = time.monotonic()
+                if (now - last_thought_flush >= 0.2
+                        or sum(len(x) for x in thought_buf) >= 60):
+                    flush_thought()
+                    last_thought_flush = now
+            elif kind == "delta":
+                buf.append(payload)
+                acc.append(payload)
+                started = True
+                now = time.monotonic()
+                if (now - last_flush >= STREAM_FLUSH_SECONDS
+                        or sum(len(x) for x in buf) >= STREAM_FLUSH_CHARS):
+                    flush()
+                    last_flush = now
+        flush_thought(force=True)
         flush(force=True)
         return {"message": {"content": ""}, "usage": {}}
     except Exception as exc:                            # noqa: BLE001
+        keepalive_timer.cancel()
         if started and (buf or seq):
             flush(force=True)
             # 已经给用户看到半截了：就当本轮结束，别重跑制造"内容闪现又消失"；
@@ -205,6 +250,8 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
                                             session_id=session_id, turn_id=turn_id,
                                             model=model, tools_specs=tools_specs,
                                             temperature=0.3)
+    finally:
+        keepalive_timer.cancel()
 
 
 def _system_prompt(bot: dict, members: list[dict] | None = None,
@@ -668,7 +715,9 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     executed_steps_summary: list[str] = []
     active_tools: set[str] = set()
 
-    for step in range(MAX_STEPS):
+    max_steps = _get_max_steps()
+    step = 0
+    for step in range(max_steps):
         try:
             messages = _compact_context(messages)
             effective_tools = tools.get_effective_tool_specs(
@@ -712,6 +761,42 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
 
         if not tool_calls:
             final_text = (msg.get("content") or "").strip()
+            if not final_text and step < max_steps - 1:
+                reasoning = (msg.get("reasoning_content") or "").strip()
+                if reasoning:
+                    logger.info("检测到仅有 reasoning_content 但无 content，尝试平滑补全正文或提取思考结论")
+                    try:
+                        retry_messages = list(messages) + [
+                            {"role": "assistant", "content": "", "reasoning_content": reasoning},
+                            {"role": "user", "content": "请根据你上面的思考推导，直接输出最终回答正文。"}
+                        ]
+                        retry_resp = llm.chat(retry_messages, tools=None, temperature=0.3, model=model, max_tokens=4096)
+                        if retry_resp and retry_resp.get("message", {}).get("content"):
+                            final_text = retry_resp["message"]["content"].strip()
+                    except Exception as e:
+                        logger.warning(f"平滑重试补全正文失败: {e}")
+
+                    if not final_text:
+                        lines = [line.strip() for line in reasoning.split("\n") if line.strip()]
+                        conclusion_lines = []
+                        for line in reversed(lines):
+                            conclusion_lines.insert(0, line)
+                            if len("\n".join(conclusion_lines)) >= 400:
+                                break
+                        extracted = "\n".join(conclusion_lines).strip()
+                        if extracted:
+                            final_text = extracted
+                        else:
+                            final_text = reasoning[:1200]
+                else:
+                    try:
+                        retry_resp = llm.chat(messages, tools=None, temperature=0.3, model=model)
+                        if retry_resp and retry_resp.get("message", {}).get("content"):
+                            final_text = retry_resp["message"]["content"].strip()
+                    except Exception as e:
+                        logger.warning(f"空响应平滑重试失败: {e}")
+                    if not final_text:
+                        final_text = "（模型未返回有效正文，您可以回复「继续」重新生成）"
             break
 
         # assistant 的 tool_calls 必须原样回填，同时保留或补充 reasoning_content 字段，
@@ -774,12 +859,12 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
         if status == "needs_human":
             break
 
-    if status == "done" and not final_text:
-        # 工具步数用尽时，强制模型用不带工具的一轮做收尾总结并提示用户回复「继续」
+    if status == "done" and not final_text and step >= max_steps - 1:
+        # 工具步数真正用尽时（达到安全上限），强制模型用不带工具的一轮做收尾总结并提示用户回复「继续」
         try:
             wrap = llm.chat(
                 messages + [{"role": "user", "content":
-                             f"（已达到单轮安全上限 {MAX_STEPS} 步）请不要再调用任何工具，"
+                             f"（已达到单轮安全上限 {max_steps} 步）请不要再调用任何工具，"
                              "直接用清晰条目总结：1. 已完成的具体成果；2. 正在进行/卡住的环节；3. 后续执行建议。"}],
                 tools=None, temperature=0.2, model=model)
             final_text = ((wrap or {}).get("message") or {}).get("content", "").strip()
@@ -788,7 +873,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
         if not final_text:
             recent_steps = "、".join(executed_steps_summary[-5:]) if executed_steps_summary else "多项工具调用"
             final_text = (
-                f"⚠️ **已达到单轮最大执行步数（{MAX_STEPS} 步）**\n\n"
+                f"⚠️ **已达到单轮最大执行步数（{max_steps} 步）**\n\n"
                 f"- **已完成进度**：本轮已调用完成：{recent_steps}。\n"
                 "- **后续操作**：为防止工具死循环与算力过度消耗，系统已安全暂停；"
                 "成果均已保存在工作区，您可以直接回复「**继续**」，我会从当前断点无缝接着往下执行。"
@@ -796,14 +881,14 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
         else:
             final_text = (
                 f"{final_text}\n\n"
-                f"💡 *（注：本轮已达到单轮安全上限 {MAX_STEPS} 步。您可以直接回复「**继续**」接着向下执行）*"
+                f"💡 *（注：本轮已达到单轮安全上限 {max_steps} 步。您可以直接回复「**继续**」接着向下执行）*"
             )
     if final_text:
         _emit(conn, bot_id=bot_id, session_id=session_id, kind="message.bot",
               turn_id=turn_id, payload={"text": final_text})
         if status == "done":
-            if step >= MAX_STEPS - 1:
-                hint_str = f"已达单轮上限（{MAX_STEPS}步），完成工具：{', '.join(executed_steps_summary[-4:])}，待回复「继续」接力" if executed_steps_summary else "已达单轮安全上限，待继续执行"
+            if step >= max_steps - 1:
+                hint_str = f"已达单轮上限（{max_steps}步），完成工具：{', '.join(executed_steps_summary[-4:])}，待回复「继续」接力" if executed_steps_summary else "已达单轮安全上限，待继续执行"
             else:
                 hint_str = "本轮任务已交付，待用户评估或发出下一步指令"
             blackboard.save_blackboard(conn, session_id, next_step_hint=hint_str)

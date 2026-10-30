@@ -136,7 +136,7 @@ def _fix_assistant_reasoning_content(messages: list[dict]) -> list[dict]:
     return fixed
 
 def chat(messages: list[dict], *, tools: list[dict] | None = None,
-         max_tokens: int = 4000, temperature: float = 0.3,
+         max_tokens: int = 8192, temperature: float = 0.3,
          timeout: float = 180.0, model: str | None = None) -> dict | None:
     """带工具调用的单轮对话，返回 {'message': {...}, 'usage': {...}}。
 
@@ -204,7 +204,7 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
 
 
 def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
-                max_tokens: int = 4000, temperature: float = 0.3,
+                max_tokens: int = 8192, temperature: float = 0.3,
                 timeout: float = 300.0, model: str | None = None):
     """流式单轮对话。逐块 yield ("delta", 文本)，最后 yield ("final", {message, usage})。
 
@@ -268,6 +268,8 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
                         rec = {"prompt_tokens": int(u.get("prompt_tokens") or 0),
                                "completion_tokens": int(u.get("completion_tokens") or 0)}
                         _record_usage("agent", rec)
+                        if msg.get("reasoning_content"):
+                            yield "thought", msg["reasoning_content"]
                         if msg.get("content"):
                             yield "delta", msg["content"]
                         yield "final", {"message": msg, "usage": rec, "finish_reason": choice.get("finish_reason")}
@@ -291,6 +293,8 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
                             r_piece = delta.get("reasoning_content") or delta.get("reasoning")
                             if r_piece:
                                 reasoning_parts.append(r_piece)
+                                started_yielding = True
+                                yield "thought", r_piece
                             piece = delta.get("content")
                             if piece:
                                 content_parts.append(piece)
