@@ -187,6 +187,16 @@ def dispatch(name: str, args: dict, *, emit=None, bot_id: str | None = None,
         from . import ext_tools
         return ext_tools.publish_artifact(str(args.get("path", "")), name=args.get("name"),
                                           mime=args.get("mime"), emit=emit)
+    if name == "render_chart":
+        from . import ext_tools
+        return ext_tools.render_chart(
+            title=str(args.get("title") or "数据图表"),
+            chart_type=str(args.get("chart_type") or "bar"),
+            data=args.get("data"),
+            python_code=args.get("python_code"),
+            theme=str(args.get("theme") or "modern"),
+            emit=emit,
+        )
     if name == "computer_screenshot":
         from . import ext_tools
         return ext_tools.computer_screenshot(emit=emit)
@@ -609,6 +619,32 @@ TOOL_SPECS: list[dict] = [
         }, "required": ["path"]},
     }},
     {"type": "function", "function": {
+        "name": "render_chart",
+        "description": "专业数据图表生成工具。支持柱状图(bar)、趋势折线图(line)、环形饼图(pie)、散点图(scatter)、面积图(area)、多维雷达图(radar)及自定义 Matplotlib 代码(custom_code)。"
+                       "自动应用 Hermes/DSH 专业研报级高雅暗调/彭博金融/学术主题配色，支持中文回退字体与 300 DPI 产物高清发布。",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "图表主标题，如 2026年业务营收趋势"},
+            "chart_type": {
+                "type": "string",
+                "enum": ["bar", "line", "pie", "scatter", "area", "radar", "custom_code"],
+                "description": "图表类型：bar(柱状/对比), line(折线趋势), pie(饼图/环形), scatter(散点), area(面积), radar(雷达), custom_code(自定义代码)",
+            },
+            "data": {
+                "type": "object",
+                "description": "图表数据对象。支持 categories 标签列表与 series 数据列表（包含 name 与 values），如 {'categories': ['Q1','Q2'], 'series': [{'name': '营收', 'values': [100, 150]}]}",
+            },
+            "python_code": {
+                "type": "string",
+                "description": "当 chart_type 为 custom_code 时执行的自定义 Matplotlib/Seaborn 绘图代码（局部隔离运行，已预注入 output_path, plt, np 变量）",
+            },
+            "theme": {
+                "type": "string",
+                "enum": ["modern", "financial", "academic"],
+                "description": "研报风格主题：modern(现代科技暗调/蓝紫绿金), financial(彭博金融/高对比暗调), academic(经典学术黑白灰/纯白洁净)，默认 modern",
+            },
+        }, "required": ["title", "chart_type"]},
+    }},
+    {"type": "function", "function": {
         "name": "computer_screenshot",
         "description": "截取当前服务器 X11 桌面图像并作为产物在聊天会话中直接展示给用户。",
         "parameters": {"type": "object", "properties": {}},
@@ -684,20 +720,20 @@ TOOL_SPECS: list[dict] = [
     # ---------------- 本地电脑（需要 exe 在线 + 用户审批） ----------------
     {"type": "function", "function": {
         "name": "local_info",
-        "description": "查看用户本地电脑的系统信息（主机名、系统版本、用户名、家目录）。"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】查看用户本地电脑的系统信息（主机名、系统版本、用户名、家目录）。"
                        "本地能力需要在设置里开启。",
         "parameters": {"type": "object", "properties": {}},
     }},
     {"type": "function", "function": {
         "name": "local_list",
-        "description": "列出用户本地电脑某个目录的内容（只读）。",
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】列出用户本地电脑某个目录的内容（只读）。",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string", "description": "绝对路径，如 C:\\\\Users\\\\me\\\\Documents"},
         }, "required": ["path"]},
     }},
     {"type": "function", "function": {
         "name": "local_read",
-        "description": "读取用户本地电脑上的一个文本文件（只读，最多 200KB）。",
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】读取用户本地电脑上的一个文本文件（只读，最多 200KB）。",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"},
             "max_bytes": {"type": "integer"},
@@ -705,7 +741,7 @@ TOOL_SPECS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "local_write",
-        "description": "在用户本地电脑上写文件（会覆盖）。需要用户审批。",
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】在用户本地电脑上写文件（会覆盖）。需要用户审批。",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"},
             "content": {"type": "string"},
@@ -713,7 +749,7 @@ TOOL_SPECS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "local_exec",
-        "description": "在用户本地电脑上执行命令（Windows 用 cmd /C，其他用 sh -c）。"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】在用户本地电脑上执行命令（Windows 用 cmd /C，其他用 sh -c）。"
                        "需要用户审批，默认 60 秒超时，最多 150 秒。Windows 命令使用 cmd 语法；"
                        "复杂 Python/PowerShell 脚本应先 local_write 写文件再执行，避免多层引号。"
                        "启动 GUI 程序请用 local_open，别用这个。",
@@ -726,7 +762,7 @@ TOOL_SPECS: list[dict] = [
     # ---------------- 本地桌面操控（exe 提供，逐次审批） ----------------
     {"type": "function", "function": {
         "name": "local_apps",
-        "description": "在用户电脑的开始菜单和桌面快捷方式里按名字找应用（支持中文名，如 微信、记事本）。"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】在用户电脑的开始菜单和桌面快捷方式里按名字找应用（支持中文名，如 微信、记事本）。"
                        "要打开应用前先用它拿到准确路径。",
         "parameters": {"type": "object", "properties": {
             "query": {"type": "string", "description": "应用名关键词，留空则列常用应用"},
@@ -735,7 +771,7 @@ TOOL_SPECS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "local_open",
-        "description": "在用户电脑上打开应用、文件或网址（等价于双击）。可传 local_apps 拿到的 path，"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】在用户电脑上打开应用、文件或网址（等价于双击）。可传 local_apps 拿到的 path，"
                        "也可直接传应用名（如 记事本）。返回是否成功以及当前前台窗口。",
         "parameters": {"type": "object", "properties": {
             "target": {"type": "string", "description": "应用名 / 文件绝对路径 / URL"},
@@ -743,20 +779,20 @@ TOOL_SPECS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "local_windows",
-        "description": "列出用户电脑上当前可见的窗口（标题、进程名、是否前台）。"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】列出用户电脑上当前可见的窗口（标题、进程名、是否前台）。"
                        "用它确认应用真的打开了，或找到要操作的目标窗口。",
         "parameters": {"type": "object", "properties": {}},
     }},
     {"type": "function", "function": {
         "name": "local_focus",
-        "description": "把标题匹配的窗口切到前台并还原（操作某个应用前先切过去）。",
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】把标题匹配的窗口切到前台并还原（操作某个应用前先切过去）。",
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string", "description": "窗口标题片段，或进程名"},
         }, "required": ["title"]},
     }},
     {"type": "function", "function": {
         "name": "local_type",
-        "description": "向指定窗口输入文字（支持中文）。强烈建议带 title：会先聚焦再输入，"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】向指定窗口输入文字（支持中文）。强烈建议带 title：会先聚焦再输入，"
                        "聚焦失败就不输入（避免把字打到别的窗口）。",
         "parameters": {"type": "object", "properties": {
             "text": {"type": "string"},
@@ -765,7 +801,7 @@ TOOL_SPECS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "local_keys",
-        "description": "按组合键，如 enter、esc、tab、ctrl+s、ctrl+shift+esc、alt+tab、win+r、f5。"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】按组合键，如 enter、esc、tab、ctrl+s、ctrl+shift+esc、alt+tab、win+r、f5。"
                        "用于确认、保存、切换、关闭对话框。",
         "parameters": {"type": "object", "properties": {
             "keys": {"type": "string", "description": "用 + 连接，例如 ctrl+s"},
@@ -774,7 +810,7 @@ TOOL_SPECS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "local_click",
-        "description": "在用户屏幕的绝对坐标点击。坐标要来自用户描述或 local_windows 的屏幕尺寸，"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】在用户屏幕的绝对坐标点击。坐标要来自用户描述或 local_windows 的屏幕尺寸，"
                        "盲点风险高，非必要不用。",
         "parameters": {"type": "object", "properties": {
             "x": {"type": "integer"},
@@ -784,14 +820,14 @@ TOOL_SPECS: list[dict] = [
     }},
     {"type": "function", "function": {
         "name": "local_close",
-        "description": "关闭标题匹配的窗口（发正常关闭消息，不杀进程）。",
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】关闭标题匹配的窗口（发正常关闭消息，不杀进程）。",
         "parameters": {"type": "object", "properties": {
             "title": {"type": "string"},
         }, "required": ["title"]},
     }},
     {"type": "function", "function": {
         "name": "local_screenshot",
-        "description": "截取用户本机屏幕（或指定窗口），存成图片挂到当前会话里，"
+        "description": "【仅限用户在消息中明确要求操作其个人电脑时使用，严禁在常规云端任务中主动调用或推荐】截取用户本机屏幕（或指定窗口），存成图片挂到当前会话里，"
                        "用户能直接看到。返回尺寸/大小/前台窗口；你看不到像素内容，"
                        "判断界面状态请配合 local_windows 的标题与用户描述。",
         "parameters": {"type": "object", "properties": {

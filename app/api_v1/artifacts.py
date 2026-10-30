@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import pathlib
+import urllib.parse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
@@ -37,8 +38,57 @@ def list_artifacts(
 @router.get("/artifacts/{artifact_id}")
 def download_artifact(
     artifact_id: str,
+    raw: str | None = Query(default=None),
+    download: str | None = Query(default=None),
     device: dict = Depends(require_device),
 ) -> Response:
+    try:
+        path, kind = artifacts.resolve(artifact_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="artifact not found") from None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid artifact id") from None
+
+    is_raw = str(raw or "").lower() in ("1", "true", "yes") or str(download or "").lower() in ("1", "true", "yes")
+
+    # 如果请求显式带了 raw=1/download=1，或者产物本身就是图片，返回原始二进制
+    if is_raw or (kind and kind.startswith("image/")):
+        size = path.stat().st_size
+        if size > MAX_DOWNLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"artifact too large: {size} bytes")
+        data = path.read_bytes()
+        return Response(
+            content=data,
+            media_type=kind or "application/octet-stream",
+            headers={
+                "Cache-Control": "private, max-age=86400",
+                "Content-Disposition": f'inline; filename="{pathlib.Path(path.name).name}"',
+            },
+        )
+
+    # 非图片产物在桌面端直接放入 <img src={url} /> 会触发破图。未指定 raw=1 时返回精美伴生预览图
+    preview_bytes = artifacts.ensure_doc_preview(artifact_id)
+    meta = artifacts.describe(artifact_id)
+    orig_name = meta.get("name") or path.name
+    safe_name = urllib.parse.quote(orig_name)
+    return Response(
+        content=preview_bytes,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=86400",
+            "Content-Disposition": f'inline; filename="{pathlib.Path(path.name).stem}.preview.png"',
+            "X-Artifact-Original-Kind": kind or "application/octet-stream",
+            "X-Artifact-Original-Name": safe_name,
+        },
+    )
+
+
+@router.get("/artifacts/{artifact_id}/raw")
+def download_artifact_raw(
+    artifact_id: str,
+    device: dict = Depends(require_device),
+) -> Response:
+    """直接下载/查看原始产物二进制文件。"""
     try:
         path, kind = artifacts.resolve(artifact_id)
     except FileNotFoundError:
@@ -54,7 +104,6 @@ def download_artifact(
         content=data,
         media_type=kind or "application/octet-stream",
         headers={
-            # 内容是只读的（id 唯一），可以放心让 WebView 缓存，避免每次滚动都重下
             "Cache-Control": "private, max-age=86400",
             "Content-Disposition": f'inline; filename="{pathlib.Path(path.name).name}"',
         },
