@@ -1011,7 +1011,18 @@ def _flow_execute(conn, pid: str, node: dict, requirement: str) -> dict:
     from . import finance
     if finance.overview(conn, pid)["state"] == "halted":
         raise finance.BudgetHalt(f"项目 {pid} 的预算池已见底，已强制停摆")
-    people = ui_roles.pick(conn, [node["role"]], entity_id=entity)
+    people = ui_roles.pick(conn, [node["role"]], entity_id=entity) if node.get("role") else []
+    if not people and node.get("role"):
+        from . import recruitment
+        recruitment.ensure_workflow_staff(
+            conn,
+            role_tag=node["role"],
+            requirement=requirement,
+            project_id=pid,
+            entity_id=entity,
+            tenant_id=tenant_id,
+        )
+        people = ui_roles.pick(conn, [node["role"]], entity_id=entity)
     if not people:
         raise PermissionError("FlowEmployeeRequired")
     employee = people[0]

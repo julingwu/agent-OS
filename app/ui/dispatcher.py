@@ -68,10 +68,22 @@ def _group_title(text: str, tags: list[str]) -> str:
 
 def open_group(conn, text: str, plan: dict, *, entity_id: str = "LE-GROUP-HQ",
                tenant_id: str | None = None) -> dict | None:
-    """按规划里的角色建群：同角色多人会全部拉进来（支持并行）；没角色就不建群。"""
+    """按规划里的角色建群：按需自适应即时招聘，同角色多人全部拉入群聊（支持并行）。"""
     wanted = plan.get("roles") or []
     if not wanted:
         return None
+    from .. import recruitment
+    for tag in wanted:
+        try:
+            recruitment.ensure_workflow_staff(
+                conn,
+                role_tag=tag,
+                requirement=text,
+                entity_id=entity_id,
+                tenant_id=tenant_id or "TENANT-HQ",
+            )
+        except Exception:
+            pass
     people = roles.pick(conn, wanted, entity_id=entity_id)
     seen, members = set(), []
     for person in people:
@@ -83,6 +95,9 @@ def open_group(conn, text: str, plan: dict, *, entity_id: str = "LE-GROUP-HQ",
         return None
     chat = store.create_group(conn, _group_title(text, wanted),
                               [m["id"] for m in members], tenant_id=tenant_id)
+    member_names = "、".join(m["name"] for m in members)
+    notice = f"【人事调配】根据作战需求，已定向调配在岗专家进驻本项目组：{member_names}！"
+    store.add_message(conn, chat["id"], "system", notice, kind="text")
     return {"chat_id": chat["id"], "members": members}
 
 

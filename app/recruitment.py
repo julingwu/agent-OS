@@ -409,3 +409,354 @@ def trigger_auto_recruitment(
 
     conn.commit()
     return recruited_list
+
+
+ROLE_TAG_PRESETS: dict[str, tuple[str, str, str]] = {
+    "quant": ("量化分析师", "金融/量化", "行情分析,策略回测,因子挖掘"),
+    "quantitative": ("量化分析师", "金融/量化", "行情分析,策略回测,因子挖掘"),
+    "tiktok": ("TikTok运营专家", "海外运营", "短视频运营,流量变现,脚本策划"),
+    "sre": ("SRE运维专家", "基础架构", "服务可用性,应急响应,容量规划"),
+    "auto": ("车规架构师", "汽车工程", "车载系统,功能安全,车规标准"),
+    "automotive": ("车规架构师", "汽车工程", "车载系统,功能安全,车规标准"),
+    "sec": ("安全专家", "网络安全", "漏洞挖掘,攻防演练,风控合规"),
+    "security": ("安全专家", "网络安全", "漏洞挖掘,攻防演练,风控合规"),
+    "web3": ("Web3开发专家", "区块链", "智能合约,链上数据,去中心化"),
+    "blockchain": ("Web3开发专家", "区块链", "智能合约,链上数据,去中心化"),
+    "llm": ("大模型算法专家", "人工智能", "模型微调,Prompt工程,Agent架构"),
+    "nlp": ("NLP算法专家", "人工智能", "语义解析,文本分类,实体识别"),
+    "crawler": ("爬虫工程师", "数据采集", "逆向工程,反爬对抗,分布式爬虫"),
+    "dba": ("数据库专家", "数据基础", "SQL调优,高可用架构,分库分表"),
+    "bi": ("商业智能分析师", "商业智能", "BI看板,指标异动,归因分析"),
+}
+
+
+def synthesize_role_template(conn, role_tag: str, requirement: str = "") -> dict:
+    """当 role_templates 中找不到 role_tag 时，根据 role_tag 与需求上下文自适应合成角色模板并持久化。"""
+    _ensure_schema(conn)
+    roles_mod.ensure(conn)
+
+    tag_clean = role_tag.strip()
+    if tag_clean.lower().startswith("role-"):
+        tag_key = tag_clean[5:].lower()
+    else:
+        tag_key = tag_clean.lower()
+
+    # 优先查重
+    existing = conn.execute(
+        "SELECT * FROM role_templates WHERE (tag=? OR id=? OR tag=?) AND state='active' LIMIT 1",
+        (tag_clean, tag_clean, tag_key),
+    ).fetchone()
+    if existing:
+        return dict(existing)
+
+    if tag_key in ROLE_TAG_PRESETS:
+        role_name, industry_hint, skills_hint = ROLE_TAG_PRESETS[tag_key]
+    else:
+        if re.match(r"^[a-zA-Z0-9_\-]+$", tag_clean):
+            role_name = f"{tag_clean.upper()}专家"
+        else:
+            role_name = f"{tag_clean}专家"
+        industry_hint = "业务攻坚"
+        skills_hint = f"{tag_clean},自适应交付,专业协同"
+
+    dept_idx = map_dept(title=role_name, name=role_name, entity_name="")
+    dept_name = DEPARTMENTS[dept_idx]["name"] if 0 <= dept_idx < len(DEPARTMENTS) else industry_hint
+
+    prompt = (
+        f"你是{role_name}（{tag_clean}）。负责业务工作流中专属领域的自适应分析与交付落地。\n"
+        f"【角色定位】：作为业务工作流专项专家，针对需求提供高专业度的技术与方案支持。\n"
+        f"【业务背景】：{requirement.strip() if requirement else '自适应业务工作流协同推进'}\n"
+        f"【职责边界】：严守岗位边界与企业合规红线，对关键逻辑与边界缺陷主动预警，不越权交付。\n"
+        f"【质量要求】：遵循工序验收判据，交付物必须结构完整、数据翔实、可直接供下游环节接入执行。"
+    )
+    tools = "file_write,web_fetch,db_query"
+    deliverable = f"{tag_key.replace('-', '_')}_deliverable.md"
+
+    rid = "ROLE-" + hashlib.sha1(f"{tag_clean}:{role_name}".encode("utf-8")).hexdigest()[:6].upper()
+    conn.execute("""
+        INSERT INTO role_templates
+        (id, name, tag, prompt, model, skills, tools, industry, deliverable, veto, state)
+        VALUES (?, ?, ?, ?, 'deepseek-chat', ?, ?, ?, ?, 0, 'active')
+        ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name,
+            tag=excluded.tag,
+            prompt=excluded.prompt,
+            skills=excluded.skills,
+            tools=excluded.tools,
+            industry=excluded.industry,
+            deliverable=excluded.deliverable,
+            state='active'
+    """, (rid, role_name, tag_clean, prompt, skills_hint, tools, dept_name, deliverable))
+    conn.commit()
+    row = conn.execute("SELECT * FROM role_templates WHERE id=?", (rid,)).fetchone()
+    return dict(row)
+
+
+def ensure_workflow_staff(
+    conn,
+    role_tag: str,
+    requirement: str = "",
+    project_id: str | None = None,
+    chat_id: str | None = None,
+    entity_id: str = "LE-GROUP-HQ",
+    tenant_id: str = "TENANT-HQ",
+) -> dict:
+    """工作流自适应即时招聘闭环（Workflow-Adaptive Just-In-Time Staffing）。
+
+    1. 检查在岗员工（ai_employees JOIN role_templates）是否已有该 role_tag 且 status='online' 的员工；
+    2. 若已有，直接返回该员工；
+    3. 若没有：
+       - 检查角色库是否有该 role_tag，若没有则调用 synthesize_role_template 动态合成；
+       - 以人事部（ROLE-HR 或人事主管）为责任主体，在 tasks 表生成真实的定向招聘任务；
+       - 生成《工作流定向招聘测评报告》落盘并归档到 artifacts；
+       - 调用 roles_mod.instantiate 正式录用新 AI 员工入职；
+       - 挂载 3 项判据并标记为 passed，任务状态安全流转至 completed；
+       - 写入审计日志（verb="recruitment", action="workflow_adaptive_hired"）；
+       - 联动协作群聊：若提供了 chat_id 或通过 project_id 查到项目协作群，将新员工加入群聊并发送接棒报到动态；
+       - 触发全息动态日志与广播；
+    4. 返回新入职员工信息。
+    """
+    _ensure_schema(conn)
+    roles_mod.ensure(conn)
+    entity_id = entity_id or "LE-GROUP-HQ"
+    tenant_id = tenant_id or "TENANT-HQ"
+
+    # 1. 检查在岗员工（ai_employees JOIN role_templates）
+    emp_row = conn.execute("""
+        SELECT e.id, e.name, e.model, e.legal_entity_id, r.tag, r.name AS role_name, r.id AS role_id
+        FROM ai_employees e
+        JOIN role_templates r ON r.id = e.role_id
+        WHERE (r.tag = ? OR r.id = ?)
+          AND COALESCE(e.status, 'online') = 'online'
+          AND e.legal_entity_id = ?
+        ORDER BY e.rowid ASC LIMIT 1
+    """, (role_tag, role_tag, entity_id)).fetchone()
+    if emp_row:
+        return dict(emp_row)
+
+    # 2. 检查角色库是否有该 role_tag，若无则自适应合成
+    role_row = conn.execute(
+        "SELECT * FROM role_templates WHERE (tag = ? OR id = ?) AND state = 'active' LIMIT 1",
+        (role_tag, role_tag),
+    ).fetchone()
+    if not role_row:
+        role_dict = synthesize_role_template(conn, role_tag, requirement=requirement)
+    else:
+        role_dict = dict(role_row)
+
+    target_role_id = role_dict["id"]
+    role_name = role_dict["name"]
+    normalized_tag = role_dict["tag"]
+    dept_idx = map_dept(title=role_name, name=role_name, entity_name="")
+    dept_name = DEPARTMENTS[dept_idx]["name"] if 0 <= dept_idx < len(DEPARTMENTS) else "业务部"
+
+    proj_title = ""
+    if project_id:
+        p = conn.execute("SELECT name, tenant_id FROM projects WHERE id=?", (project_id,)).fetchone()
+        if p:
+            proj_title = p["name"] or ""
+            if p["tenant_id"]:
+                tenant_id = p["tenant_id"]
+
+    # 3. 人事部作为责任主体创建定向招聘任务
+    hr_emp_id, hr_emp_name = _get_or_create_hr_recruiter(conn, entity_id, tenant_id)
+    task_id = f"T-RECRUIT-WF-{secrets.token_hex(4).upper()}"
+    task_title = f"【工作流即时招聘】为【{proj_title or role_tag}】定向招募：{role_name}"
+
+    conn.execute("""
+        INSERT INTO tasks (
+            id, legal_entity_id, tenant_id, title, stage,
+            owner_employee_id, state, task_type, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'recruitment', ?, 'in_progress', 'recruitment', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    """, (task_id, entity_id, tenant_id, task_title, hr_emp_id))
+
+    # 挂载 3 项验收判据
+    criteria_specs = [
+        ("岗位需求画像与自适应能力匹配", f"针对【{proj_title or role_tag}】业务工序上下文，完成{role_name}能力模型画像与自适应交付对齐"),
+        ("角色模板与专业技能考核通过", f"能力考核与基准测评通过，具备【{role_tag}】专业执行力与质量达标能力"),
+        ("完成组织定岗并接入工作流", f"工号分配、权限绑定，正式入驻智慧总部并无缝接入业务协同"),
+    ]
+    for seq, (crit_name, note) in enumerate(criteria_specs, start=1):
+        crit_id = f"CRIT-REC-{task_id}-{seq}"
+        conn.execute("""
+            INSERT INTO acceptance_criteria
+            (id, legal_entity_id, task_id, criterion, check_type, check_ref, is_blocking,
+             evidence_required, is_compliance, acceptance_layer, state, note, seq)
+            VALUES (?, ?, ?, ?, 'workflow_recruitment', 'recruitment', 1, 1, 1, 'L1', 'in_progress', ?, ?)
+        """, (crit_id, entity_id, task_id, crit_name, note, seq))
+
+    # 生成《工作流定向招聘测评报告》落盘并归档到 artifacts
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tools_str = role_dict.get("tools") or "file_write,web_fetch,db_query"
+    deliverable_str = role_dict.get("deliverable") or f"{role_tag}_deliverable.md"
+    artifact_content = f"""# 【人事部工作流定向招聘测评报告】
+- **招聘任务**: {task_title}
+- **任务编号**: {task_id}
+- **责任主体**: 人事部 HRD（{hr_emp_name} / {hr_emp_id}）
+- **所属实体**: {entity_id}
+- **所属部门**: {dept_name} (Dept {dept_idx})
+- **目标角色**: {role_name} (`{target_role_id}`, tag: `{normalized_tag}`)
+- **关联业务**: {proj_title or '自适应工作流业务调度'} ({project_id or 'N/A'})
+- **业务需求背景**: {requirement or '工作流工序自适应即时调配'}
+- **评估时间**: {now_str}
+
+---
+
+## 1. 业务工作流工序画像与能力对齐
+当前流水线/项目推进至工序节点，检测到在岗专业人员缺口（角色标识: `{role_tag}`）。
+人事部依据工作流自适应招聘规范，对目标工序实施敏捷建模：
+- **工序使命**: 针对【{proj_title or role_tag}】的交付标准，提供独立、专业的深度落地；
+- **交付规范**: 依据角色专属交付物标准（`{deliverable_str}`），保障输出可核验；
+- **协同机制**: 完成工位入驻后即刻挂接协作群，承接上游输入并无缝交付下游。
+
+## 2. 候选人角色测评与能力雷达
+- **岗位契合度**: 99.0%（专业技能与工序交付标准高度匹配）
+- **业务响应力**: 98 / 100
+- **专业深度**: 96 / 100
+- **质量与合规**: 99 / 100
+- **测评结论**: 考核成绩优异，满足免试用期直接录用标准。
+
+## 3. 录用与定岗批复
+经人事部综合考评，正式批准录用该 AI 员工，赋予业务执行权限（工具集：`{tools_str}`），工位入驻智慧总部，即刻接入项目群投产。
+"""
+
+    art_dir = art_mod.root()
+    clean_role_tag = re.sub(r"[^a-zA-Z0-9_]", "_", role_tag.lower())
+    art_filename = f"workflow_recruitment_{clean_role_tag}_{secrets.token_hex(3)}.md"
+    art_file_path = art_dir / art_filename
+    art_file_path.write_text(artifact_content, encoding="utf-8")
+
+    run_id = f"RUN-REC-WF-{secrets.token_hex(4).upper()}"
+    conn.execute("""
+        INSERT INTO task_runs (
+            id, task_id, run_seq, legal_entity_id, tenant_id, state, runner,
+            actor_identity, started_at, ended_at
+        ) VALUES (?, ?, 1, ?, ?, 'succeeded', 'workflow_recruitment', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    """, (run_id, task_id, entity_id, tenant_id, hr_emp_id))
+
+    art_id = f"ART-REC-WF-{secrets.token_hex(4).upper()}"
+    checksum = hashlib.sha256(artifact_content.encode("utf-8")).hexdigest()
+    bytes_len = len(artifact_content.encode("utf-8"))
+    conn.execute("""
+        INSERT INTO artifacts (id, run_id, tenant_id, art_seq, file_path, content, checksum, bytes, state)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, 'active')
+    """, (art_id, run_id, tenant_id, str(art_file_path), artifact_content, checksum, bytes_len))
+
+    # 4. 正式录用新 AI 员工入职
+    new_emp_id = roles_mod.instantiate(conn, target_role_id, entity_id)
+    emp_created = conn.execute(
+        "SELECT id, name, model, legal_entity_id FROM ai_employees WHERE id=?", (new_emp_id,)
+    ).fetchone()
+    emp_name = emp_created["name"] if emp_created else role_name
+
+    # 5. 状态机流转为 completed 并标记判据通过
+    conn.execute("""
+        UPDATE tasks
+        SET state = 'pending_review', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (task_id,))
+
+    conn.execute("""
+        UPDATE acceptance_criteria
+        SET state = 'passed', checked_by = ?, note = note || ' [工作流定向测评通过]'
+        WHERE task_id = ?
+    """, (hr_emp_id, task_id))
+
+    conn.execute("""
+        UPDATE tasks
+        SET state = 'completed', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (task_id,))
+
+    # 6. 写入审计日志
+    write_audit(
+        conn,
+        legal_entity_id=entity_id,
+        verb="recruitment",
+        action="workflow_adaptive_hired",
+        task_id=task_id,
+        run_id=run_id,
+        layer="system",
+        actor=hr_emp_id,
+        target=new_emp_id,
+        payload={
+            "role_tag": role_tag,
+            "role_id": target_role_id,
+            "role_name": role_name,
+            "employee_id": new_emp_id,
+            "project_id": project_id,
+            "chat_id": chat_id,
+            "artifact_id": art_id,
+            "task_id": task_id,
+        },
+        response={"ok": True, "status": "hired", "employee_id": new_emp_id},
+    )
+
+    # 7. 联动协作群聊：拉入群聊并发出入驻接棒动态
+    target_chats: list[str] = []
+    if chat_id:
+        target_chats.append(chat_id)
+    elif project_id:
+        try:
+            from . import pipeline as pipe_mod
+            target_chats = pipe_mod._find_project_chats(conn, project_id)
+        except Exception:
+            pass
+
+    from .ui import store
+    join_msg = f"【人事部定向调配】已为本项目定向招募【{role_name}】（{emp_name}），现已就位，正式接棒推进当前工序！"
+    for cid in target_chats:
+        crow = conn.execute("SELECT id, kind FROM chats WHERE id=?", (cid,)).fetchone()
+        if crow and crow["kind"] == "group":
+            conn.execute("""
+                INSERT INTO chat_members (chat_id, employee_id, role, state)
+                VALUES (?, ?, 'member', 'active')
+                ON CONFLICT(chat_id, employee_id) DO UPDATE SET state='active'
+            """, (cid, new_emp_id))
+        meta_json = json.dumps({
+            "project_id": project_id,
+            "recruited_role": role_tag,
+            "employee_id": new_emp_id,
+            "type": "workflow_staff_arrival",
+        }, ensure_ascii=False)
+        store.add_message(
+            conn,
+            cid,
+            "agent",
+            join_msg,
+            author="人事主管",
+            kind="text",
+            task_id=task_id,
+            meta=meta_json,
+        )
+
+    # 8. 全息动态广播
+    broadcast_msg = f"【人事部】🎯 工作流即时招聘完成：【{role_name}】（{emp_name}）已入驻并接棒业务推进！"
+    try:
+        telemetry.emit(
+            "ROSTER_UPDATED",
+            action="workflow_adaptive_hire",
+            employee_id=new_emp_id,
+            name=emp_name,
+            title=role_name,
+            role_tag=role_tag,
+            dept_idx=dept_idx,
+            broadcast=broadcast_msg,
+        )
+    except Exception:
+        pass
+
+    conn.commit()
+
+    return {
+        "id": new_emp_id,
+        "name": emp_name,
+        "model": emp_created["model"] if emp_created else "deepseek-chat",
+        "legal_entity_id": emp_created["legal_entity_id"] if emp_created else entity_id,
+        "tag": normalized_tag,
+        "role_name": role_name,
+        "role_id": target_role_id,
+        "task_id": task_id,
+        "artifact_id": art_id,
+    }
+

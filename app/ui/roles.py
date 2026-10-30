@@ -243,17 +243,17 @@ def pick(conn, tags: list[str], entity_id: str | None = None) -> list[dict]:
     rows = conn.execute(
         f"""SELECT e.id, e.name, e.model, e.legal_entity_id, r.tag, r.name AS role_name
             FROM ai_employees e JOIN role_templates r ON r.id = e.role_id
-            WHERE r.tag IN ({marks}) AND COALESCE(e.status,'online')='online'
+            WHERE (r.tag IN ({marks}) OR r.id IN ({marks})) AND COALESCE(e.status,'online')='online'
               {'AND e.legal_entity_id = ?' if entity_id else ''}
             ORDER BY CASE r.tag WHEN 'dev' THEN 0 ELSE 1 END, e.name""",
-        (*tags, entity_id) if entity_id else tuple(tags)).fetchall()
+        (*tags, *tags, entity_id) if entity_id else (*tags, *tags)).fetchall()
     out = [dict(r) for r in rows]
     if out:
         return _ensure_each_tag(conn, out, tags, entity_id)
     for tag in tags:
         role = conn.execute(
-            "SELECT id FROM role_templates WHERE tag=? AND state='active' LIMIT 1",
-            (tag,)).fetchone()
+            "SELECT id FROM role_templates WHERE (tag=? OR id=?) AND state='active' LIMIT 1",
+            (tag, tag)).fetchone()
         if role:
             emp_id = instantiate(conn, role["id"], entity_id or "LE-GROUP-HQ")
             row = conn.execute(
@@ -267,13 +267,13 @@ def pick(conn, tags: list[str], entity_id: str | None = None) -> list[dict]:
 def _ensure_each_tag(conn, people: list[dict], tags: list[str],
                      entity_id: str | None) -> list[dict]:
     """多标签需求（开发+文案）必须每个标签都有人。"""
-    have = {p["tag"] for p in people}
+    have = {p["tag"] for p in people} | {p.get("role_name") for p in people}
     for tag in tags:
         if tag in have:
             continue
         role = conn.execute(
-            "SELECT id FROM role_templates WHERE tag=? AND state='active' LIMIT 1",
-            (tag,)).fetchone()
+            "SELECT id FROM role_templates WHERE (tag=? OR id=?) AND state='active' LIMIT 1",
+            (tag, tag)).fetchone()
         if not role:
             continue
         emp_id = instantiate(conn, role["id"], entity_id or "LE-GROUP-HQ")
