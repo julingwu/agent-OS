@@ -218,11 +218,27 @@ def _run_degraded(
             time.sleep(ms / 1000.0)
             actions_executed.append({"action": "wait", "ms": ms, "status": "ok", "detail": "降级模式延时"})
 
-        elif act_type in ("click", "type", "scroll"):
+        elif act_type in ("click", "type"):
+            selector = act.get("selector")
+            if not selector or not isinstance(selector, str):
+                actions_executed.append({
+                    "action": act_type,
+                    "status": "failed",
+                    "error": "缺少必要参数 selector",
+                })
+            else:
+                actions_executed.append({
+                    "action": act_type,
+                    "selector": selector,
+                    "status": "skipped",
+                    "detail": f"静态降级模式：无可用无头浏览器，跳过动态交互动作 ({act_type})",
+                })
+
+        elif act_type == "scroll":
             actions_executed.append({
-                "action": act_type,
+                "action": "scroll",
                 "status": "skipped",
-                "detail": f"静态降级模式：无可用无头浏览器，跳过动态交互动作 ({act_type})",
+                "detail": "静态降级模式：无可用无头浏览器，跳过滚动操作",
             })
 
         elif act_type == "screenshot":
