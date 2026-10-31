@@ -417,9 +417,130 @@ function uiaIncludesIOS(ua) {
   return /iPhone|iPad|iPod/.test(ua);
 }
 
-function getModelReasoningLevels(modelName) {
-  const name = (modelName || "").trim().toLowerCase();
-  if (!name) return [];
+function getProfileFromLevels(levels) {
+  if (!Array.isArray(levels) || levels.length === 0) return "deepseek";
+  if (levels.includes("low") && levels.includes("medium") && !levels.includes("standard") && !levels.includes("none")) {
+    return "openai";
+  }
+  if (levels.includes("budget") || (levels.includes("low") && levels.includes("none") && levels.includes("max"))) {
+    return "claude";
+  }
+  return "deepseek";
+}
+
+const REASONING_PROFILES = {
+  deepseek: ["none", "standard", "max"],
+  openai: ["low", "medium", "high"],
+  claude: ["none", "low", "medium", "high", "max"],
+};
+
+function inferModelMetadata(modelInput) {
+  const rawId = typeof modelInput === "string" ? modelInput : (modelInput?.id || modelInput?.name || "");
+  const trimmedId = (rawId || "").trim();
+  const name = trimmedId.toLowerCase();
+
+  // 上下文大小推断
+  let context_window = "128K";
+  if (name.includes("1m")) context_window = "1000K";
+  else if (name.includes("256k") || name.includes("deepseek") || name.includes("scnet")) context_window = "256K";
+  else if (name.includes("128k")) context_window = "128K";
+  else if (name.includes("32k")) context_window = "32K";
+  else if (name.includes("claude-3")) context_window = "200K";
+
+  // 最大输出推断
+  let max_tokens = "8K";
+  if (name.includes("64k")) max_tokens = "64K";
+  else if (name.includes("scnet") || name.includes("deepseek") || name.includes("r1") || name.includes("o1")) max_tokens = "32K";
+
+  // 推理思考能力
+  const is_o_series = /\b(o1|o3|o4)\b/.test(name) || name.startsWith("o1-") || name.startsWith("o3-") || name.startsWith("o4-");
+  const is_claude_thinking = name.includes("claude-3-7") || name.includes("claude-3.7") || (name.includes("claude") && name.includes("thinking"));
+  const is_common_reasoner = ["scnet", "reasoner", "r1", "thinking", "qwq", "deepseek", "qwen-max"].some((k) => name.includes(k));
+
+  let supports_reasoning = false;
+  let reasoning_profile = "deepseek";
+  let reasoning_levels = ["none", "standard", "max"];
+
+  if (is_o_series) {
+    supports_reasoning = true;
+    reasoning_profile = "openai";
+    reasoning_levels = ["low", "medium", "high"];
+  } else if (is_claude_thinking) {
+    supports_reasoning = true;
+    reasoning_profile = "claude";
+    reasoning_levels = ["none", "low", "medium", "high", "max"];
+  } else if (is_common_reasoner) {
+    supports_reasoning = true;
+    reasoning_profile = "deepseek";
+    reasoning_levels = ["none", "standard", "max"];
+  }
+
+  // 若传入的是已有富对象，继承并规整自定义字段
+  if (modelInput && typeof modelInput === "object") {
+    return {
+      id: trimmedId,
+      name: (modelInput.name || modelInput.label || trimmedId).trim() || trimmedId,
+      context_window: modelInput.context_window ? String(modelInput.context_window).trim() : context_window,
+      max_tokens: modelInput.max_tokens ? String(modelInput.max_tokens).trim() : max_tokens,
+      supports_reasoning: modelInput.supports_reasoning !== undefined ? !!modelInput.supports_reasoning : supports_reasoning,
+      reasoning_profile: modelInput.reasoning_profile || getProfileFromLevels(modelInput.reasoning_levels || reasoning_levels),
+      reasoning_levels: Array.isArray(modelInput.reasoning_levels) && modelInput.reasoning_levels.length > 0
+        ? modelInput.reasoning_levels
+        : (supports_reasoning ? reasoning_levels : []),
+    };
+  }
+
+  return {
+    id: trimmedId,
+    name: trimmedId,
+    context_window,
+    max_tokens,
+    supports_reasoning,
+    reasoning_profile,
+    reasoning_levels: supports_reasoning ? reasoning_levels : [],
+  };
+}
+
+function normalizeModelList(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map(inferModelMetadata).filter((m) => m && m.id);
+}
+
+function getModelReasoningLevels(modelName, allModels) {
+  const targetId = (modelName || "").trim();
+  if (!targetId) return [];
+
+  // 1. 优先在已加载的全局模型列表（从 /v1/models 获取）中查找该模型富元数据
+  let items = [];
+  if (Array.isArray(allModels)) {
+    items = allModels;
+  } else if (allModels && Array.isArray(allModels.items)) {
+    items = allModels.items;
+  }
+
+  const found = items.find((m) => {
+    if (!m) return false;
+    if (typeof m === "string") return m.toLowerCase() === targetId.toLowerCase();
+    const id = String(m.id || "").trim().toLowerCase();
+    const name = String(m.name || "").trim().toLowerCase();
+    const t = targetId.toLowerCase();
+    return id === t || name === t;
+  });
+
+  if (found && typeof found === "object") {
+    if (found.supports_reasoning === true) {
+      if (Array.isArray(found.reasoning_levels) && found.reasoning_levels.length > 0) {
+        return found.reasoning_levels;
+      }
+      return ["none", "standard", "max"];
+    }
+    if (found.supports_reasoning === false) {
+      return [];
+    }
+  }
+
+  // 2. 若未查到元数据，通过模型名称关键词匹配（包含 scnet, deepseek, reasoner, r1, o1, o3, thinking, qwq 等）
+  const name = targetId.toLowerCase();
   if (
     /\b(o1|o3|o4)\b/.test(name) ||
     name.startsWith("o1-") ||
@@ -431,10 +552,6 @@ function getModelReasoningLevels(modelName) {
   ) {
     return ["low", "medium", "high"];
   }
-  // 包含 deepseek / r1 / reasoner 的所有模型均支持推理思考档位
-  if (name.includes("deepseek") || name.includes("r1") || name.includes("reasoner")) {
-    return ["none", "standard", "max"];
-  }
   if (
     name.includes("claude-3-7") ||
     name.includes("claude-3.7") ||
@@ -442,9 +559,18 @@ function getModelReasoningLevels(modelName) {
   ) {
     return ["none", "low", "medium", "high", "max"];
   }
-  if (name.includes("qwq") || name.includes("qwen-max") || name.includes("thinking")) {
+  if (
+    name.includes("scnet") ||
+    name.includes("deepseek") ||
+    name.includes("reasoner") ||
+    name.includes("r1") ||
+    name.includes("thinking") ||
+    name.includes("qwq") ||
+    name.includes("qwen-max")
+  ) {
     return ["none", "standard", "max"];
   }
+
   return [];
 }
 
@@ -595,7 +721,7 @@ function MainApp({ onLogout }) {
 
   const globalModel = settings?.model || models?.default || "deepseek-flash";
   const effectiveModel = (activeBot?.model || "").trim() || globalModel;
-  const reasoningLevels = useMemo(() => getModelReasoningLevels(effectiveModel), [effectiveModel]);
+  const reasoningLevels = useMemo(() => getModelReasoningLevels(effectiveModel, models), [effectiveModel, models]);
   const isRunning = status === "thinking" || status === "running" || !!activeSession?.running;
 
   const modelOptions = useMemo(() => {
@@ -1042,7 +1168,7 @@ function MainApp({ onLogout }) {
     try {
       const payload = { text, client_msg_id: crypto.randomUUID() };
       const effModel = (activeBot?.model || "").trim() || settings?.model || models?.default || "deepseek-chat";
-      const effLevels = getModelReasoningLevels(effModel);
+      const effLevels = getModelReasoningLevels(effModel, models);
       if (effLevels.length > 0 && reasoningEffort) {
         payload.reasoning_effort = reasoningEffort;
       }
@@ -2723,6 +2849,280 @@ const PROVIDER_PRESETS = [
   },
 ];
 
+/* ==================== DSH 风格模型目录编辑组件 (图二复刻) ==================== */
+function DshModelCatalogEditor({
+  models = [],
+  defaultModel = "",
+  onChangeModels,
+  onChangeDefaultModel,
+  onRestoreDefaults,
+  onFetchModels,
+  fetchingModels = false,
+  fetchStatus = null,
+}) {
+  const updateModel = (idx, patch) => {
+    const next = [...models];
+    next[idx] = { ...next[idx], ...patch };
+    onChangeModels(next);
+  };
+
+  const handleIdChange = (idx, newId) => {
+    const m = models[idx];
+    const oldId = m?.id || "";
+    const isNameSynced = !m?.name || m?.name === oldId;
+    const newName = isNameSynced ? newId : m.name;
+
+    let extra = {};
+    if ((!m?.context_window || !m?.max_tokens) && newId.trim()) {
+      const inf = inferModelMetadata(newId);
+      extra = {
+        context_window: m?.context_window || inf.context_window,
+        max_tokens: m?.max_tokens || inf.max_tokens,
+        supports_reasoning: m?.supports_reasoning !== undefined ? m.supports_reasoning : inf.supports_reasoning,
+        reasoning_profile: inf.reasoning_profile,
+        reasoning_levels: inf.reasoning_levels,
+      };
+    }
+
+    updateModel(idx, {
+      id: newId,
+      name: newName,
+      ...extra,
+    });
+
+    if (!defaultModel || defaultModel === oldId) {
+      onChangeDefaultModel(newId);
+    }
+  };
+
+  const handleInferModel = (idx) => {
+    const m = models[idx];
+    if (!m?.id || !m.id.trim()) return;
+    const inf = inferModelMetadata(m.id);
+    updateModel(idx, {
+      name: m.name || inf.name,
+      context_window: inf.context_window,
+      max_tokens: inf.max_tokens,
+      supports_reasoning: inf.supports_reasoning,
+      reasoning_profile: inf.reasoning_profile,
+      reasoning_levels: inf.reasoning_levels,
+    });
+  };
+
+  const removeModel = (idx) => {
+    const targetId = models[idx]?.id;
+    const next = models.filter((_, i) => i !== idx);
+    onChangeModels(next);
+    if (defaultModel === targetId) {
+      onChangeDefaultModel(next[0]?.id || "");
+    }
+  };
+
+  const handleToggleReasoning = (idx, checked) => {
+    if (checked) {
+      const curProfile = models[idx]?.reasoning_profile || "deepseek";
+      const levels = REASONING_PROFILES[curProfile] || REASONING_PROFILES.deepseek;
+      updateModel(idx, {
+        supports_reasoning: true,
+        reasoning_profile: curProfile,
+        reasoning_levels: levels,
+      });
+    } else {
+      updateModel(idx, {
+        supports_reasoning: false,
+        reasoning_levels: [],
+      });
+    }
+  };
+
+  const handleProfileChange = (idx, profile) => {
+    const levels = REASONING_PROFILES[profile] || REASONING_PROFILES.deepseek;
+    updateModel(idx, {
+      reasoning_profile: profile,
+      reasoning_levels: levels,
+    });
+  };
+
+  const handleAddEmptyCard = () => {
+    const newCard = {
+      id: "",
+      name: "",
+      context_window: "128K",
+      max_tokens: "8K",
+      supports_reasoning: false,
+      reasoning_profile: "deepseek",
+      reasoning_levels: [],
+    };
+    onChangeModels([...models, newCard]);
+  };
+
+  return (
+    <div className="dsh-model-catalog">
+      {/* 顶部保留操作栏 */}
+      <div className="dsh-catalog-top-bar">
+        <div className="dsh-catalog-title-group">
+          <div className="dsh-catalog-title-row">
+            <span className="dsh-catalog-title">模型目录</span>
+            <span className="dsh-catalog-count-badge">已配置 {models.length} 个模型</span>
+          </div>
+          <span className="dsh-catalog-subtitle">已自定义模型目录</span>
+        </div>
+        <div className="dsh-catalog-actions">
+          <button
+            type="button"
+            className="dsh-restore-btn"
+            onClick={onRestoreDefaults}
+            title="恢复当前提供商内置默认模型配置"
+          >
+            恢复默认模型
+          </button>
+          <button
+            type="button"
+            className="dsh-fetch-btn"
+            disabled={fetchingModels}
+            onClick={onFetchModels}
+            title="向远端接口探测并拉取可用模型"
+          >
+            {fetchingModels && <span className="dsh-spinner" />}
+            <span>{fetchingModels ? "正在探测远端模型…" : "⚡ 获取可用模型"}</span>
+          </button>
+        </div>
+      </div>
+
+      {fetchStatus && (
+        <div className={`dsh-fetch-status ${fetchStatus.ok ? "ok" : "err"}`}>
+          {fetchStatus.msg}
+        </div>
+      )}
+
+      {/* 模型编辑卡片列表 */}
+      <div className="dsh-model-cards-list">
+        {models.length === 0 ? (
+          <div className="dsh-catalog-empty">暂无模型，请点击上方“获取可用模型”或下方“＋ 添加模型”</div>
+        ) : (
+          models.map((m, idx) => {
+            const isDefault = !!(m.id && m.id === defaultModel);
+            const curProfile = m.reasoning_profile || getProfileFromLevels(m.reasoning_levels);
+            return (
+              <div key={idx} className={`dsh-model-card ${isDefault ? "is-default" : ""}`}>
+                {/* 第一行：模型调用 ID、显示名称、设为默认、智能推断与删除 */}
+                <div className="dsh-card-row-top">
+                  <input
+                    type="text"
+                    className="dsh-card-input model-id"
+                    value={m.id || ""}
+                    placeholder="模型 ID (如 deepseek-chat)"
+                    onChange={(e) => handleIdChange(idx, e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    className="dsh-card-input model-name"
+                    value={m.name || ""}
+                    placeholder="显示名称"
+                    onChange={(e) => updateModel(idx, { name: e.target.value })}
+                  />
+                  {isDefault ? (
+                    <button
+                      type="button"
+                      className="dsh-card-def-badge active"
+                      disabled
+                      title="当前提供商默认模型"
+                    >
+                      ✓ 默认
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="dsh-card-def-badge"
+                      onClick={() => onChangeDefaultModel(m.id)}
+                      title="设为此提供商默认模型"
+                    >
+                      设为默认
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="dsh-card-icon-btn infer-btn"
+                    onClick={() => handleInferModel(idx)}
+                    title="根据模型 ID 一键自动推断上下文与推理选项"
+                  >
+                    🪄
+                  </button>
+                  <button
+                    type="button"
+                    className="dsh-card-icon-btn delete-btn"
+                    onClick={() => removeModel(idx)}
+                    title="从列表中移除此模型"
+                  >
+                    🗑️
+                  </button>
+                </div>
+
+                {/* 第二行：上下文窗口 与 最大输出 token 数 */}
+                <div className="dsh-card-row-mid">
+                  <div className="dsh-card-field">
+                    <label className="dsh-card-label">上下文窗口</label>
+                    <input
+                      type="text"
+                      className="dsh-card-input"
+                      value={m.context_window || ""}
+                      placeholder="如 128K, 256K"
+                      onChange={(e) => updateModel(idx, { context_window: e.target.value })}
+                    />
+                  </div>
+                  <div className="dsh-card-field">
+                    <label className="dsh-card-label">最大输出 token 数</label>
+                    <input
+                      type="text"
+                      className="dsh-card-input"
+                      value={m.max_tokens || ""}
+                      placeholder="如 8K, 32K"
+                      onChange={(e) => updateModel(idx, { max_tokens: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                {/* 第三行：推理/思考能力 勾选框与档位选择器 */}
+                <div className="dsh-card-row-bottom">
+                  <label className="dsh-card-check-label">
+                    <input
+                      type="checkbox"
+                      checked={!!m.supports_reasoning}
+                      onChange={(e) => handleToggleReasoning(idx, e.target.checked)}
+                    />
+                    <span>支持深度思考 / 推理模型</span>
+                  </label>
+                  {m.supports_reasoning && (
+                    <select
+                      className="dsh-card-select reasoning-select"
+                      value={curProfile}
+                      onChange={(e) => handleProfileChange(idx, e.target.value)}
+                    >
+                      <option value="deepseek">DeepSeek / 通用推理 (none, standard, max)</option>
+                      <option value="openai">OpenAI 思考档位 (low, medium, high)</option>
+                      <option value="claude">Claude 扩展思考 (budget)</option>
+                    </select>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* 模型列表底部：＋ 添加模型 */}
+      <button
+        type="button"
+        className="dsh-add-model-card-btn"
+        onClick={handleAddEmptyCard}
+        title="添加一个新模型并自定义元数据"
+      >
+        ＋ 添加模型
+      </button>
+    </div>
+  );
+}
+
 /* ==================== DSH 风格模型提供商与 API 配置 ==================== */
 function DshModelsPane({ onReloadAll, models }) {
   const [providers, setProviders] = useState([]);
@@ -2741,13 +3141,10 @@ function DshModelsPane({ onReloadAll, models }) {
   const [presetKeyMasked, setPresetKeyMasked] = useState("");
   const [showPresetKey, setShowPresetKey] = useState(false);
   const [presetCustomOpen, setPresetCustomOpen] = useState(true);
-  const [presetModels, setPresetModels] = useState([
-    "deepseek-chat",
-    "deepseek-reasoner",
-    "deepseek-flash",
-  ]);
+  const [presetModels, setPresetModels] = useState(() =>
+    PROVIDER_PRESETS[0].models.map(inferModelMetadata)
+  );
   const [presetDefaultModel, setPresetDefaultModel] = useState("deepseek-chat");
-  const [newPresetModelInput, setNewPresetModelInput] = useState("");
 
   // Tab 2: 自定义模型 API 状态
   const [customProviderId, setCustomProviderId] = useState("");
@@ -2760,7 +3157,6 @@ function DshModelsPane({ onReloadAll, models }) {
   const [showCustomKey, setShowCustomKey] = useState(false);
   const [customModels, setCustomModels] = useState([]);
   const [customDefaultModel, setCustomDefaultModel] = useState("");
-  const [newCustomModelInput, setNewCustomModelInput] = useState("");
 
   // 通用状态
   const [makeDefault, setMakeDefault] = useState(false);
@@ -2837,8 +3233,9 @@ function DshModelsPane({ onReloadAll, models }) {
       setCustomApiKey("");
       setCustomHasKey(!!p.has_key);
       setCustomKeyMasked(p.api_key_masked || p.api_key || "");
-      setCustomModels(Array.isArray(p.models) ? [...p.models] : []);
-      setCustomDefaultModel(p.model || (p.models && p.models[0]) || "");
+      const pModels = normalizeModelList(p.models);
+      setCustomModels(pModels);
+      setCustomDefaultModel(p.model || (pModels[0] && pModels[0].id) || "");
     } else {
       setFormTab("preset");
       const pid = p.preset_id || p.kind || "deepseek";
@@ -2848,8 +3245,12 @@ function DshModelsPane({ onReloadAll, models }) {
       setPresetApiKey("");
       setPresetHasKey(!!p.has_key);
       setPresetKeyMasked(p.api_key_masked || p.api_key || "");
-      setPresetModels(Array.isArray(p.models) ? [...p.models] : []);
-      setPresetDefaultModel(p.model || (p.models && p.models[0]) || "");
+      const presetDef = PROVIDER_PRESETS.find((x) => x.id === pid) || PROVIDER_PRESETS[0];
+      const pModels = (p.models && p.models.length > 0)
+        ? normalizeModelList(p.models)
+        : presetDef.models.map(inferModelMetadata);
+      setPresetModels(pModels);
+      setPresetDefaultModel(p.model || (pModels[0] && pModels[0].id) || presetDef.defaultModel || "");
       setPresetCustomOpen(true);
     }
     setMakeDefault(p.id === activeProviderId || !!p.is_active);
@@ -2870,9 +3271,8 @@ function DshModelsPane({ onReloadAll, models }) {
       setPresetApiKey("");
       setPresetHasKey(false);
       setPresetKeyMasked("");
-      setPresetModels([...def.models]);
+      setPresetModels(def.models.map(inferModelMetadata));
       setPresetDefaultModel(def.defaultModel);
-      setNewPresetModelInput("");
     } else {
       setCustomProviderId("");
       setCustomName("");
@@ -2883,7 +3283,6 @@ function DshModelsPane({ onReloadAll, models }) {
       setCustomKeyMasked("");
       setCustomModels([]);
       setCustomDefaultModel("");
-      setNewCustomModelInput("");
     }
   };
 
@@ -2893,14 +3292,33 @@ function DshModelsPane({ onReloadAll, models }) {
     setPresetId(pid);
     setPresetName(preset.label);
     setPresetBaseUrl(preset.baseUrl);
-    setPresetModels([...preset.models]);
-    setPresetDefaultModel(preset.defaultModel || preset.models[0] || "");
+    const defModels = preset.models.map(inferModelMetadata);
+    setPresetModels(defModels);
+    setPresetDefaultModel(preset.defaultModel || (defModels[0] && defModels[0].id) || "");
     setFetchStatus(null);
     if (!editingId) {
       setPresetApiKey("");
       setPresetHasKey(false);
       setPresetKeyMasked("");
     }
+  };
+
+  const handleRestorePresetDefaults = () => {
+    const preset = PROVIDER_PRESETS.find((x) => x.id === presetId) || PROVIDER_PRESETS[0];
+    const defModels = preset.models.map(inferModelMetadata);
+    setPresetModels(defModels);
+    setPresetDefaultModel(preset.defaultModel || (defModels[0] && defModels[0].id) || "");
+    showNotice("success", `✓ 已恢复 ${preset.label} 默认模型配置`);
+  };
+
+  const handleRestoreCustomDefaults = () => {
+    const defModels = [
+      inferModelMetadata("gpt-4o"),
+      inferModelMetadata("deepseek-chat"),
+    ];
+    setCustomModels(defModels);
+    setCustomDefaultModel("gpt-4o");
+    showNotice("success", "✓ 已恢复自定义基准默认模型");
   };
 
   const fetchRemoteModels = async (baseUrl, apiKey, providerKind) => {
@@ -2919,8 +3337,13 @@ function DshModelsPane({ onReloadAll, models }) {
           provider: providerKind || "openai",
         },
       });
-      if (res && res.ok && Array.isArray(res.models)) {
-        if (res.models.length === 0) {
+      if (res && res.ok && (Array.isArray(res.items) || Array.isArray(res.models))) {
+        const fetchedRaw = (Array.isArray(res.items) && res.items.length > 0)
+          ? res.items
+          : (res.models || []);
+        const fetched = normalizeModelList(fetchedRaw);
+
+        if (fetched.length === 0) {
           setFetchStatus({
             ok: true,
             msg: "远端未返回可用模型列表，请手动输入添加",
@@ -2928,17 +3351,29 @@ function DshModelsPane({ onReloadAll, models }) {
         } else {
           setFetchStatus({
             ok: true,
-            msg: `✓ 成功获取并合并 ${res.models.length} 个远端模型 (${res.latency_ms || 0}ms)`,
+            msg: `✓ 成功获取并合并 ${fetched.length} 个远端模型 (${res.latency_ms || 0}ms)`,
           });
+          const merger = (prev) => {
+            const existingIds = new Set(prev.map((m) => m.id));
+            const next = [...prev];
+            for (const item of fetched) {
+              if (!existingIds.has(item.id)) {
+                next.push(item);
+                existingIds.add(item.id);
+              }
+            }
+            return next;
+          };
+
           if (formTab === "preset") {
-            setPresetModels((prev) => Array.from(new Set([...prev, ...res.models])));
-            if (!presetDefaultModel && res.models.length > 0) {
-              setPresetDefaultModel(res.models[0]);
+            setPresetModels(merger);
+            if (!presetDefaultModel && fetched.length > 0) {
+              setPresetDefaultModel(fetched[0].id);
             }
           } else {
-            setCustomModels((prev) => Array.from(new Set([...prev, ...res.models])));
-            if (!customDefaultModel && res.models.length > 0) {
-              setCustomDefaultModel(res.models[0]);
+            setCustomModels(merger);
+            if (!customDefaultModel && fetched.length > 0) {
+              setCustomDefaultModel(fetched[0].id);
             }
           }
         }
@@ -2958,49 +3393,34 @@ function DshModelsPane({ onReloadAll, models }) {
     }
   };
 
-  const addPresetModel = () => {
-    const val = newPresetModelInput.trim();
-    if (!val) return;
-    if (!presetModels.includes(val)) {
-      setPresetModels((prev) => [...prev, val]);
-      if (!presetDefaultModel) setPresetDefaultModel(val);
-    }
-    setNewPresetModelInput("");
-  };
-
-  const removePresetModel = (modelName) => {
-    setPresetModels((prev) => {
-      const nextList = prev.filter((m) => m !== modelName);
-      if (presetDefaultModel === modelName) {
-        setPresetDefaultModel(nextList[0] || "");
-      }
-      return nextList;
-    });
-  };
-
-  const addCustomModel = () => {
-    const val = newCustomModelInput.trim();
-    if (!val) return;
-    if (!customModels.includes(val)) {
-      setCustomModels((prev) => [...prev, val]);
-      if (!customDefaultModel) setCustomDefaultModel(val);
-    }
-    setNewCustomModelInput("");
-  };
-
-  const removeCustomModel = (modelName) => {
-    setCustomModels((prev) => {
-      const nextList = prev.filter((m) => m !== modelName);
-      if (customDefaultModel === modelName) {
-        setCustomDefaultModel(nextList[0] || "");
-      }
-      return nextList;
-    });
-  };
-
   const handleSave = async () => {
     setSaving(true);
     try {
+      const cleanModels = (list) => {
+        return (list || [])
+          .filter((m) => m && (m.id || "").trim())
+          .map((m) => {
+            const id = m.id.trim();
+            const name = (m.name || id).trim();
+            const cw = (m.context_window || "128K").trim();
+            const mt = (m.max_tokens || "8K").trim();
+            const sr = !!m.supports_reasoning;
+            const rl = sr
+              ? (m.reasoning_levels && m.reasoning_levels.length > 0
+                  ? m.reasoning_levels
+                  : (REASONING_PROFILES[m.reasoning_profile || "deepseek"] || ["none", "standard", "max"]))
+              : [];
+            return {
+              id,
+              name,
+              context_window: cw,
+              max_tokens: mt,
+              supports_reasoning: sr,
+              reasoning_levels: rl,
+            };
+          });
+      };
+
       let payload = {};
       if (formTab === "preset") {
         const preset = PROVIDER_PRESETS.find((x) => x.id === presetId) || PROVIDER_PRESETS[0];
@@ -3010,7 +3430,12 @@ function DshModelsPane({ onReloadAll, models }) {
           setSaving(false);
           return;
         }
-        const mList = presetModels.length > 0 ? presetModels : [...preset.models];
+        const mList = cleanModels(presetModels);
+        if (mList.length === 0) {
+          showNotice("error", "模型目录不能为空，请至少添加一个模型");
+          setSaving(false);
+          return;
+        }
         payload = {
           id: editingId || `prv_${presetId}_${Date.now().toString(36)}`,
           name: (presetName || preset.label).trim(),
@@ -3018,7 +3443,7 @@ function DshModelsPane({ onReloadAll, models }) {
           preset_id: presetId,
           base_url: bUrl,
           models: mList,
-          model: presetDefaultModel || mList[0] || "deepseek-chat",
+          model: presetDefaultModel || mList[0].id || "deepseek-chat",
           is_active: makeDefault || undefined,
         };
         if (presetApiKey && presetApiKey.trim()) {
@@ -3037,14 +3462,20 @@ function DshModelsPane({ onReloadAll, models }) {
           setSaving(false);
           return;
         }
+        const mList = cleanModels(customModels);
+        if (mList.length === 0) {
+          showNotice("error", "模型目录不能为空，请至少添加一个模型");
+          setSaving(false);
+          return;
+        }
         payload = {
           id: editingId || cId,
           name: (customName || cId).trim(),
           kind: "custom",
           preset_id: "custom",
           base_url: bUrl,
-          models: customModels,
-          model: customDefaultModel || customModels[0] || "",
+          models: mList,
+          model: customDefaultModel || mList[0].id || "",
           is_active: makeDefault || undefined,
         };
         if (customApiKey && customApiKey.trim()) {
@@ -3266,78 +3697,16 @@ function DshModelsPane({ onReloadAll, models }) {
                       <span className="dsh-subtext">自动智能兼容 /v1 与 /chat/completions 后缀；支持中转代理</span>
                     </div>
 
-                    <div className="dsh-model-catalog">
-                      <div className="dsh-catalog-header">
-                        <span className="dsh-catalog-title">模型目录 ({presetModels.length})</span>
-                        <button
-                          type="button"
-                          className="dsh-fetch-btn"
-                          disabled={fetchingModels}
-                          onClick={() => fetchRemoteModels(presetBaseUrl, presetApiKey, presetId)}
-                        >
-                          {fetchingModels && <span className="dsh-spinner" />}
-                          <span>{fetchingModels ? "正在探测远端模型…" : "⚡ 获取可用模型"}</span>
-                        </button>
-                      </div>
-
-                      {fetchStatus && (
-                        <div className={`dsh-fetch-status ${fetchStatus.ok ? "ok" : "err"}`}>
-                          {fetchStatus.msg}
-                        </div>
-                      )}
-
-                      <div className="dsh-pills-wrap">
-                        {presetModels.length === 0 ? (
-                          <span className="dsh-pills-empty">暂无模型，请点击获取或手动添加</span>
-                        ) : (
-                          presetModels.map((m) => (
-                            <span
-                              key={m}
-                              className={`dsh-model-pill ${m === presetDefaultModel ? "default" : ""}`}
-                              onClick={() => setPresetDefaultModel(m)}
-                              title="点击设为默认模型"
-                            >
-                              <span className="dsh-pill-text">{m}</span>
-                              {m === presetDefaultModel && <span className="dsh-pill-def-tag">默认</span>}
-                              <button
-                                type="button"
-                                className="dsh-pill-remove"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  removePresetModel(m);
-                                }}
-                                title="删除此模型"
-                              >
-                                ×
-                              </button>
-                            </span>
-                          ))
-                        )}
-                      </div>
-
-                      <div className="dsh-add-model-row">
-                        <input
-                          type="text"
-                          className="dsh-input-sm"
-                          value={newPresetModelInput}
-                          placeholder="输入模型 ID (如 deepseek-chat 或 gpt-4o)"
-                          onChange={(e) => setNewPresetModelInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              addPresetModel();
-                            }
-                          }}
-                        />
-                        <button
-                          type="button"
-                          className="dsh-btn-sm add-model-btn"
-                          onClick={addPresetModel}
-                        >
-                          + 添加模型
-                        </button>
-                      </div>
-                    </div>
+                    <DshModelCatalogEditor
+                      models={presetModels}
+                      defaultModel={presetDefaultModel}
+                      onChangeModels={setPresetModels}
+                      onChangeDefaultModel={setPresetDefaultModel}
+                      onRestoreDefaults={handleRestorePresetDefaults}
+                      onFetchModels={() => fetchRemoteModels(presetBaseUrl, presetApiKey, presetId)}
+                      fetchingModels={fetchingModels}
+                      fetchStatus={fetchStatus}
+                    />
                   </div>
                 )}
               </div>
@@ -3418,78 +3787,16 @@ function DshModelsPane({ onReloadAll, models }) {
                 </div>
               </div>
 
-              <div className="dsh-model-catalog">
-                <div className="dsh-catalog-header">
-                  <span className="dsh-catalog-title">模型目录 ({customModels.length})</span>
-                  <button
-                    type="button"
-                    className="dsh-fetch-btn"
-                    disabled={fetchingModels}
-                    onClick={() => fetchRemoteModels(customBaseUrl, customApiKey, customProtocol)}
-                  >
-                    {fetchingModels && <span className="dsh-spinner" />}
-                    <span>{fetchingModels ? "正在探测远端模型…" : "⚡ 获取可用模型"}</span>
-                  </button>
-                </div>
-
-                {fetchStatus && (
-                  <div className={`dsh-fetch-status ${fetchStatus.ok ? "ok" : "err"}`}>
-                    {fetchStatus.msg}
-                  </div>
-                )}
-
-                <div className="dsh-pills-wrap">
-                  {customModels.length === 0 ? (
-                    <span className="dsh-pills-empty">暂无模型，请点击获取可用模型或在下方手动添加</span>
-                  ) : (
-                    customModels.map((m) => (
-                      <span
-                        key={m}
-                        className={`dsh-model-pill ${m === customDefaultModel ? "default" : ""}`}
-                        onClick={() => setCustomDefaultModel(m)}
-                        title="点击设为默认模型"
-                      >
-                        <span className="dsh-pill-text">{m}</span>
-                        {m === customDefaultModel && <span className="dsh-pill-def-tag">默认</span>}
-                        <button
-                          type="button"
-                          className="dsh-pill-remove"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeCustomModel(m);
-                          }}
-                          title="删除此模型"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))
-                  )}
-                </div>
-
-                <div className="dsh-add-model-row">
-                  <input
-                    type="text"
-                    className="dsh-input-sm"
-                    value={newCustomModelInput}
-                    placeholder="输入模型 ID (例如: gpt-4o, claude-3-7-sonnet)"
-                    onChange={(e) => setNewCustomModelInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        addCustomModel();
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="dsh-btn-sm add-model-btn"
-                    onClick={addCustomModel}
-                  >
-                    + 添加模型
-                  </button>
-                </div>
-              </div>
+              <DshModelCatalogEditor
+                models={customModels}
+                defaultModel={customDefaultModel}
+                onChangeModels={setCustomModels}
+                onChangeDefaultModel={setCustomDefaultModel}
+                onRestoreDefaults={handleRestoreCustomDefaults}
+                onFetchModels={() => fetchRemoteModels(customBaseUrl, customApiKey, customProtocol)}
+                fetchingModels={fetchingModels}
+                fetchStatus={fetchStatus}
+              />
             </>
           )}
 

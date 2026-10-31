@@ -15,6 +15,7 @@ import os
 import secrets
 import time
 from datetime import datetime
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -337,7 +338,7 @@ def _get_or_init_providers(conn) -> tuple[list[dict], str]:
             "base_url": base_url,
             "api_key": api_key,
             "model": model,
-            "models": models,
+            "models": [llm_config.normalize_model_item(m) for m in models],
             "is_active": True,
             "created_at": now,
             "updated_at": now,
@@ -387,7 +388,7 @@ def fetch_models(body: FetchModelsIn, device: dict = Depends(require_device)) ->
 
     base_url = normalize_base_url_for_models(raw_base)
     if not base_url:
-        return {"ok": False, "error": "base_url 不能为空", "models": []}
+        return {"ok": False, "error": "base_url 不能为空", "models": [], "items": []}
 
     api_key = (body.api_key or "").strip()
     if not api_key or "****" in api_key or "..." in api_key:
@@ -433,6 +434,7 @@ def fetch_models(body: FetchModelsIn, device: dict = Depends(require_device)) ->
                 "ok": False,
                 "error": f"HTTP {res.status_code}: {res.text[:200]}",
                 "models": [],
+                "items": [],
                 "latency_ms": latency_ms,
             }
 
@@ -461,9 +463,13 @@ def fetch_models(body: FetchModelsIn, device: dict = Depends(require_device)) ->
                     model_ids.append(item.strip())
 
         cleaned_models = sorted(list({m for m in model_ids if m}))
+        items = [llm_config.normalize_model_item(m) for m in cleaned_models]
+        for it in items:
+            it["label"] = it["name"]
         return {
             "ok": True,
             "models": cleaned_models,
+            "items": items,
             "count": len(cleaned_models),
             "latency_ms": latency_ms,
         }
@@ -473,6 +479,7 @@ def fetch_models(body: FetchModelsIn, device: dict = Depends(require_device)) ->
             "ok": False,
             "error": str(exc),
             "models": [],
+            "items": [],
             "latency_ms": latency_ms,
         }
 
@@ -485,7 +492,7 @@ class ProviderSaveIn(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
-    models: list[str] | None = None
+    models: list[Any] | None = None
     is_active: bool | None = None
 
 
@@ -536,7 +543,7 @@ def save_provider(body: ProviderSaveIn, device: dict = Depends(require_device)) 
             if body.model is not None:
                 target_provider["model"] = body.model.strip()
             if body.models is not None:
-                target_provider["models"] = list(dict.fromkeys(body.models))
+                target_provider["models"] = [llm_config.normalize_model_item(m) for m in body.models]
 
             in_key = (body.api_key or "").strip()
             if in_key and "****" not in in_key and "..." not in in_key:
@@ -555,10 +562,12 @@ def save_provider(body: ProviderSaveIn, device: dict = Depends(require_device)) 
             in_key = (body.api_key or "").strip()
             key_val = in_key if ("****" not in in_key and "..." not in in_key) else ""
 
-            models = list(body.models) if body.models is not None else list(preset_cfg.get("models", []))
-            model = (body.model or (models[0] if models else "deepseek-chat")).strip()
-            if model and model not in models:
-                models.insert(0, model)
+            raw_models = list(body.models) if body.models is not None else list(preset_cfg.get("models", []))
+            models = [llm_config.normalize_model_item(m) for m in raw_models]
+            model = (body.model or (models[0]["id"] if models else "deepseek-chat")).strip()
+            model_ids = {m["id"] for m in models}
+            if model and model not in model_ids:
+                models.insert(0, llm_config.normalize_model_item(model))
 
             target_provider = {
                 "id": new_id,
@@ -760,21 +769,23 @@ def list_models(device: dict = Depends(require_device)) -> dict:
     default = json.loads(row["value_json"]) if row else cfg.get("model") or DEFAULT_SETTINGS["model"]
 
     models_seen = set()
-    items = []
+    raw_list: list[str | dict] = []
 
     # 1. available_models (preserves test_pairing_v1 expectations)
     for m in available_models():
-        if m not in models_seen:
-            models_seen.add(m)
-            items.append({"id": m, "label": m})
+        m_str = str(m).strip()
+        if m_str and m_str not in models_seen:
+            models_seen.add(m_str)
+            raw_list.append(m_str)
 
     # 2. Provider presets
     provider = cfg.get("provider", "deepseek")
     preset_models = llm_config.PROVIDER_MODELS.get(provider, [])
     for m in preset_models:
-        if m not in models_seen:
-            models_seen.add(m)
-            items.append({"id": m, "label": m})
+        m_str = str(m).strip()
+        if m_str and m_str not in models_seen:
+            models_seen.add(m_str)
+            raw_list.append(m_str)
 
     # 3. Models from all configured providers
     if isinstance(providers, list):
@@ -783,27 +794,45 @@ def list_models(device: dict = Depends(require_device)) -> dict:
                 p_models = p.get("models")
                 if isinstance(p_models, list):
                     for m in p_models:
-                        m_str = str(m).strip()
-                        if m_str and m_str not in models_seen:
-                            models_seen.add(m_str)
-                            items.append({"id": m_str, "label": m_str})
+                        if isinstance(m, dict):
+                            m_id = str(m.get("id") or m.get("name") or "").strip()
+                            if m_id and m_id not in models_seen:
+                                models_seen.add(m_id)
+                                raw_list.append(m)
+                        else:
+                            m_str = str(m).strip()
+                            if m_str and m_str not in models_seen:
+                                models_seen.add(m_str)
+                                raw_list.append(m_str)
                 p_model = str(p.get("model") or "").strip()
                 if p_model and p_model not in models_seen:
                     models_seen.add(p_model)
-                    items.append({"id": p_model, "label": p_model})
+                    raw_list.append(p_model)
 
     # 4. Custom models configured by user
     if isinstance(custom_models, list):
         for m in custom_models:
-            m_str = str(m).strip()
-            if m_str and m_str not in models_seen:
-                models_seen.add(m_str)
-                items.append({"id": m_str, "label": m_str})
+            if isinstance(m, dict):
+                m_id = str(m.get("id") or m.get("name") or "").strip()
+                if m_id and m_id not in models_seen:
+                    models_seen.add(m_id)
+                    raw_list.append(m)
+            else:
+                m_str = str(m).strip()
+                if m_str and m_str not in models_seen:
+                    models_seen.add(m_str)
+                    raw_list.append(m_str)
 
     # 5. Currently configured default
-    if default not in models_seen:
+    if default and default not in models_seen:
         models_seen.add(default)
-        items.insert(0, {"id": default, "label": default})
+        raw_list.insert(0, default)
+
+    items = []
+    for item in raw_list:
+        norm = llm_config.normalize_model_item(item)
+        norm["label"] = norm["name"]
+        items.append(norm)
 
     return {"default": default, "items": items}
 

@@ -19,8 +19,8 @@ API_URL = os.environ.get("LLM_URL", "https://api.deepseek.com/chat/completions")
 MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
 
 
-def _key() -> str | None:
-    cfg = llm_config.resolve_llm_config()
+def _key(model: str | None = None) -> str | None:
+    cfg = llm_config.resolve_llm_config(model=model)
     return cfg["api_key"] or None
 
 
@@ -29,9 +29,9 @@ def has_key() -> bool:
     return bool(_key())
 
 
-def _url() -> str:
+def _url(model: str | None = None) -> str:
     """运行时读环境：测试可以用本地 mock server 顶替，不需要改模块常量。"""
-    cfg = llm_config.resolve_llm_config()
+    cfg = llm_config.resolve_llm_config(model=model)
     return cfg["chat_url"]
 
 
@@ -136,28 +136,40 @@ def _fix_assistant_reasoning_content(messages: list[dict]) -> list[dict]:
     return fixed
 
 
-def get_model_reasoning_levels(model_name: str) -> list[str]:
+def get_model_reasoning_levels(model_name: str, conn=None) -> list[str]:
     """导出模型自适应推理档位映射。
 
-    - o1, o3, o4 -> ["low", "medium", "high"]
-    - deepseek 系列（deepseek-flash, deepseek-chat, deepseek-reasoner, r1 等） -> ["none", "standard", "max"]
-    - claude-3-7, claude (含 thinking) -> ["none", "low", "medium", "high", "max"]
-    - qwq, qwen-max (含 thinking) -> ["none", "standard", "max"]
-    - 其他普通模型 -> []（空列表，表示不支持/无需推理档位）
+    优先从已配置提供商的富模型元数据中查找；未找到则使用 llm_config.infer_model_capabilities 自动推断。
     """
-    import re
-    name = (model_name or "").strip().lower()
+    name = (model_name or "").strip()
     if not name:
         return []
-    if re.search(r"\b(o1|o3|o4)\b", name) or any(name.startswith(p) for p in ("o1-", "o3-", "o4-", "o1", "o3", "o4")):
-        return ["low", "medium", "high"]
-    if "deepseek" in name or "r1" in name or "reasoner" in name:
-        return ["none", "standard", "max"]
-    if "claude-3-7" in name or "claude-3.7" in name or ("claude" in name and "thinking" in name):
-        return ["none", "low", "medium", "high", "max"]
-    if "qwq" in name or "qwen-max" in name or "thinking" in name:
-        return ["none", "standard", "max"]
-    return []
+
+    # 1. 尝试从保存的提供商 rich models 中读取
+    try:
+        settings = llm_config._get_app_settings(conn)
+        providers = settings.get("llm_providers", [])
+        if isinstance(providers, list):
+            for p in providers:
+                if not isinstance(p, dict):
+                    continue
+                models = p.get("models")
+                if isinstance(models, list):
+                    for m in models:
+                        if isinstance(m, dict):
+                            m_id = str(m.get("id") or m.get("name") or "").strip()
+                            if m_id == name or (m_id and m_id.lower() == name.lower()):
+                                rl = m.get("reasoning_levels")
+                                if isinstance(rl, list) and rl:
+                                    return list(rl)
+                                if m.get("supports_reasoning") is False:
+                                    return []
+    except Exception:
+        pass
+
+    # 2. 未配置或未找到时，回落到 llm_config.infer_model_capabilities
+    caps = llm_config.infer_model_capabilities(name)
+    return list(caps.get("reasoning_levels", []))
 
 
 def _is_pure_reasoning_model(model_name: str) -> bool:
@@ -181,13 +193,16 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
     遥测，不能凭空估。失败返回 None，由调用方决定回落还是报错。
     `model` 允许调用方按 Bot 指定模型；None 用环境默认。
     """
-    key = _key()
+    target_model = model or _model()
+    try:
+        key = _key(model=target_model)
+    except TypeError:
+        key = _key()
     if not key or is_offline():
         return None
     allowed, used_today, limit = llm_config.check_global_daily_token_gate()
     if not allowed:
         raise RuntimeError(f"daily_token_limit_exceeded: used {used_today} of {limit}")
-    target_model = model or _model()
     body: dict = {"model": target_model, "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens}
     if tools:
@@ -202,12 +217,16 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
         body["reasoning_effort"] = reasoning_effort.strip().lower()
 
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    try:
+        target_url = _url(model=target_model)
+    except TypeError:
+        target_url = _url()
     last_err: Exception | None = None
     for trust_env in (False, True):
         for attempt in range(3):
             try:
                 with httpx.Client(timeout=timeout, trust_env=trust_env) as c:
-                    r = c.post(_url(), json=body, headers=headers)
+                    r = c.post(target_url, json=body, headers=headers)
                 if r.status_code != 200:
                     text = r.text[:400]
                     if r.status_code == 400 and "reasoning_content" in text.lower():
@@ -261,14 +280,17 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
       * tool_calls 是碎片形式的（按 index 累积 arguments），和一次性返回的结构不一样。
     任何异常都往上抛，由 agent loop 决定是否回落到非流式 chat()。
     """
-    key = _key()
+    target_model = model or _model()
+    try:
+        key = _key(model=target_model)
+    except TypeError:
+        key = _key()
     if not key or is_offline():
         raise RuntimeError("llm_offline")
     allowed, used_today, limit = llm_config.check_global_daily_token_gate()
     if not allowed:
         raise RuntimeError(f"daily_token_limit_exceeded: used {used_today} of {limit}")
 
-    target_model = model or _model()
     body: dict = {"model": target_model, "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens,
                   "stream": True, "stream_options": {"include_usage": True}}
@@ -283,6 +305,10 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
     if has_active_reasoning:
         body["reasoning_effort"] = reasoning_effort.strip().lower()
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    try:
+        target_url = _url(model=target_model)
+    except TypeError:
+        target_url = _url()
 
     max_attempts = 3
     last_err: Exception | None = None
@@ -297,7 +323,7 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
 
         try:
             with httpx.Client(timeout=timeout) as c:
-                with c.stream("POST", _url(), json=body, headers=headers) as r:
+                with c.stream("POST", target_url, json=body, headers=headers) as r:
                     if r.status_code != 200:
                         text = r.read().decode("utf-8", "replace")[:400]
                         if r.status_code == 400 and "reasoning_content" in text.lower():

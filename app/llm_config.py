@@ -258,20 +258,201 @@ def _get_app_settings(conn=None) -> dict[str, Any]:
         return {}
 
 
+# ---------------------------------------------------------------- Model Capabilities & Normalization
+def infer_model_capabilities(model_id: str) -> dict[str, Any]:
+    """推断模型的上下文窗口、最大输出与推理档位。
+
+    - 上下文大小推断：包含 1m -> "1000K", 256k/deepseek/scnet -> "256K", 128k -> "128K", 32k -> "32K", 默认 "128K"
+    - 最大输出推断：scnet/deepseek/r1/o1 -> "32K", 64k -> "64K", 默认 "8K"
+    - 思考能力识别：包含 scnet, reasoner, r1, o1, o3, o4, thinking, qwq, deepseek 等 -> supports_reasoning = True
+      如果是 o1/o3/o4 则 reasoning_levels = ["low", "medium", "high"]；
+      如果是 claude-3-7 / claude thinking 则 reasoning_levels = ["none", "low", "medium", "high", "max"]；
+      其余具备思考能力者为 ["none", "standard", "max"]；
+      其他普通模型 -> supports_reasoning = False, reasoning_levels = []
+    """
+    name = (model_id or "").strip().lower()
+
+    # 1. 上下文大小推断
+    if "1m" in name:
+        context_window = "1000K"
+    elif "256k" in name or "deepseek" in name or "scnet" in name:
+        context_window = "256K"
+    elif "128k" in name:
+        context_window = "128K"
+    elif "32k" in name:
+        context_window = "32K"
+    else:
+        context_window = "128K"
+
+    # 2. 最大输出推断
+    if "64k" in name:
+        max_tokens = "64K"
+    elif any(k in name for k in ("scnet", "deepseek", "r1", "o1")):
+        max_tokens = "32K"
+    else:
+        max_tokens = "8K"
+
+    # 3. 思考能力识别
+    is_o_series = bool(
+        re.search(r"\b(o1|o3|o4)\b", name)
+        or any(name.startswith(p) for p in ("o1-", "o3-", "o4-", "o1", "o3", "o4"))
+    )
+    is_claude_thinking = (
+        "claude-3-7" in name or "claude-3.7" in name or ("claude" in name and "thinking" in name)
+    )
+
+    if is_o_series:
+        supports_reasoning = True
+        reasoning_levels = ["low", "medium", "high"]
+    elif is_claude_thinking:
+        supports_reasoning = True
+        reasoning_levels = ["none", "low", "medium", "high", "max"]
+    elif any(k in name for k in ("scnet", "reasoner", "r1", "thinking", "qwq", "deepseek", "qwen-max")):
+        supports_reasoning = True
+        reasoning_levels = ["none", "standard", "max"]
+    else:
+        supports_reasoning = False
+        reasoning_levels = []
+
+    return {
+        "context_window": context_window,
+        "max_tokens": max_tokens,
+        "supports_reasoning": supports_reasoning,
+        "reasoning_levels": reasoning_levels,
+    }
+
+
+def normalize_model_item(item: str | dict[str, Any]) -> dict[str, Any]:
+    """统一将模型规整为标准富元数据结构：
+    {
+        "id": str,
+        "name": str,
+        "context_window": str,
+        "max_tokens": str,
+        "supports_reasoning": bool,
+        "reasoning_levels": list[str]
+    }
+    """
+    if isinstance(item, str):
+        m_id = item.strip()
+        caps = infer_model_capabilities(m_id)
+        return {
+            "id": m_id,
+            "name": m_id,
+            "context_window": caps["context_window"],
+            "max_tokens": caps["max_tokens"],
+            "supports_reasoning": caps["supports_reasoning"],
+            "reasoning_levels": list(caps["reasoning_levels"]),
+        }
+    elif isinstance(item, dict):
+        m_id = str(item.get("id") or item.get("name") or item.get("model") or "").strip()
+        m_name = str(item.get("name") or item.get("label") or m_id).strip() or m_id
+        caps = infer_model_capabilities(m_id)
+
+        cw = str(item.get("context_window") or caps["context_window"])
+        mt = str(item.get("max_tokens") or caps["max_tokens"])
+
+        sr = item.get("supports_reasoning")
+        if sr is None:
+            sr = caps["supports_reasoning"]
+        else:
+            sr = bool(sr)
+
+        rl = item.get("reasoning_levels")
+        if rl is None or not isinstance(rl, list):
+            rl = list(caps["reasoning_levels"])
+        else:
+            rl = list(rl)
+
+        return {
+            "id": m_id,
+            "name": m_name,
+            "context_window": cw,
+            "max_tokens": mt,
+            "supports_reasoning": sr,
+            "reasoning_levels": rl,
+        }
+    else:
+        m_id = str(item).strip()
+        caps = infer_model_capabilities(m_id)
+        return {
+            "id": m_id,
+            "name": m_id,
+            "context_window": caps["context_window"],
+            "max_tokens": caps["max_tokens"],
+            "supports_reasoning": caps["supports_reasoning"],
+            "reasoning_levels": list(caps["reasoning_levels"]),
+        }
+
+
 # ---------------------------------------------------------------- Core Resolver
 def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
     """Resolve active LLM configuration for any caller.
 
-    Resolution Priority (100% Pytest Safe):
-      * api_key: app_settings['llm_api_key'] -> DEEPSEEK_API_KEY -> OPENAI_API_KEY -> LLM_API_KEY
-      * chat_url: normalized app_settings['llm_base_url'] (if non-empty) -> LLM_URL -> normalized MODEL_BASE_URL / LLM_API_BASE
-      * model: explicit arg -> app_settings['model'] -> LLM_MODEL -> "deepseek-chat"
+    Resolution Priority:
+      * When `model` is passed:
+        - Search all providers in `llm_providers` for a matching model (in `models` list or `model` attribute).
+        - If matched, directly route to that provider's `base_url` and `api_key`!
+        - If not matched in any provider, fallback to active provider or global settings.
+      * When `model` is not passed:
+        - Use active provider or global settings.
     """
     settings = _get_app_settings(conn)
-
-    # Active provider fallback
-    active_p = None
     providers = settings.get("llm_providers")
+
+    # 1. Check if model matches a specific provider
+    chosen_p = None
+    target_model = (model or "").strip()
+    if target_model and isinstance(providers, list):
+        for p in providers:
+            if not isinstance(p, dict):
+                continue
+            # Check provider default model
+            p_model = str(p.get("model") or "").strip()
+            if p_model == target_model or (p_model and p_model.lower() == target_model.lower()):
+                chosen_p = p
+                break
+            # Check provider models list
+            p_models = p.get("models")
+            if isinstance(p_models, list):
+                found = False
+                for item in p_models:
+                    if isinstance(item, str):
+                        m_str = item.strip()
+                        if m_str == target_model or (m_str and m_str.lower() == target_model.lower()):
+                            found = True
+                            break
+                    elif isinstance(item, dict):
+                        m_id = str(item.get("id") or item.get("name") or "").strip()
+                        if m_id == target_model or (m_id and m_id.lower() == target_model.lower()):
+                            found = True
+                            break
+                if found:
+                    chosen_p = p
+                    break
+
+    if chosen_p is not None:
+        provider_key = str(chosen_p.get("api_key") or "").strip()
+        provider_base = str(chosen_p.get("base_url") or "").strip()
+        provider_name = str(
+            chosen_p.get("preset_id") or chosen_p.get("kind") or chosen_p.get("name") or "custom"
+        ).strip()
+
+        api_key = provider_key or os.environ.get("LLM_API_KEY", "").strip()
+        base_url = provider_base or "https://api.deepseek.com"
+        chat_url = normalize_chat_completions_url(base_url)
+
+        return {
+            "api_key": api_key,
+            "chat_url": chat_url,
+            "base_url": base_url,
+            "model": target_model,
+            "provider": provider_name,
+            "has_key": bool(api_key),
+        }
+
+    # 2. Fallback to active provider
+    active_p = None
     if isinstance(providers, list):
         active_id = settings.get("active_provider_id")
         for p in providers:
@@ -285,7 +466,7 @@ def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
         if not active_p and providers and isinstance(providers[0], dict):
             active_p = providers[0]
 
-    # 1. API Key
+    # API Key
     stored_key = str(settings.get("llm_api_key") or "").strip()
     if not stored_key and active_p:
         stored_key = str(active_p.get("api_key") or "").strip()
@@ -298,7 +479,7 @@ def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
         or ""
     ).strip()
 
-    # 2. Chat URL
+    # Chat URL
     stored_base = str(settings.get("llm_base_url") or "").strip()
     if not stored_base and active_p:
         stored_base = str(active_p.get("base_url") or "").strip()
@@ -314,13 +495,13 @@ def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
         else:
             chat_url = "https://api.deepseek.com/chat/completions"
 
-    # 3. Model
+    # Model
     setting_model = str(settings.get("model") or "").strip()
     if not setting_model and active_p:
         setting_model = str(active_p.get("model") or "").strip()
 
     resolved_model = (
-        (model or "").strip()
+        target_model
         or setting_model
         or os.environ.get("LLM_MODEL", "deepseek-chat").strip()
     )
@@ -331,10 +512,17 @@ def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
         or "deepseek"
     ).strip()
 
+    base_url = (
+        stored_base
+        or os.environ.get("MODEL_BASE_URL")
+        or os.environ.get("LLM_API_BASE")
+        or "https://api.deepseek.com"
+    )
+
     return {
         "api_key": api_key,
         "chat_url": chat_url,
-        "base_url": stored_base or os.environ.get("MODEL_BASE_URL") or os.environ.get("LLM_API_BASE") or "https://api.deepseek.com",
+        "base_url": base_url,
         "model": resolved_model,
         "provider": provider,
         "has_key": bool(api_key),
