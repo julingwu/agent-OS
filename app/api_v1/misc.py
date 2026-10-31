@@ -765,49 +765,98 @@ def list_models(device: dict = Depends(require_device)) -> dict:
         custom_models = json.loads(custom_row["value_json"]) if custom_row else []
         prv_row = conn.execute("SELECT value_json FROM app_settings WHERE key='llm_providers'").fetchone()
         providers = json.loads(prv_row["value_json"]) if prv_row else []
+        active_row = conn.execute("SELECT value_json FROM app_settings WHERE key='active_provider_id'").fetchone()
+        active_provider_id = json.loads(active_row["value_json"]) if active_row else ""
 
     default = json.loads(row["value_json"]) if row else cfg.get("model") or DEFAULT_SETTINGS["model"]
+
+    # 识别当前激活的提供商及其显式配置的模型列表
+    active_p = None
+    if isinstance(providers, list):
+        for p in providers:
+            if isinstance(p, dict):
+                if active_provider_id and p.get("id") == active_provider_id:
+                    active_p = p
+                    break
+                elif p.get("is_active"):
+                    active_p = p
+                    break
+        if not active_p and providers and isinstance(providers[0], dict):
+            active_p = providers[0]
+
+    has_active_configured_models = bool(
+        active_p
+        and isinstance(active_p.get("models"), list)
+        and len(active_p.get("models")) > 0
+    )
 
     models_seen = set()
     raw_list: list[str | dict] = []
 
-    # 1. available_models (preserves test_pairing_v1 expectations)
-    for m in available_models():
-        m_str = str(m).strip()
-        if m_str and m_str not in models_seen:
-            models_seen.add(m_str)
-            raw_list.append(m_str)
+    # 1. 优先使用激活提供商中用户显式配置的模型列表
+    if has_active_configured_models:
+        p_models = active_p.get("models")
+        if isinstance(p_models, list):
+            for m in p_models:
+                if isinstance(m, dict):
+                    m_id = str(m.get("id") or m.get("name") or "").strip()
+                    if m_id and m_id not in models_seen:
+                        models_seen.add(m_id)
+                        raw_list.append(m)
+                else:
+                    m_str = str(m).strip()
+                    if m_str and m_str not in models_seen:
+                        models_seen.add(m_str)
+                        raw_list.append(m_str)
+        p_model = str(active_p.get("model") or "").strip()
+        if p_model and p_model not in models_seen:
+            models_seen.add(p_model)
+            raw_list.append(p_model)
+    else:
+        # 未显式配置模型列表时，才注入基础 available_models 与该 provider 预设
+        for m in available_models():
+            m_str = str(m).strip()
+            if m_str and m_str not in models_seen:
+                models_seen.add(m_str)
+                raw_list.append(m_str)
 
-    # 2. Provider presets
-    provider = cfg.get("provider", "deepseek")
-    preset_models = llm_config.PROVIDER_MODELS.get(provider, [])
-    for m in preset_models:
-        m_str = str(m).strip()
-        if m_str and m_str not in models_seen:
-            models_seen.add(m_str)
-            raw_list.append(m_str)
+        provider = cfg.get("provider", "deepseek")
+        preset_models = llm_config.PROVIDER_MODELS.get(provider, [])
+        for m in preset_models:
+            m_str = str(m).strip()
+            if m_str and m_str not in models_seen:
+                models_seen.add(m_str)
+                raw_list.append(m_str)
 
-    # 3. Models from all configured providers
+    # 2. 加入其余已配置提供商的模型（供聚合或跨提供商调用）
     if isinstance(providers, list):
         for p in providers:
-            if isinstance(p, dict):
-                p_models = p.get("models")
-                if isinstance(p_models, list):
-                    for m in p_models:
-                        if isinstance(m, dict):
-                            m_id = str(m.get("id") or m.get("name") or "").strip()
-                            if m_id and m_id not in models_seen:
-                                models_seen.add(m_id)
-                                raw_list.append(m)
-                        else:
-                            m_str = str(m).strip()
-                            if m_str and m_str not in models_seen:
-                                models_seen.add(m_str)
-                                raw_list.append(m_str)
-                p_model = str(p.get("model") or "").strip()
-                if p_model and p_model not in models_seen:
-                    models_seen.add(p_model)
-                    raw_list.append(p_model)
+            if not isinstance(p, dict):
+                continue
+            if p is active_p or (isinstance(p, dict) and active_p and p.get("id") == active_p.get("id")):
+                continue
+            # 排除非激活的默认占位提供商以及同预设的不活动提供商
+            if p.get("id") == "prv_default" and not p.get("is_active"):
+                continue
+            if active_p and (p.get("preset_id") == active_p.get("preset_id") or p.get("kind") == active_p.get("kind")):
+                continue
+            other_models = p.get("models")
+            if isinstance(other_models, list):
+                for m in other_models:
+                    if isinstance(m, dict):
+                        m_id = str(m.get("id") or m.get("name") or "").strip()
+                        if m_id and m_id not in models_seen:
+                            models_seen.add(m_id)
+                            raw_list.append(m)
+                    else:
+                        m_str = str(m).strip()
+                        if m_str and m_str not in models_seen:
+                            models_seen.add(m_str)
+                            raw_list.append(m_str)
+            p_model = str(p.get("model") or "").strip()
+            if p_model and p_model not in models_seen:
+                models_seen.add(p_model)
+                raw_list.append(p_model)
 
     # 4. Custom models configured by user
     if isinstance(custom_models, list):

@@ -262,34 +262,61 @@ def _get_app_settings(conn=None) -> dict[str, Any]:
 def infer_model_capabilities(model_id: str) -> dict[str, Any]:
     """推断模型的上下文窗口、最大输出与推理档位。
 
-    - 上下文大小推断：包含 1m -> "1000K", 256k/deepseek/scnet -> "256K", 128k -> "128K", 32k -> "32K", 默认 "128K"
-    - 最大输出推断：scnet/deepseek/r1/o1 -> "32K", 64k -> "64K", 默认 "8K"
-    - 思考能力识别：包含 scnet, reasoner, r1, o1, o3, o4, thinking, qwq, deepseek 等 -> supports_reasoning = True
-      如果是 o1/o3/o4 则 reasoning_levels = ["low", "medium", "high"]；
-      如果是 claude-3-7 / claude thinking 则 reasoning_levels = ["none", "low", "medium", "high", "max"]；
-      如果是 scnet 及通用 OpenAI 兼容模型 则 reasoning_levels = ["none", "low", "medium", "high"]；
-      其余具备思考能力者为 ["none", "standard", "max"]；
-      其他普通模型 -> supports_reasoning = False, reasoning_levels = []
+    - 上下文大小推断：
+      包含 "1m", "1000k", "1024k", "deepseek-flash", "deepseek-v4-pro", "glm-4-long", "long" -> "1M"
+      包含 "claude-3", "o1", "o3", "o4" -> "200K"
+      包含 "256k", "scnet" -> "256K"
+      包含 "128k", "gpt-4o", "qwen" -> "128K"
+      包含 "deepseek-chat", "deepseek-reasoner", "64k" -> "64K"
+      包含 "32k" -> "32K"
+      包含 "16k" -> "16K"
+      默认 -> "128K"
+    - 最大输出推断：
+      包含 "100k", "o1", "o3", "o4" -> "100K"
+      包含 "64k", "claude-3-7", "claude-3.7" -> "64K"
+      包含 "32k", "deepseek-flash", "deepseek-v4-pro", "scnet" -> "32K"
+      包含 "16k", "gpt-4o" -> "16K"
+      包含 "4k", "glm-4-long" -> "4K"
+      默认 -> "8K"
+    - 思考能力识别：
+      o-series (o1, o3, o4) -> supports_reasoning = True, profile "openai", levels ["low", "medium", "high"]
+      claude-3-7 / thinking -> supports_reasoning = True, profile "claude", levels ["none", "low", "medium", "high", "max"]
+      scnet -> supports_reasoning = True, profile "openai", levels ["none", "low", "medium", "high"]
+      reasoning models (contains "reasoner", "r1", "thinking", "qwq") -> supports_reasoning = True, profile "deepseek", levels ["none", "standard", "max"]
+      deepseek-chat, gpt-4o, qwen, and normal chat models -> supports_reasoning = False, profile "", levels []
+      (注：不可将 plain "deepseek" 或 "deepseek-chat" 标记为思考模型)
     """
     name = (model_id or "").strip().lower()
 
     # 1. 上下文大小推断
-    if "1m" in name:
-        context_window = "1000K"
-    elif "256k" in name or "deepseek" in name or "scnet" in name:
+    if any(k in name for k in ("1m", "1000k", "1024k", "deepseek-flash", "deepseek-v4-pro", "glm-4-long", "long")):
+        context_window = "1M"
+    elif any(k in name for k in ("claude-3", "o1", "o3", "o4")):
+        context_window = "200K"
+    elif any(k in name for k in ("256k", "scnet")):
         context_window = "256K"
-    elif "128k" in name:
+    elif any(k in name for k in ("128k", "gpt-4o", "qwen")):
         context_window = "128K"
+    elif any(k in name for k in ("deepseek-chat", "deepseek-reasoner", "64k")):
+        context_window = "64K"
     elif "32k" in name:
         context_window = "32K"
+    elif "16k" in name:
+        context_window = "16K"
     else:
         context_window = "128K"
 
     # 2. 最大输出推断
-    if "64k" in name:
+    if any(k in name for k in ("100k", "o1", "o3", "o4")):
+        max_tokens = "100K"
+    elif any(k in name for k in ("64k", "claude-3-7", "claude-3.7")):
         max_tokens = "64K"
-    elif any(k in name for k in ("scnet", "deepseek", "r1", "o1")):
+    elif any(k in name for k in ("32k", "deepseek-flash", "deepseek-v4-pro", "scnet")):
         max_tokens = "32K"
+    elif any(k in name for k in ("16k", "gpt-4o")):
+        max_tokens = "16K"
+    elif any(k in name for k in ("4k", "glm-4-long")):
+        max_tokens = "4K"
     else:
         max_tokens = "8K"
 
@@ -297,6 +324,7 @@ def infer_model_capabilities(model_id: str) -> dict[str, Any]:
     is_o_series = bool(
         re.search(r"\b(o1|o3|o4)\b", name)
         or any(name.startswith(p) for p in ("o1-", "o3-", "o4-", "o1", "o3", "o4"))
+        or any(k in name for k in ("o1", "o3", "o4"))
     )
     is_claude_thinking = (
         "claude-3-7" in name or "claude-3.7" in name or ("claude" in name and "thinking" in name)
@@ -304,24 +332,30 @@ def infer_model_capabilities(model_id: str) -> dict[str, Any]:
 
     if is_o_series:
         supports_reasoning = True
+        reasoning_profile = "openai"
         reasoning_levels = ["low", "medium", "high"]
     elif is_claude_thinking:
         supports_reasoning = True
+        reasoning_profile = "claude"
         reasoning_levels = ["none", "low", "medium", "high", "max"]
     elif "scnet" in name:
         supports_reasoning = True
+        reasoning_profile = "openai"
         reasoning_levels = ["none", "low", "medium", "high"]
-    elif any(k in name for k in ("reasoner", "r1", "thinking", "qwq", "deepseek", "qwen-max")):
+    elif any(k in name for k in ("reasoner", "r1", "thinking", "qwq")):
         supports_reasoning = True
+        reasoning_profile = "deepseek"
         reasoning_levels = ["none", "standard", "max"]
     else:
         supports_reasoning = False
+        reasoning_profile = ""
         reasoning_levels = []
 
     return {
         "context_window": context_window,
         "max_tokens": max_tokens,
         "supports_reasoning": supports_reasoning,
+        "reasoning_profile": reasoning_profile,
         "reasoning_levels": reasoning_levels,
     }
 
@@ -334,6 +368,7 @@ def normalize_model_item(item: str | dict[str, Any]) -> dict[str, Any]:
         "context_window": str,
         "max_tokens": str,
         "supports_reasoning": bool,
+        "reasoning_profile": str,
         "reasoning_levels": list[str]
     }
     """
@@ -346,6 +381,7 @@ def normalize_model_item(item: str | dict[str, Any]) -> dict[str, Any]:
             "context_window": caps["context_window"],
             "max_tokens": caps["max_tokens"],
             "supports_reasoning": caps["supports_reasoning"],
+            "reasoning_profile": caps["reasoning_profile"],
             "reasoning_levels": list(caps["reasoning_levels"]),
         }
     elif isinstance(item, dict):
@@ -353,14 +389,33 @@ def normalize_model_item(item: str | dict[str, Any]) -> dict[str, Any]:
         m_name = str(item.get("name") or item.get("label") or m_id).strip() or m_id
         caps = infer_model_capabilities(m_id)
 
-        cw = str(item.get("context_window") or caps["context_window"])
-        mt = str(item.get("max_tokens") or caps["max_tokens"])
+        raw_cw = str(item.get("context_window") or "").strip()
+        if not raw_cw:
+            cw = caps["context_window"]
+        elif raw_cw.lower() in ("1000k", "1024k", "1m"):
+            cw = "1M"
+        else:
+            cw = raw_cw
+
+        raw_mt = str(item.get("max_tokens") or "").strip()
+        if not raw_mt:
+            mt = caps["max_tokens"]
+        elif raw_mt.lower() in ("1000k", "1024k", "1m"):
+            mt = "1M"
+        else:
+            mt = raw_mt
 
         sr = item.get("supports_reasoning")
         if sr is None:
             sr = caps["supports_reasoning"]
         else:
             sr = bool(sr)
+
+        rp = item.get("reasoning_profile")
+        if rp is None:
+            rp = caps.get("reasoning_profile", "")
+        else:
+            rp = str(rp).strip()
 
         rl = item.get("reasoning_levels")
         if rl is None or not isinstance(rl, list):
@@ -374,6 +429,7 @@ def normalize_model_item(item: str | dict[str, Any]) -> dict[str, Any]:
             "context_window": cw,
             "max_tokens": mt,
             "supports_reasoning": sr,
+            "reasoning_profile": rp,
             "reasoning_levels": rl,
         }
     else:
@@ -385,6 +441,7 @@ def normalize_model_item(item: str | dict[str, Any]) -> dict[str, Any]:
             "context_window": caps["context_window"],
             "max_tokens": caps["max_tokens"],
             "supports_reasoning": caps["supports_reasoning"],
+            "reasoning_profile": caps["reasoning_profile"],
             "reasoning_levels": list(caps["reasoning_levels"]),
         }
 

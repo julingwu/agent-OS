@@ -441,26 +441,45 @@ function inferModelMetadata(modelInput) {
 
   // 上下文大小推断
   let context_window = "128K";
-  if (name.includes("1m")) context_window = "1000K";
-  else if (name.includes("256k") || name.includes("deepseek") || name.includes("scnet")) context_window = "256K";
-  else if (name.includes("128k")) context_window = "128K";
-  else if (name.includes("32k")) context_window = "32K";
-  else if (name.includes("claude-3")) context_window = "200K";
+  if (["1m", "1000k", "1024k", "deepseek-flash", "deepseek-v4-pro", "glm-4-long", "long"].some((k) => name.includes(k))) {
+    context_window = "1M";
+  } else if (["claude-3", "o1", "o3", "o4"].some((k) => name.includes(k))) {
+    context_window = "200K";
+  } else if (name.includes("256k")) {
+    context_window = "256K";
+  } else if (["128k", "gpt-4o", "qwen"].some((k) => name.includes(k))) {
+    context_window = "128K";
+  } else if (["deepseek-chat", "deepseek-reasoner", "64k"].some((k) => name.includes(k))) {
+    context_window = "64K";
+  } else if (name.includes("32k")) {
+    context_window = "32K";
+  } else if (name.includes("16k")) {
+    context_window = "16K";
+  }
 
   // 最大输出推断
   let max_tokens = "8K";
-  if (name.includes("64k")) max_tokens = "64K";
-  else if (name.includes("scnet") || name.includes("deepseek") || name.includes("r1") || name.includes("o1")) max_tokens = "32K";
+  if (["100k", "o1", "o3", "o4"].some((k) => name.includes(k))) {
+    max_tokens = "100K";
+  } else if (["64k", "claude-3-7", "claude-3.7"].some((k) => name.includes(k))) {
+    max_tokens = "64K";
+  } else if (["32k", "deepseek-flash", "deepseek-v4-pro", "scnet"].some((k) => name.includes(k))) {
+    max_tokens = "32K";
+  } else if (["16k", "gpt-4o"].some((k) => name.includes(k))) {
+    max_tokens = "16K";
+  } else if (["4k", "glm-4-long"].some((k) => name.includes(k))) {
+    max_tokens = "4K";
+  }
 
   // 推理思考能力
-  const is_o_series = /\b(o1|o3|o4)\b/.test(name) || name.startsWith("o1-") || name.startsWith("o3-") || name.startsWith("o4-");
+  const is_o_series = ["o1", "o3", "o4"].some((k) => name.includes(k));
   const is_claude_thinking = name.includes("claude-3-7") || name.includes("claude-3.7") || (name.includes("claude") && name.includes("thinking"));
   const is_scnet = name.includes("scnet");
-  const is_common_reasoner = ["reasoner", "r1", "thinking", "qwq", "deepseek", "qwen-max"].some((k) => name.includes(k));
+  const is_reasoner = ["reasoner", "r1", "thinking", "qwq"].some((k) => name.includes(k));
 
   let supports_reasoning = false;
   let reasoning_profile = "deepseek";
-  let reasoning_levels = ["none", "standard", "max"];
+  let reasoning_levels = [];
 
   if (is_o_series) {
     supports_reasoning = true;
@@ -474,24 +493,31 @@ function inferModelMetadata(modelInput) {
     supports_reasoning = true;
     reasoning_profile = "openai";
     reasoning_levels = ["none", "low", "medium", "high"];
-  } else if (is_common_reasoner) {
+  } else if (is_reasoner) {
     supports_reasoning = true;
     reasoning_profile = "deepseek";
     reasoning_levels = ["none", "standard", "max"];
+  } else {
+    supports_reasoning = false;
+    reasoning_profile = "deepseek";
+    reasoning_levels = [];
   }
 
   // 若传入的是已有富对象，继承并规整自定义字段
   if (modelInput && typeof modelInput === "object") {
+    const sr = modelInput.supports_reasoning !== undefined ? !!modelInput.supports_reasoning : supports_reasoning;
+    const rLevels = Array.isArray(modelInput.reasoning_levels) && modelInput.reasoning_levels.length > 0
+      ? modelInput.reasoning_levels
+      : (sr ? (reasoning_levels.length > 0 ? reasoning_levels : ["none", "standard", "max"]) : []);
+    const rProfile = modelInput.reasoning_profile || (sr ? (reasoning_profile || getProfileFromLevels(rLevels)) : "deepseek");
     return {
       id: trimmedId,
       name: (modelInput.name || modelInput.label || trimmedId).trim() || trimmedId,
       context_window: modelInput.context_window ? String(modelInput.context_window).trim() : context_window,
       max_tokens: modelInput.max_tokens ? String(modelInput.max_tokens).trim() : max_tokens,
-      supports_reasoning: modelInput.supports_reasoning !== undefined ? !!modelInput.supports_reasoning : supports_reasoning,
-      reasoning_profile: modelInput.reasoning_profile || getProfileFromLevels(modelInput.reasoning_levels || reasoning_levels),
-      reasoning_levels: Array.isArray(modelInput.reasoning_levels) && modelInput.reasoning_levels.length > 0
-        ? modelInput.reasoning_levels
-        : (supports_reasoning ? reasoning_levels : []),
+      supports_reasoning: sr,
+      reasoning_profile: rProfile,
+      reasoning_levels: sr ? rLevels : [],
     };
   }
 
@@ -3049,7 +3075,7 @@ const PROVIDER_PRESETS = [
     label: "DeepSeek 官方",
     baseUrl: "https://api.deepseek.com",
     defaultModel: "deepseek-chat",
-    models: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash"],
+    models: ["deepseek-chat", "deepseek-reasoner"],
   },
   {
     id: "siliconflow",
@@ -3147,11 +3173,29 @@ function DshModelCatalogEditor({
   onFetchModels,
   fetchingModels = false,
   fetchStatus = null,
+  onShowNotice = null,
 }) {
+  const [localNotice, setLocalNotice] = useState(null);
+
   const updateModel = (idx, patch) => {
     const next = [...models];
     next[idx] = { ...next[idx], ...patch };
     onChangeModels(next);
+  };
+
+  const isKnownModelId = (id) => {
+    const raw = (id || "").trim().toLowerCase();
+    if (!raw) return false;
+    const knownExact = [
+      "deepseek-chat", "deepseek-reasoner", "deepseek-flash", "deepseek-v4-pro",
+      "gpt-4o", "gpt-4o-mini", "gpt-4.1", "o1", "o1-mini", "o1-preview", "o3", "o3-mini", "o4",
+      "claude-3-7-sonnet", "claude-3-5-sonnet", "claude-3-opus",
+      "qwen-plus", "qwen-max", "qwen-turbo", "qwen2.5",
+      "glm-4-plus", "glm-4-flash", "glm-4-long",
+      "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"
+    ];
+    if (knownExact.includes(raw)) return true;
+    return ["deepseek-", "gpt-4", "claude-3", "o1-", "o3-", "glm-4"].some((p) => raw.startsWith(p));
   };
 
   const handleIdChange = (idx, newId) => {
@@ -3160,16 +3204,19 @@ function DshModelCatalogEditor({
     const isNameSynced = !m?.name || m?.name === oldId;
     const newName = isNameSynced ? newId : m.name;
 
-    let extra = {};
-    if ((!m?.context_window || !m?.max_tokens) && newId.trim()) {
-      const inf = inferModelMetadata(newId);
-      extra = {
-        context_window: m?.context_window || inf.context_window,
-        max_tokens: m?.max_tokens || inf.max_tokens,
-        supports_reasoning: m?.supports_reasoning !== undefined ? m.supports_reasoning : inf.supports_reasoning,
-        reasoning_profile: inf.reasoning_profile,
-        reasoning_levels: inf.reasoning_levels,
-      };
+    let extra = { _idDirty: true };
+    if (isKnownModelId(newId) || (!m?.context_window || !m?.max_tokens)) {
+      if (newId.trim()) {
+        const inf = inferModelMetadata(newId);
+        extra = {
+          _idDirty: false,
+          context_window: inf.context_window,
+          max_tokens: inf.max_tokens,
+          supports_reasoning: inf.supports_reasoning,
+          reasoning_profile: inf.reasoning_profile,
+          reasoning_levels: inf.reasoning_levels,
+        };
+      }
     }
 
     updateModel(idx, {
@@ -3180,6 +3227,23 @@ function DshModelCatalogEditor({
 
     if (!defaultModel || defaultModel === oldId) {
       onChangeDefaultModel(newId);
+    }
+  };
+
+  const handleIdBlur = (idx) => {
+    const m = models[idx];
+    const id = (m?.id || "").trim();
+    if (!id) return;
+    if (m._idDirty || !m.context_window || !m.max_tokens) {
+      const inf = inferModelMetadata(id);
+      updateModel(idx, {
+        _idDirty: false,
+        context_window: inf.context_window,
+        max_tokens: inf.max_tokens,
+        supports_reasoning: inf.supports_reasoning,
+        reasoning_profile: inf.reasoning_profile,
+        reasoning_levels: inf.reasoning_levels,
+      });
     }
   };
 
@@ -3195,6 +3259,30 @@ function DshModelCatalogEditor({
       reasoning_profile: inf.reasoning_profile,
       reasoning_levels: inf.reasoning_levels,
     });
+  };
+
+  const handleAutoInferAll = () => {
+    if (!models || models.length === 0) return;
+    const next = models.map((m) => {
+      const id = (m?.id || "").trim();
+      if (!id) return m;
+      const inf = inferModelMetadata(id);
+      return {
+        ...m,
+        context_window: inf.context_window,
+        max_tokens: inf.max_tokens,
+        supports_reasoning: inf.supports_reasoning,
+        reasoning_profile: inf.reasoning_profile,
+        reasoning_levels: inf.reasoning_levels,
+      };
+    });
+    onChangeModels(next);
+    const msg = `✓ 已一键自适应当前 ${next.length} 个模型的上下文与推理选项`;
+    setLocalNotice(msg);
+    setTimeout(() => setLocalNotice(null), 4000);
+    if (typeof onShowNotice === "function") {
+      onShowNotice("success", msg);
+    }
   };
 
   const removeModel = (idx) => {
@@ -3258,6 +3346,14 @@ function DshModelCatalogEditor({
         <div className="dsh-catalog-actions">
           <button
             type="button"
+            className="dsh-auto-infer-btn"
+            onClick={handleAutoInferAll}
+            title="根据模型 ID 智能自适应推断所有模型的上下文窗口、最大输出与推理档位"
+          >
+            🪄 一键自适应规格
+          </button>
+          <button
+            type="button"
             className="dsh-restore-btn"
             onClick={onRestoreDefaults}
             title="恢复当前提供商内置默认模型配置"
@@ -3277,9 +3373,9 @@ function DshModelCatalogEditor({
         </div>
       </div>
 
-      {fetchStatus && (
-        <div className={`dsh-fetch-status ${fetchStatus.ok ? "ok" : "err"}`}>
-          {fetchStatus.msg}
+      {(localNotice || fetchStatus) && (
+        <div className={`dsh-fetch-status ${localNotice ? "ok" : (fetchStatus.ok ? "ok" : "err")}`}>
+          {localNotice || fetchStatus.msg}
         </div>
       )}
 
@@ -3301,6 +3397,7 @@ function DshModelCatalogEditor({
                     value={m.id || ""}
                     placeholder="模型 ID (如 deepseek-chat)"
                     onChange={(e) => handleIdChange(idx, e.target.value)}
+                    onBlur={() => handleIdBlur(idx)}
                   />
                   <input
                     type="text"
@@ -3332,7 +3429,7 @@ function DshModelCatalogEditor({
                     type="button"
                     className="dsh-card-icon-btn infer-btn"
                     onClick={() => handleInferModel(idx)}
-                    title="根据模型 ID 一键自动推断上下文与推理选项"
+                    title="自适应此模型上下文与推理配置"
                   >
                     🪄
                   </button>
@@ -3357,6 +3454,21 @@ function DshModelCatalogEditor({
                       placeholder="如 128K, 256K"
                       onChange={(e) => updateModel(idx, { context_window: e.target.value })}
                     />
+                    <div className="dsh-quick-pills">
+                      {["64K", "128K", "256K", "1M"].map((cw) => {
+                        const active = (m.context_window || "").toUpperCase() === cw;
+                        return (
+                          <button
+                            key={cw}
+                            type="button"
+                            className={`dsh-quick-pill ${active ? "active" : ""}`}
+                            onClick={() => updateModel(idx, { context_window: cw })}
+                          >
+                            {cw}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                   <div className="dsh-card-field">
                     <label className="dsh-card-label">最大输出 token 数</label>
@@ -3367,6 +3479,21 @@ function DshModelCatalogEditor({
                       placeholder="如 8K, 32K"
                       onChange={(e) => updateModel(idx, { max_tokens: e.target.value })}
                     />
+                    <div className="dsh-quick-pills">
+                      {["4K", "8K", "16K", "32K", "64K"].map((mt) => {
+                        const active = (m.max_tokens || "").toUpperCase() === mt;
+                        return (
+                          <button
+                            key={mt}
+                            type="button"
+                            className={`dsh-quick-pill ${active ? "active" : ""}`}
+                            onClick={() => updateModel(idx, { max_tokens: mt })}
+                          >
+                            {mt}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
 
@@ -3637,32 +3764,21 @@ function DshModelsPane({ onReloadAll, models }) {
             msg: "远端未返回可用模型列表，请手动输入添加",
           });
         } else {
+          const successMsg = `✓ 成功获取 ${fetched.length} 个远端可用模型，已自适应参数并同步至列表 (${res.latency_ms || 0}ms)`;
           setFetchStatus({
             ok: true,
-            msg: `✓ 成功获取并合并 ${fetched.length} 个远端模型 (${res.latency_ms || 0}ms)`,
+            msg: successMsg,
           });
-          const merger = (prev) => {
-            const existingIds = new Set(prev.map((m) => m.id));
-            const next = [...prev];
-            for (const item of fetched) {
-              if (!existingIds.has(item.id)) {
-                next.push(item);
-                existingIds.add(item.id);
-              }
-            }
-            return next;
-          };
+          showNotice("success", successMsg);
 
           if (formTab === "preset") {
-            setPresetModels(merger);
-            if (!presetDefaultModel && fetched.length > 0) {
-              setPresetDefaultModel(fetched[0].id);
-            }
+            setPresetModels(fetched);
+            const exists = fetched.some((m) => m.id === presetDefaultModel);
+            setPresetDefaultModel(exists ? presetDefaultModel : (fetched[0]?.id || ""));
           } else {
-            setCustomModels(merger);
-            if (!customDefaultModel && fetched.length > 0) {
-              setCustomDefaultModel(fetched[0].id);
-            }
+            setCustomModels(fetched);
+            const exists = fetched.some((m) => m.id === customDefaultModel);
+            setCustomDefaultModel(exists ? customDefaultModel : (fetched[0]?.id || ""));
           }
         }
       } else {
@@ -3994,6 +4110,7 @@ function DshModelsPane({ onReloadAll, models }) {
                       onFetchModels={() => fetchRemoteModels(presetBaseUrl, presetApiKey, presetId)}
                       fetchingModels={fetchingModels}
                       fetchStatus={fetchStatus}
+                      onShowNotice={showNotice}
                     />
                   </div>
                 )}
@@ -4084,6 +4201,7 @@ function DshModelsPane({ onReloadAll, models }) {
                 onFetchModels={() => fetchRemoteModels(customBaseUrl, customApiKey, customProtocol)}
                 fetchingModels={fetchingModels}
                 fetchStatus={fetchStatus}
+                onShowNotice={showNotice}
               />
             </>
           )}

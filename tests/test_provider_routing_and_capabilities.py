@@ -120,7 +120,7 @@ def test_provider_routing_isolation():
 def test_model_capabilities_inference():
     """测试 2：模型能力自动推断测试。
     
-    验证 SCNet-Max、deepseek-flash、o3-mini、qwen-turbo 的思考能力与上下文推断。
+    验证 SCNet-Max、deepseek-flash、deepseek-chat、deepseek-reasoner、deepseek-v4-pro、o3-mini、qwen-turbo 的思考能力与上下文推断。
     """
     # 1. SCNet-Max
     scnet_caps = llm_config.infer_model_capabilities("SCNet-Max")
@@ -129,21 +129,38 @@ def test_model_capabilities_inference():
     assert scnet_caps["supports_reasoning"] is True
     assert scnet_caps["reasoning_levels"] == ["none", "low", "medium", "high"]
 
-    # 2. deepseek-flash
+    # 2. deepseek-flash: context_window == "1M", max_tokens == "32K"
     ds_caps = llm_config.infer_model_capabilities("deepseek-flash")
-    assert ds_caps["context_window"] == "256K"
+    assert ds_caps["context_window"] == "1M"
     assert ds_caps["max_tokens"] == "32K"
-    assert ds_caps["supports_reasoning"] is True
-    assert ds_caps["reasoning_levels"] == ["none", "standard", "max"]
+    assert ds_caps["supports_reasoning"] is False
+    assert ds_caps["reasoning_levels"] == []
 
-    # 3. o3-mini
+    # 3. deepseek-chat: context_window == "64K", supports_reasoning is False
+    ds_chat_caps = llm_config.infer_model_capabilities("deepseek-chat")
+    assert ds_chat_caps["context_window"] == "64K"
+    assert ds_chat_caps["supports_reasoning"] is False
+    assert ds_chat_caps["reasoning_levels"] == []
+
+    # 4. deepseek-reasoner: context_window == "64K", supports_reasoning is True
+    ds_reasoner_caps = llm_config.infer_model_capabilities("deepseek-reasoner")
+    assert ds_reasoner_caps["context_window"] == "64K"
+    assert ds_reasoner_caps["supports_reasoning"] is True
+    assert ds_reasoner_caps["reasoning_levels"] == ["none", "standard", "max"]
+
+    # 5. deepseek-v4-pro: context_window == "1M"
+    ds_v4_caps = llm_config.infer_model_capabilities("deepseek-v4-pro")
+    assert ds_v4_caps["context_window"] == "1M"
+    assert ds_v4_caps["max_tokens"] == "32K"
+
+    # 6. o3-mini
     o3_caps = llm_config.infer_model_capabilities("o3-mini")
-    assert o3_caps["context_window"] == "128K"
-    assert o3_caps["max_tokens"] == "8K"
+    assert o3_caps["context_window"] == "200K"
+    assert o3_caps["max_tokens"] == "100K"
     assert o3_caps["supports_reasoning"] is True
     assert o3_caps["reasoning_levels"] == ["low", "medium", "high"]
 
-    # 4. qwen-turbo
+    # 7. qwen-turbo
     qwen_caps = llm_config.infer_model_capabilities("qwen-turbo")
     assert qwen_caps["context_window"] == "128K"
     assert qwen_caps["max_tokens"] == "8K"
@@ -151,9 +168,9 @@ def test_model_capabilities_inference():
     assert qwen_caps["reasoning_levels"] == []
 
     # 额外边界覆盖
-    # 1m -> "1000K"
+    # 1m -> "1M"
     m1_caps = llm_config.infer_model_capabilities("claude-1m-preview")
-    assert m1_caps["context_window"] == "1000K"
+    assert m1_caps["context_window"] == "1M"
 
     # 64k -> "64K"
     k64_caps = llm_config.infer_model_capabilities("custom-64k")
@@ -175,6 +192,19 @@ def test_model_capabilities_inference():
     assert norm_dict["id"] == "my-custom-model"
     assert norm_dict["name"] == "Custom Model Label"
     assert norm_dict["context_window"] == "512K"
+
+    # 规整函数对 1000K, 1M 的标准化支持
+    norm_1000k = llm_config.normalize_model_item({
+        "id": "test-1000k",
+        "context_window": "1000K",
+    })
+    assert norm_1000k["context_window"] == "1M"
+
+    norm_1m = llm_config.normalize_model_item({
+        "id": "test-1m",
+        "context_window": "1M",
+    })
+    assert norm_1m["context_window"] == "1M"
 
 
 def test_llm_url_and_key_dispatch(monkeypatch):
@@ -225,8 +255,11 @@ def test_llm_url_and_key_dispatch(monkeypatch):
     levels_scnet = llm.get_model_reasoning_levels("SCNet-Max")
     assert levels_scnet == ["none", "low", "medium", "high"]
 
-    levels_ds = llm.get_model_reasoning_levels("deepseek-chat")
-    assert levels_ds == ["none", "standard", "max"]
+    levels_ds_reasoner = llm.get_model_reasoning_levels("deepseek-reasoner")
+    assert levels_ds_reasoner == ["none", "standard", "max"]
+
+    levels_ds_chat = llm.get_model_reasoning_levels("deepseek-chat")
+    assert levels_ds_chat == []
 
 
 def test_chat_and_chat_stream_provider_dispatch(monkeypatch):
@@ -384,3 +417,35 @@ def test_get_models_returns_rich_items(client, device):
     qwen_item = items_by_id["qwen-turbo"]
     assert qwen_item["supports_reasoning"] is False
     assert qwen_item["reasoning_levels"] == []
+
+
+def test_models_list_prioritizes_configured_models_and_suppresses_presets(client, device):
+    """测试 6：GET /v1/models 当激活提供商有显式配置的 models 时，优先返回且不注入硬编码预设。"""
+    # 更新激活的 DeepSeek 提供商，用户只显式配置了 ["deepseek-chat"]，而不是包含 preset 的 flash / reasoner
+    res_save = client.post(
+        "/v1/settings/providers",
+        headers=_auth(device),
+        json={
+            "id": "prv_deepseek",
+            "name": "DeepSeek Custom",
+            "kind": "deepseek",
+            "preset_id": "deepseek",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "sk-custom-ds-key",
+            "model": "deepseek-chat",
+            "models": ["deepseek-chat"],
+            "is_active": True,
+        },
+    )
+    assert res_save.status_code == 200
+
+    res = client.get("/v1/models", headers=_auth(device))
+    assert res.status_code == 200
+    data = res.json()
+    model_ids = [it["id"] for it in data["items"]]
+
+    # 显式配置的 deepseek-chat 必须存在且排在首位
+    assert model_ids[0] == "deepseek-chat"
+    # 硬编码预设里的 deepseek-reasoner 和 deepseek-flash 不应该被注入进来
+    assert "deepseek-reasoner" not in model_ids
+    assert "deepseek-flash" not in model_ids
