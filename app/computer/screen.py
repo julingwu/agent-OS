@@ -78,6 +78,11 @@ def geometry(*, refresh: bool = False) -> tuple[int, int]:
         return _geo_cache
 
 
+def resolution(*, refresh: bool = False) -> tuple[int, int]:
+    """当前桌面分辨率 (w, h)，geometry() 的别名。"""
+    return geometry(refresh=refresh)
+
+
 def _generate_placeholder_frame(w: int, h: int, target_w: int) -> bytes:
     """绘制 AgentOS 暗黑工作区平滑占位帧（15, 23, 42 科技蓝灰），绝不抛出 ffmpeg 异常。"""
     target_h = int(h * (target_w / w)) if w else 540
@@ -91,11 +96,11 @@ def _generate_placeholder_frame(w: int, h: int, target_w: int) -> bytes:
 
 
 def grab_jpeg(max_w: int = 1280, quality: int = 5) -> bytes:
-    """抓一帧并压成 JPEG。优先原生截图，异常安全降级，绝不抛出 ffmpeg 缺失异常。"""
+    """抓一帧并压成 JPEG。优先真实桌面采集，支持 Windows 与 Linux 生产环境。"""
     w, h = geometry()
     target_w = max(320, min(int(max_w), w))
 
-    # 截帧优先级 1: Windows 环境优先尝试 PIL.ImageGrab.grab()
+    # 1. Windows 环境：优先尝试 PIL.ImageGrab.grab()
     if os.name == "nt":
         try:
             img = ImageGrab.grab()
@@ -113,9 +118,11 @@ def grab_jpeg(max_w: int = 1280, quality: int = 5) -> bytes:
                 return buf.getvalue()
         except Exception:
             pass
+        # Windows 无头或截屏异常时降级为平滑占位帧
+        return _generate_placeholder_frame(w, h, target_w)
 
-    # 截帧优先级 2: Linux 环境且 ffmpeg 与 DISPLAY 存在，走原 ffmpeg x11grab
-    if os.name != "nt" and shutil.which("ffmpeg") and os.environ.get("DISPLAY"):
+    # 2. Linux 生产环境：严格走原正常的 ffmpeg x11grab
+    if shutil.which("ffmpeg"):
         scale = f"scale={target_w}:-2:flags=fast_bilinear"
         cmd = [
             "ffmpeg", "-nostdin", "-loglevel", "error",
@@ -126,16 +133,15 @@ def grab_jpeg(max_w: int = 1280, quality: int = 5) -> bytes:
         ]
         try:
             out = subprocess.run(cmd, env=_env(), capture_output=True, timeout=15)
-            if out.returncode == 0 and out.stdout:
-                return out.stdout
-        except (OSError, subprocess.SubprocessError):
-            pass
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise CaptureUnavailable(str(exc)) from exc
+        if out.returncode == 0 and out.stdout:
+            return out.stdout
+        detail = (out.stderr or b"").decode("utf-8", "replace")[:400]
+        raise CaptureUnavailable(detail or "ffmpeg produced no frame")
 
-    # 截帧优先级 3: 异常降级兜底，绘制科技蓝灰暗黑工作区平滑占位帧
-    try:
-        return _generate_placeholder_frame(w, h, target_w)
-    except Exception as exc:
-        raise CaptureUnavailable(f"screen capture failed: {exc}") from exc
+    # 3. Linux 无 ffmpeg 极简/容器环境兜底
+    return _generate_placeholder_frame(w, h, target_w)
 
 
 def probe() -> dict:
