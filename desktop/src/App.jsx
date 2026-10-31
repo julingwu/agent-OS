@@ -3579,6 +3579,7 @@ function DshModelsPane({ onReloadAll, models }) {
   const [fetchStatus, setFetchStatus] = useState(null);
   const [saving, setSaving] = useState(false);
   const formRef = useRef(null);
+  const initialLoadedRef = useRef(false);
 
   const showNotice = (type, text) => {
     setNotice({ type, text });
@@ -3592,6 +3593,29 @@ function DshModelsPane({ onReloadAll, models }) {
       if (res && res.providers) {
         setProviders(res.providers);
         setActiveProviderId(res.active_provider_id || "");
+
+        // Initial mount auto-load: if default preset exists in configured providers, load its settings
+        if (!initialLoadedRef.current) {
+          initialLoadedRef.current = true;
+          const existing = res.providers.find(
+            (p) => p.preset_id === "deepseek" || p.kind === "deepseek"
+          );
+          if (existing) {
+            setEditingId(existing.id);
+            setPresetName(existing.name || "DeepSeek 官方");
+            setPresetBaseUrl(existing.base_url || "https://api.deepseek.com");
+            setPresetApiKey("");
+            setPresetHasKey(!!existing.has_key);
+            setPresetKeyMasked(existing.api_key_masked || existing.api_key || "");
+            const presetDef = PROVIDER_PRESETS.find((x) => x.id === "deepseek") || PROVIDER_PRESETS[0];
+            const pModels = (existing.models && existing.models.length > 0)
+              ? normalizeModelList(existing.models)
+              : (presetDef.models || []).map(inferModelMetadata);
+            setPresetModels(pModels);
+            setPresetDefaultModel(existing.model || (pModels[0] && pModels[0].id) || "deepseek-chat");
+            setMakeDefault(existing.id === res.active_provider_id || !!existing.is_active);
+          }
+        }
       }
     } catch (err) {
       console.error("loadProviders error:", err);
@@ -3674,13 +3698,27 @@ function DshModelsPane({ onReloadAll, models }) {
     }, 100);
   };
 
+  const handleResetCustomForm = () => {
+    setEditingId(null);
+    setCustomProviderId("");
+    setCustomName("");
+    setCustomBaseUrl("");
+    setCustomProtocol("openai");
+    setCustomApiKey("");
+    setCustomHasKey(false);
+    setCustomKeyMasked("");
+    setCustomModels([]);
+    setCustomDefaultModel("");
+    setMakeDefault(false);
+    setFetchStatus(null);
+  };
+
   const resetForm = () => {
     setEditingId(null);
     setFetchStatus(null);
     setMakeDefault(false);
     if (formTab === "preset") {
-      const def = PROVIDER_PRESETS[0];
-      setPresetId(def.id);
+      const def = PROVIDER_PRESETS.find((x) => x.id === presetId) || PROVIDER_PRESETS[0];
       setPresetName(def.label);
       setPresetBaseUrl(def.baseUrl);
       setPresetApiKey("");
@@ -3689,32 +3727,41 @@ function DshModelsPane({ onReloadAll, models }) {
       setPresetModels(def.models.map(inferModelMetadata));
       setPresetDefaultModel(def.defaultModel);
     } else {
-      setCustomProviderId("");
-      setCustomName("");
-      setCustomBaseUrl("");
-      setCustomProtocol("openai");
-      setCustomApiKey("");
-      setCustomHasKey(false);
-      setCustomKeyMasked("");
-      setCustomModels([]);
-      setCustomDefaultModel("");
+      handleResetCustomForm();
     }
   };
 
   const handlePresetChange = (pid) => {
-    const preset = PROVIDER_PRESETS.find((x) => x.id === pid);
-    if (!preset) return;
+    const preset = PROVIDER_PRESETS.find((x) => x.id === pid) || PROVIDER_PRESETS[0];
     setPresetId(pid);
-    setPresetName(preset.label);
-    setPresetBaseUrl(preset.baseUrl);
-    const defModels = preset.models.map(inferModelMetadata);
-    setPresetModels(defModels);
-    setPresetDefaultModel(preset.defaultModel || (defModels[0] && defModels[0].id) || "");
     setFetchStatus(null);
-    if (!editingId) {
+
+    // Check if providers already has a configured provider for pid
+    const existing = providers.find((p) => p.preset_id === pid || p.kind === pid);
+    if (existing) {
+      setEditingId(existing.id);
+      setPresetName(existing.name || preset.label);
+      setPresetBaseUrl(existing.base_url || preset.baseUrl || "");
+      setPresetApiKey("");
+      setPresetHasKey(!!existing.has_key);
+      setPresetKeyMasked(existing.api_key_masked || existing.api_key || "");
+      const pModels = (existing.models && existing.models.length > 0)
+        ? normalizeModelList(existing.models)
+        : (preset.models || []).map(inferModelMetadata);
+      setPresetModels(pModels);
+      setPresetDefaultModel(existing.model || (pModels[0] && pModels[0].id) || preset.defaultModel || "");
+      setMakeDefault(existing.id === activeProviderId || !!existing.is_active);
+    } else {
+      setEditingId(null);
+      setPresetName(preset.label);
+      setPresetBaseUrl(preset.baseUrl || "");
       setPresetApiKey("");
       setPresetHasKey(false);
       setPresetKeyMasked("");
+      const defModels = (preset.models || []).map(inferModelMetadata);
+      setPresetModels(defModels);
+      setPresetDefaultModel(preset.defaultModel || (defModels[0] && defModels[0].id) || "");
+      setMakeDefault(false);
     }
   };
 
@@ -3840,8 +3887,19 @@ function DshModelsPane({ onReloadAll, models }) {
           setSaving(false);
           return;
         }
+        let targetId = editingId;
+        if (!targetId) {
+          const existing = providers.find(
+            (p) => p.preset_id === presetId || p.kind === presetId
+          );
+          if (existing) {
+            targetId = existing.id;
+          } else {
+            targetId = presetId;
+          }
+        }
         payload = {
-          id: editingId || `prv_${presetId}_${Date.now().toString(36)}`,
+          id: targetId,
           name: (presetName || preset.label).trim(),
           kind: presetId,
           preset_id: presetId,
@@ -3894,7 +3952,41 @@ function DshModelsPane({ onReloadAll, models }) {
 
       if (res && res.ok) {
         showNotice("success", `✓ 提供商 "${payload.name}" 保存成功`);
-        resetForm();
+
+        const savedProvider = res.provider || {};
+        const savedId = savedProvider.id || payload.id;
+        setEditingId(savedId);
+
+        if (formTab === "preset") {
+          const hasKey = savedProvider.has_key !== undefined
+            ? !!savedProvider.has_key
+            : (!!payload.api_key || presetHasKey);
+          setPresetHasKey(hasKey);
+          if (savedProvider.api_key_masked) {
+            setPresetKeyMasked(savedProvider.api_key_masked);
+          } else if (payload.api_key) {
+            const rawK = payload.api_key;
+            setPresetKeyMasked(
+              rawK.length > 8 ? `${rawK.slice(0, 3)}****${rawK.slice(-4)}` : "********"
+            );
+          }
+          setPresetApiKey("");
+        } else {
+          const hasKey = savedProvider.has_key !== undefined
+            ? !!savedProvider.has_key
+            : (!!payload.api_key || customHasKey);
+          setCustomHasKey(hasKey);
+          if (savedProvider.api_key_masked) {
+            setCustomKeyMasked(savedProvider.api_key_masked);
+          } else if (payload.api_key) {
+            const rawK = payload.api_key;
+            setCustomKeyMasked(
+              rawK.length > 8 ? `${rawK.slice(0, 3)}****${rawK.slice(-4)}` : "********"
+            );
+          }
+          setCustomApiKey("");
+        }
+
         await loadProviders();
         if (onReloadAll) await onReloadAll();
       } else {
@@ -4014,6 +4106,10 @@ function DshModelsPane({ onReloadAll, models }) {
             onClick={() => {
               setFormTab("preset");
               setFetchStatus(null);
+              const curr = providers.find((p) => p.id === editingId);
+              if (curr && (curr.kind === "custom" || curr.preset_id === "custom")) {
+                handlePresetChange(presetId);
+              }
             }}
           >
             第三方模型提供商
@@ -4024,6 +4120,10 @@ function DshModelsPane({ onReloadAll, models }) {
             onClick={() => {
               setFormTab("custom");
               setFetchStatus(null);
+              const curr = providers.find((p) => p.id === editingId);
+              if (curr && (curr.kind !== "custom" && curr.preset_id !== "custom")) {
+                setEditingId(null);
+              }
             }}
           >
             自定义模型 API
@@ -4119,6 +4219,41 @@ function DshModelsPane({ onReloadAll, models }) {
           ) : (
             <>
               <p className="dsh-form-desc">连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。</p>
+
+              {editingId && (
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "8px 12px",
+                  marginBottom: "12px",
+                  background: "rgba(99, 102, 241, 0.08)",
+                  border: "1px dashed rgba(99, 102, 241, 0.4)",
+                  borderRadius: "6px"
+                }}>
+                  <span style={{ fontSize: "12px", color: "var(--text-sub, #94a3b8)" }}>
+                    正在编辑自定义提供商: <strong style={{ color: "var(--text-main, #e2e8f0)" }}>{customName || customProviderId || editingId}</strong>
+                  </span>
+                  <button
+                    type="button"
+                    className="dsh-btn-sm"
+                    style={{
+                      background: "#6366f1",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "4px 10px",
+                      borderRadius: "4px",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                      fontWeight: 500
+                    }}
+                    onClick={handleResetCustomForm}
+                    title="清空当前自定义表单以添加新的提供商"
+                  >
+                    清空表单 / ＋ 添加新的自定义提供商
+                  </button>
+                </div>
+              )}
 
               <div className="dsh-form-group">
                 <label className="dsh-label">Provider ID (唯一标识)</label>
@@ -4216,6 +4351,20 @@ function DshModelsPane({ onReloadAll, models }) {
           </label>
 
           <div className="dsh-form-actions">
+            {formTab === "custom" && editingId && (
+              <button
+                type="button"
+                className="dsh-btn"
+                style={{
+                  marginRight: "auto",
+                  borderColor: "rgba(99, 102, 241, 0.6)",
+                  color: "#818cf8"
+                }}
+                onClick={handleResetCustomForm}
+              >
+                清空表单 / ＋ 添加新的自定义提供商
+              </button>
+            )}
             <button
               type="button"
               className="dsh-btn cancel"

@@ -296,6 +296,32 @@ def _sync_active_provider_dual_write(conn, provider: dict) -> None:
         )
 
 
+def _is_duplicate_provider(p1: dict, p2: dict) -> bool:
+    preset1 = (p1.get("preset_id") or p1.get("kind") or "").strip().lower()
+    preset2 = (p2.get("preset_id") or p2.get("kind") or "").strip().lower()
+    if preset1 and preset2 and preset1 != "custom" and preset2 != "custom" and preset1 == preset2:
+        return True
+
+    b1 = (p1.get("base_url") or "").strip().rstrip("/")
+    b2 = (p2.get("base_url") or "").strip().rstrip("/")
+    k1 = (p1.get("api_key") or "").strip()
+    k2 = (p2.get("api_key") or "").strip()
+    if b1 and b2 and b1 == b2:
+        if k1 == k2:
+            return True
+        is_masked1 = "****" in k1 or "..." in k1
+        is_masked2 = "****" in k2 or "..." in k2
+        if (is_masked1 and not is_masked2 and (k1 == llm_config.mask_key(k2))) or (is_masked2 and not is_masked1 and (k2 == llm_config.mask_key(k1))):
+            return True
+    return False
+
+
+def _provider_rank(p: dict, active_id: str) -> tuple[int, str]:
+    is_active = (p.get("id") == active_id) or bool(p.get("is_active"))
+    updated = str(p.get("updated_at") or p.get("created_at") or "")
+    return (1 if is_active else 0, updated)
+
+
 def _get_or_init_providers(conn) -> tuple[list[dict], str]:
     """Retrieve all providers from app_settings, initializing from existing settings if empty."""
     llm_config.migrate_unlimited_default_if_needed(conn)
@@ -357,6 +383,82 @@ def _get_or_init_providers(conn) -> tuple[list[dict], str]:
         )
         conn.commit()
         llm_config.invalidate_cache()
+    else:
+        # Deduplication for existing providers
+        deduped: list[dict] = []
+        cleaned = False
+        for p in providers:
+            if not isinstance(p, dict):
+                cleaned = True
+                continue
+            match_idx = -1
+            for i, existing in enumerate(deduped):
+                if _is_duplicate_provider(p, existing):
+                    match_idx = i
+                    break
+            if match_idx == -1:
+                deduped.append(p)
+            else:
+                cleaned = True
+                existing = deduped[match_idx]
+                p_rank = _provider_rank(p, active_provider_id)
+                ext_rank = _provider_rank(existing, active_provider_id)
+                if p_rank > ext_rank:
+                    winner = p
+                    loser = existing
+                    deduped[match_idx] = winner
+                else:
+                    winner = existing
+                    loser = p
+
+                # Merge missing credentials or models from loser to winner
+                w_key = str(winner.get("api_key") or "").strip()
+                l_key = str(loser.get("api_key") or "").strip()
+                if (not w_key or "****" in w_key or "..." in w_key) and l_key and "****" not in l_key and "..." not in l_key:
+                    winner["api_key"] = l_key
+                if not winner.get("models") and loser.get("models"):
+                    winner["models"] = loser["models"]
+                if loser.get("id") == active_provider_id or loser.get("is_active"):
+                    winner["is_active"] = True
+                    active_provider_id = winner["id"]
+
+        if deduped:
+            # Ensure an active provider exists
+            has_active = any(p.get("id") == active_provider_id or p.get("is_active") for p in deduped)
+            if not has_active:
+                deduped[0]["is_active"] = True
+                active_provider_id = deduped[0]["id"]
+                cleaned = True
+            elif not any(p.get("id") == active_provider_id for p in deduped):
+                for p in deduped:
+                    if p.get("is_active"):
+                        active_provider_id = p["id"]
+                        cleaned = True
+                        break
+
+            # Synchronize is_active flag across deduped list
+            for p in deduped:
+                p["is_active"] = (p.get("id") == active_provider_id)
+
+        if cleaned:
+            now = _now()
+            conn.execute(
+                "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('llm_providers', ?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at",
+                (json.dumps(deduped, ensure_ascii=False), now),
+            )
+            conn.execute(
+                "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('active_provider_id', ?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at",
+                (json.dumps(active_provider_id, ensure_ascii=False), now),
+            )
+            active_prv = next((p for p in deduped if p.get("id") == active_provider_id), None)
+            if active_prv:
+                _sync_active_provider_dual_write(conn, active_prv)
+            conn.commit()
+            llm_config.invalidate_cache()
+
+        providers = deduped
 
     return providers, active_provider_id
 
@@ -524,12 +626,47 @@ def save_provider(body: ProviderSaveIn, device: dict = Depends(require_device)) 
         providers, active_id = _get_or_init_providers(conn)
 
         target_provider = None
+
+        # 1. Search by body.id == p.get("id")
         if body.id:
             for p in providers:
                 if p.get("id") == body.id:
                     target_provider = p
                     break
 
+        # 2. If not found and body.preset_id is a known preset (not "custom"):
+        #    search for p.get("preset_id") == body.preset_id or p.get("kind") == body.preset_id
+        if target_provider is None:
+            req_preset = (body.preset_id or body.kind or "").strip().lower()
+            if req_preset and req_preset != "custom" and req_preset in llm_config.PROVIDER_PRESETS:
+                for p in providers:
+                    p_preset = str(p.get("preset_id") or p.get("kind") or "").strip().lower()
+                    if p_preset == req_preset:
+                        target_provider = p
+                        break
+
+        # 3. If not found and body.base_url is provided:
+        #    check if any existing provider matches both base_url and api_key (if key provided)
+        if target_provider is None and body.base_url and body.base_url.strip():
+            req_base = body.base_url.strip().rstrip("/")
+            req_key = (body.api_key or "").strip()
+            is_masked_key = "****" in req_key or "..." in req_key
+            for p in providers:
+                p_base = (p.get("base_url") or "").strip().rstrip("/")
+                p_key = (p.get("api_key") or "").strip()
+                if p_base == req_base:
+                    if not req_key:
+                        target_provider = p
+                        break
+                    elif not is_masked_key and p_key == req_key:
+                        target_provider = p
+                        break
+                    elif is_masked_key and (p_key == req_key or llm_config.mask_key(p_key) == req_key):
+                        target_provider = p
+                        break
+
+        # 4. If an existing provider is matched by any of the above, set target_provider = p
+        #    and UPDATE it in place, do NOT create a new duplicate provider!
         if target_provider is not None:
             # Update existing
             if body.name is not None:
@@ -548,6 +685,14 @@ def save_provider(body: ProviderSaveIn, device: dict = Depends(require_device)) 
             in_key = (body.api_key or "").strip()
             if in_key and "****" not in in_key and "..." not in in_key:
                 target_provider["api_key"] = in_key
+
+            if target_provider.get("model"):
+                m_str = target_provider["model"]
+                if "models" not in target_provider or not isinstance(target_provider["models"], list):
+                    target_provider["models"] = []
+                m_ids = {m["id"] for m in target_provider["models"] if isinstance(m, dict) and "id" in m}
+                if m_str not in m_ids:
+                    target_provider["models"].insert(0, llm_config.normalize_model_item(m_str))
 
             target_provider["updated_at"] = now
             if body.is_active is not None:

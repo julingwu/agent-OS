@@ -375,3 +375,172 @@ def test_provider_management_crud_and_dual_write(client, device):
         headers=_auth(device),
     )
     assert del_404.status_code == 404
+
+
+def test_save_provider_deduplication(client, device):
+    """Test deduplication and idempotency fixes:
+    1. Saving the same preset provider without an ID updates the existing provider rather than appending duplicates.
+    2. Saving the same preset provider with different generated IDs updates the existing provider in-place.
+    3. Saving an existing custom provider matching base_url and api_key updates it in-place.
+    4. Loading providers via _get_or_init_providers automatically cleans up pre-existing duplicates in app_settings.
+    """
+    with db.get_conn() as conn:
+        conn.execute("DELETE FROM app_settings WHERE key IN ('llm_providers', 'active_provider_id')")
+        llm_config.invalidate_cache()
+
+    # Initial GET creates default provider (deepseek)
+    init_res = client.get("/v1/settings/providers", headers=_auth(device))
+    assert init_res.status_code == 200
+    init_data = init_res.json()
+    assert len(init_data["providers"]) == 1
+    default_id = init_data["providers"][0]["id"]
+    assert default_id == "prv_default"
+    assert init_data["providers"][0]["preset_id"] == "deepseek"
+
+    # 1. Save same preset ("deepseek") without an ID -> updates existing in place
+    save_no_id_res = client.post(
+        "/v1/settings/providers",
+        headers=_auth(device),
+        json={
+            "preset_id": "deepseek",
+            "name": "DeepSeek Primary",
+            "api_key": "sk-deepseek-test-key-1",
+            "model": "deepseek-chat",
+        },
+    )
+    assert save_no_id_res.status_code == 200
+    saved1 = save_no_id_res.json()
+    assert saved1["ok"] is True
+    assert saved1["provider"]["id"] == default_id
+    assert saved1["provider"]["name"] == "DeepSeek Primary"
+    assert saved1["provider"]["has_key"] is True
+
+    # Verify no duplicate was added
+    list1 = client.get("/v1/settings/providers", headers=_auth(device)).json()
+    assert len(list1["providers"]) == 1
+    assert list1["providers"][0]["id"] == default_id
+
+    # 2. Save same preset ("deepseek") with a DIFFERENT generated ID -> updates existing in place
+    save_diff_id_res = client.post(
+        "/v1/settings/providers",
+        headers=_auth(device),
+        json={
+            "id": "prv_gen_random_9999",
+            "preset_id": "deepseek",
+            "name": "DeepSeek In-Place Updated",
+            "model": "deepseek-reasoner",
+        },
+    )
+    assert save_diff_id_res.status_code == 200
+    saved2 = save_diff_id_res.json()
+    assert saved2["ok"] is True
+    # Still target_provider's existing ID
+    assert saved2["provider"]["id"] == default_id
+    assert saved2["provider"]["name"] == "DeepSeek In-Place Updated"
+    assert saved2["provider"]["model"] == "deepseek-reasoner"
+
+    # Verify provider count is still 1
+    list2 = client.get("/v1/settings/providers", headers=_auth(device)).json()
+    assert len(list2["providers"]) == 1
+    assert list2["providers"][0]["id"] == default_id
+
+    # 3. Add custom provider, then save with same base_url and api_key without ID -> updates in place
+    custom_res = client.post(
+        "/v1/settings/providers",
+        headers=_auth(device),
+        json={
+            "preset_id": "custom",
+            "name": "My Custom Proxy",
+            "base_url": "https://proxy.example.com/v1",
+            "api_key": "sk-custom-secret-key-123",
+            "model": "custom-v1",
+        },
+    )
+    assert custom_res.status_code == 200
+    custom_id = custom_res.json()["provider"]["id"]
+
+    list3 = client.get("/v1/settings/providers", headers=_auth(device)).json()
+    assert len(list3["providers"]) == 2
+
+    # Save matching base_url and api_key without ID
+    custom_update_res = client.post(
+        "/v1/settings/providers",
+        headers=_auth(device),
+        json={
+            "preset_id": "custom",
+            "base_url": "https://proxy.example.com/v1",
+            "api_key": "sk-custom-secret-key-123",
+            "name": "My Custom Proxy Updated",
+            "model": "custom-v2",
+        },
+    )
+    assert custom_update_res.status_code == 200
+    assert custom_update_res.json()["provider"]["id"] == custom_id
+    assert custom_update_res.json()["provider"]["name"] == "My Custom Proxy Updated"
+    assert custom_update_res.json()["provider"]["model"] == "custom-v2"
+
+    list4 = client.get("/v1/settings/providers", headers=_auth(device)).json()
+    assert len(list4["providers"]) == 2
+
+    # 4. Inject duplicate providers into DB and verify _get_or_init_providers deduplication cleans DB
+    duplicates = [
+        {
+            "id": "prv_dup_inactive_old",
+            "preset_id": "openai",
+            "name": "OpenAI Old",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-openai-old",
+            "model": "gpt-4o",
+            "is_active": False,
+            "updated_at": "2026-10-01T00:00:00",
+        },
+        {
+            "id": "prv_dup_active",
+            "preset_id": "openai",
+            "name": "OpenAI Active",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-openai-active",
+            "model": "gpt-4o-mini",
+            "is_active": True,
+            "updated_at": "2026-10-02T00:00:00",
+        },
+        {
+            "id": "prv_dup_inactive_new",
+            "preset_id": "openai",
+            "name": "OpenAI Newer",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-openai-newer",
+            "model": "o1",
+            "is_active": False,
+            "updated_at": "2026-10-03T00:00:00",
+        },
+    ]
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('llm_providers', ?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at",
+            (json.dumps(duplicates), "2026-10-03T00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO app_settings (key, value_json, updated_at) VALUES ('active_provider_id', ?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at",
+            (json.dumps("prv_dup_active"), "2026-10-03T00:00:00"),
+        )
+        conn.commit()
+        llm_config.invalidate_cache()
+
+    # GET triggers _get_or_init_providers deduplication
+    dedup_res = client.get("/v1/settings/providers", headers=_auth(device))
+    assert dedup_res.status_code == 200
+    dedup_data = dedup_res.json()
+    assert len(dedup_data["providers"]) == 1
+    assert dedup_data["providers"][0]["id"] == "prv_dup_active"
+    assert dedup_data["active_provider_id"] == "prv_dup_active"
+
+    # Verify database was cleaned up
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT value_json FROM app_settings WHERE key='llm_providers'").fetchone()
+        persisted = json.loads(row["value_json"])
+        assert len(persisted) == 1
+        assert persisted[0]["id"] == "prv_dup_active"
+
