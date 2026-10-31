@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, clearConn, getConn, setConn, wsUrl } from "./api.js";
 
 const TABS = [
@@ -417,6 +417,50 @@ function uiaIncludesIOS(ua) {
   return /iPhone|iPad|iPod/.test(ua);
 }
 
+function getModelReasoningLevels(modelName) {
+  const name = (modelName || "").trim().toLowerCase();
+  if (!name) return [];
+  if (
+    /\b(o1|o3|o4)\b/.test(name) ||
+    name.startsWith("o1-") ||
+    name.startsWith("o3-") ||
+    name.startsWith("o4-") ||
+    name === "o1" ||
+    name === "o3" ||
+    name === "o4"
+  ) {
+    return ["low", "medium", "high"];
+  }
+  if (name.includes("deepseek-reasoner") || name.includes("r1")) {
+    return ["none", "standard", "max"];
+  }
+  if (
+    name.includes("claude-3-7") ||
+    name.includes("claude-3.7") ||
+    (name.includes("claude") && name.includes("thinking"))
+  ) {
+    return ["none", "low", "medium", "high", "max"];
+  }
+  return [];
+}
+
+const REASONING_LABELS = {
+  none: "关掉深度思考极速回复 (none)",
+  low: "轻度思考 (low)",
+  medium: "平衡思考 (medium)",
+  standard: "标准思考 (standard)",
+  high: "高强度推理 (high)",
+  max: "极限深度推演 (max)",
+};
+
+const RECOMMENDED_MODELS = [
+  "deepseek-chat",
+  "deepseek-reasoner",
+  "gpt-4o",
+  "o3-mini",
+  "claude-3-7-sonnet",
+];
+
 /* ============================== 主界面 ============================== */
 function MainApp({ onLogout }) {
   const [bots, setBots] = useState([]);
@@ -507,12 +551,57 @@ function MainApp({ onLogout }) {
   const [toast, setToast] = useState("");
   const [pairCode, setPairCode] = useState(null);
 
+  const [reasoningEffort, setReasoningEffort] = useState("medium");
+  const [editingCustomModel, setEditingCustomModel] = useState(false);
+  const [customModelInput, setCustomModelInput] = useState("");
+
+  const activeSession = sessions.find((s) => s.id === activeId);
+  const activeBot =
+    bots.find(
+      (b) =>
+        b.id === activeSession?.admin_bot_id ||
+        (activeSession?.members && activeSession.members.includes(b.id))
+    ) || bots[0];
+  const activeBotId = activeBot?.id;
+
+  const globalModel = settings?.model || models?.default || "deepseek-chat";
+  const effectiveModel = (activeBot?.model || "").trim() || globalModel;
+  const reasoningLevels = useMemo(() => getModelReasoningLevels(effectiveModel), [effectiveModel]);
+  const isRunning = status === "thinking" || status === "running" || !!activeSession?.running;
+
+  const modelOptions = useMemo(() => {
+    const list = [...RECOMMENDED_MODELS];
+    (models?.items || []).forEach((m) => {
+      const id = typeof m === "string" ? m : m?.id;
+      if (id && !list.includes(id)) {
+        list.push(id);
+      }
+    });
+    if (activeBot?.model && !list.includes(activeBot.model)) {
+      list.push(activeBot.model);
+    }
+    return list;
+  }, [models, activeBot?.model]);
+
+  useEffect(() => {
+    if (reasoningLevels.length > 0) {
+      if (!reasoningLevels.includes(reasoningEffort)) {
+        if (reasoningLevels.includes("medium")) {
+          setReasoningEffort("medium");
+        } else if (reasoningLevels.includes("standard")) {
+          setReasoningEffort("standard");
+        } else {
+          setReasoningEffort(reasoningLevels[0]);
+        }
+      }
+    }
+  }, [reasoningLevels, reasoningEffort]);
+
   const streamRef = useRef(null);
   const fileInputRef = useRef(null);
   const [uploadingFile, setUploadingFile] = useState(false);
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
+  const uploadFileDirectly = async (file, customName) => {
     if (!file) return;
     setUploadingFile(true);
     try {
@@ -520,10 +609,11 @@ function MainApp({ onLogout }) {
       reader.onload = async () => {
         const b64 = reader.result;
         try {
+          const fileName = customName || file.name || `upload_${Date.now()}.png`;
           const res = await api("/v1/workspace/upload", {
             method: "POST",
             body: {
-              filename: file.name,
+              filename: fileName,
               data_b64: b64,
               session_id: activeId,
               bot_id: activeBot?.id,
@@ -531,7 +621,9 @@ function MainApp({ onLogout }) {
           });
           if (res.ok) {
             setToast(`已上传：${res.filename}`);
-            setDraft((prev) => (prev ? `${prev} [已上传文件: ${res.path}]` : `已上传文件: ${res.path}，请查阅并处理。`));
+            const isImg = (file.type && file.type.indexOf("image") !== -1) || /\.(png|jpe?g|gif|webp)$/i.test(res.filename);
+            const tag = isImg ? `[已上传图片: ${res.path}]` : `[已上传文件: ${res.path}]`;
+            setDraft((prev) => (prev ? `${prev} ${tag}` : `${tag}，请查阅并处理。`));
           } else {
             setError(res.error || "上传失败");
           }
@@ -546,6 +638,29 @@ function MainApp({ onLogout }) {
     } catch (err) {
       setError(err.message || "文件读取失败");
       setUploadingFile(false);
+    }
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (file) await uploadFileDirectly(file);
+  };
+
+  const handlePaste = async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type && item.type.indexOf("image") !== -1) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          const ext = (item.type && item.type.split("/")[1]) || "png";
+          const customName = `screenshot_${Date.now()}.${ext === "jpeg" ? "jpg" : ext}`;
+          await uploadFileDirectly(file, customName);
+          break;
+        }
+      }
     }
   };
 
@@ -890,13 +1005,40 @@ function MainApp({ onLogout }) {
     setDraft("");
     scrollToBottom(false);
     try {
+      const payload = { text, client_msg_id: crypto.randomUUID() };
+      const effModel = (activeBot?.model || "").trim() || settings?.model || models?.default || "deepseek-chat";
+      const effLevels = getModelReasoningLevels(effModel);
+      if (effLevels.length > 0 && reasoningEffort) {
+        payload.reasoning_effort = reasoningEffort;
+      }
       await api(`/v1/sessions/${activeId}/messages`, {
         method: "POST",
-        body: { text, client_msg_id: crypto.randomUUID() },
+        body: payload,
       });
     } catch (e) {
       setError(String(e.message || e));
     }
+  };
+
+  const abortCurrentSession = async () => {
+    if (!activeId) return;
+    try {
+      const res = await api(`/v1/sessions/${activeId}/abort`, { method: "POST" });
+      if (res && res.ok) {
+        setStatus("idle");
+        notify("⏹️ 任务已停止");
+      }
+    } catch (e) {
+      setError(String(e.message || e));
+    }
+  };
+
+  const saveCustomModel = async () => {
+    const val = customModelInput.trim();
+    if (activeBot?.id) {
+      await saveBotModel(activeBot.id, val);
+    }
+    setEditingCustomModel(false);
   };
 
   const createBot = async ({ name, role, persona, role_id, skills }) => {
@@ -1253,15 +1395,6 @@ function MainApp({ onLogout }) {
     }
   }, [messages, activity, streamText, showScrollBottom]);
 
-  const activeSession = sessions.find((s) => s.id === activeId);
-  const activeBot =
-    bots.find(
-      (b) =>
-        b.id === activeSession?.admin_bot_id ||
-        (activeSession?.members && activeSession.members.includes(b.id))
-    ) || bots[0];
-  const activeBotId = activeBot?.id;
-
   // 详情与资料库：切换当前 Bot 或 Tab 时，加载对应当前 Bot 的数据
   useEffect(() => {
     if (!activeBotId) return;
@@ -1571,15 +1704,171 @@ function MainApp({ onLogout }) {
             >
               {uploadingFile ? "⏳" : "📎"}
             </button>
-            <textarea value={draft} placeholder={`给 ${activeBot?.name || "Bot"} 发消息…`}
+            <textarea
+              value={draft}
+              placeholder={`给 ${activeBot?.name || "Bot"} 发消息…`}
               onChange={(e) => setDraft(e.target.value)}
+              onPaste={handlePaste}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  send();
+                  if (draft.trim()) {
+                    send();
+                  }
                 }
-              }} />
-            <button className="send-btn" onClick={send}>发送</button>
+              }}
+            />
+            {isRunning ? (
+              !draft.trim() ? (
+                <button
+                  type="button"
+                  className="send-btn btn-abort"
+                  onClick={abortCurrentSession}
+                  title="停止当前正在执行的任务"
+                >
+                  ⏹ 停止
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="send-btn btn-steer"
+                  onClick={send}
+                  title="在途转向：无需等待，将新要求直接注入给正在执行中的 Agent"
+                >
+                  ↪ 转向 / 追加
+                </button>
+              )
+            ) : (
+              <button
+                type="button"
+                className="send-btn"
+                onClick={send}
+                disabled={!draft.trim()}
+                title="发送消息 (Enter)"
+              >
+                发送
+              </button>
+            )}
+          </div>
+
+          <div className="composer-toolbar">
+            {/* Bot 模型选择胶囊 */}
+            <div className="composer-capsule model-capsule">
+              <span className="capsule-icon">
+                {activeBot?.model ? "🤖" : "🌐"}
+              </span>
+              {editingCustomModel ? (
+                <div className="capsule-inline-editor">
+                  <input
+                    type="text"
+                    className="capsule-inline-input"
+                    value={customModelInput}
+                    placeholder="输入自定义模型 (如 deepseek-v3)"
+                    autoFocus
+                    onChange={(e) => setCustomModelInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        saveCustomModel();
+                      } else if (e.key === "Escape") {
+                        setEditingCustomModel(false);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="capsule-btn-confirm"
+                    title="确定保存"
+                    onClick={saveCustomModel}
+                  >
+                    ✓
+                  </button>
+                  <button
+                    type="button"
+                    className="capsule-btn-cancel"
+                    title="取消"
+                    onClick={() => setEditingCustomModel(false)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <div className="capsule-select-wrapper">
+                  <select
+                    className="capsule-select"
+                    value={activeBot?.model || ""}
+                    onChange={(e) => {
+                      if (e.target.value === "__custom__") {
+                        setCustomModelInput(activeBot?.model || "");
+                        setEditingCustomModel(true);
+                      } else {
+                        saveBotModel(activeBot.id, e.target.value);
+                      }
+                    }}
+                    title={`当前 Bot 生效模型: ${effectiveModel}`}
+                  >
+                    <option value="">
+                      🌐 跟随全局默认 (当前: {globalModel})
+                    </option>
+                    <optgroup label="推荐与可用模型">
+                      {modelOptions.map((m) => (
+                        <option key={m} value={m}>
+                          {m === "deepseek-reasoner"
+                            ? "deepseek-reasoner (深度思考)"
+                            : m === "o3-mini"
+                            ? "o3-mini (推理强化)"
+                            : m === "claude-3-7-sonnet"
+                            ? "claude-3-7-sonnet (混合思考)"
+                            : m}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <option value="__custom__">✏️ 手动输入自定义模型...</option>
+                  </select>
+                  <button
+                    type="button"
+                    className="capsule-edit-icon"
+                    title="手动输入自定义模型"
+                    onClick={() => {
+                      setCustomModelInput(activeBot?.model || "");
+                      setEditingCustomModel(true);
+                    }}
+                  >
+                    ✏️
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* 自适应推理强度胶囊 */}
+            {reasoningLevels.length === 0 ? (
+              <div
+                className="composer-capsule reasoning-capsule disabled"
+                title="当前模型为标准对话模型，无需配置思考档位"
+              >
+                <span className="capsule-icon">⚡</span>
+                <span className="capsule-text">标准模式 (不支持/无需思考档位)</span>
+              </div>
+            ) : (
+              <div
+                className="composer-capsule reasoning-capsule active"
+                title="根据当前选择模型自适应匹配思考档位"
+              >
+                <span className="capsule-icon">🧠</span>
+                <span className="capsule-label">推理强度:</span>
+                <select
+                  className="capsule-select"
+                  value={reasoningEffort}
+                  onChange={(e) => setReasoningEffort(e.target.value)}
+                >
+                  {reasoningLevels.map((lvl) => (
+                    <option key={lvl} value={lvl}>
+                      {REASONING_LABELS[lvl] || lvl}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </div>
       </main>
@@ -1608,9 +1897,17 @@ function MainApp({ onLogout }) {
                 value={activeBot?.model || ""}
                 onChange={(e) => saveBotModel(activeBot.id, e.target.value)}
               >
-                <option value="">跟随全局默认（{settings?.model || models.default || "deepseek-flash"}）</option>
-                {models.items.map((m) => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
+                <option value="">跟随全局默认（当前: {globalModel}）</option>
+                {modelOptions.map((m) => (
+                  <option key={m} value={m}>
+                    {m === "deepseek-reasoner"
+                      ? "deepseek-reasoner (深度思考)"
+                      : m === "o3-mini"
+                      ? "o3-mini (推理强化)"
+                      : m === "claude-3-7-sonnet"
+                      ? "claude-3-7-sonnet (混合思考)"
+                      : m}
+                  </option>
                 ))}
               </select>
             </div>

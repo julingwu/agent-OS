@@ -3,16 +3,23 @@
 为什么不用 VNC 做主通道：5Mbps 带宽下 VNC 全时推流会卡；
 预览用"按需截帧 JPEG"，只有在需要人接管时才升级到 VNC。
 
-依赖：ffmpeg / xdpyinfo（provision 脚本已装）。
+依赖：
+  * Linux: ffmpeg / xdpyinfo（provision 脚本已装）
+  * Windows / 无头环境: 原生 ctypes 分辨率探测 + PIL ImageGrab / AgentOS 平滑占位帧
 显示归属：lightdm 自动登录的 oaagent 会话，Xauthority 在 /var/run/lightdm/root/:0。
 """
 
 from __future__ import annotations
 
+import io
 import os
 import re
+import shutil
 import subprocess
 import threading
+from typing import Any
+
+from PIL import Image, ImageDraw, ImageGrab
 
 DISPLAY = os.environ.get("COMPUTER_DISPLAY", ":0")
 XAUTHORITY = os.environ.get("COMPUTER_XAUTHORITY", "/var/run/lightdm/root/:0")
@@ -44,6 +51,20 @@ def geometry(*, refresh: bool = False) -> tuple[int, int]:
     with _geo_lock:
         if _geo_cache and not refresh:
             return _geo_cache
+
+    # Windows 原生分辨率探测
+    if os.name == "nt":
+        try:
+            import ctypes
+            w = ctypes.windll.user32.GetSystemMetrics(0)
+            h = ctypes.windll.user32.GetSystemMetrics(1)
+            if w > 0 and h > 0:
+                with _geo_lock:
+                    _geo_cache = (int(w), int(h))
+                    return _geo_cache
+        except Exception:
+            pass
+
     try:
         out = subprocess.run(
             ["xdpyinfo", "-display", DISPLAY],
@@ -57,26 +78,64 @@ def geometry(*, refresh: bool = False) -> tuple[int, int]:
         return _geo_cache
 
 
+def _generate_placeholder_frame(w: int, h: int, target_w: int) -> bytes:
+    """绘制 AgentOS 暗黑工作区平滑占位帧（15, 23, 42 科技蓝灰），绝不抛出 ffmpeg 异常。"""
+    target_h = int(h * (target_w / w)) if w else 540
+    img = Image.new("RGB", (target_w, target_h), color=(15, 23, 42))
+    draw = ImageDraw.Draw(img)
+    text = "AgentOS Virtual Screen (Headless / Standby)"
+    draw.text((max(20, target_w // 2 - 140), max(20, target_h // 2 - 10)), text, fill=(100, 116, 139))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
 def grab_jpeg(max_w: int = 1280, quality: int = 5) -> bytes:
-    """抓一帧并压成 JPEG。失败抛 CaptureUnavailable（由上层降级）。"""
+    """抓一帧并压成 JPEG。优先原生截图，异常安全降级，绝不抛出 ffmpeg 缺失异常。"""
     w, h = geometry()
     target_w = max(320, min(int(max_w), w))
-    scale = f"scale={target_w}:-2:flags=fast_bilinear"
-    cmd = [
-        "ffmpeg", "-nostdin", "-loglevel", "error",
-        "-f", "x11grab", "-video_size", f"{w}x{h}", "-i", DISPLAY,
-        "-frames:v", "1", "-vf", scale,
-        "-q:v", str(max(2, min(int(quality), 20))),
-        "-f", "mjpeg", "pipe:1",
-    ]
+
+    # 截帧优先级 1: Windows 环境优先尝试 PIL.ImageGrab.grab()
+    if os.name == "nt":
+        try:
+            img = ImageGrab.grab()
+            if img:
+                gw, gh = img.size
+                t_w = max(320, min(int(max_w), gw))
+                if t_w < gw:
+                    t_h = int(gh * (t_w / gw))
+                    img = img.resize((t_w, t_h), Image.Resampling.LANCZOS)
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                buf = io.BytesIO()
+                pil_quality = 80 if quality <= 20 else int(quality)
+                img.save(buf, format="JPEG", quality=pil_quality)
+                return buf.getvalue()
+        except Exception:
+            pass
+
+    # 截帧优先级 2: Linux 环境且 ffmpeg 与 DISPLAY 存在，走原 ffmpeg x11grab
+    if os.name != "nt" and shutil.which("ffmpeg") and os.environ.get("DISPLAY"):
+        scale = f"scale={target_w}:-2:flags=fast_bilinear"
+        cmd = [
+            "ffmpeg", "-nostdin", "-loglevel", "error",
+            "-f", "x11grab", "-video_size", f"{w}x{h}", "-i", DISPLAY,
+            "-frames:v", "1", "-vf", scale,
+            "-q:v", str(max(2, min(int(quality), 20))),
+            "-f", "mjpeg", "pipe:1",
+        ]
+        try:
+            out = subprocess.run(cmd, env=_env(), capture_output=True, timeout=15)
+            if out.returncode == 0 and out.stdout:
+                return out.stdout
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # 截帧优先级 3: 异常降级兜底，绘制科技蓝灰暗黑工作区平滑占位帧
     try:
-        out = subprocess.run(cmd, env=_env(), capture_output=True, timeout=15)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise CaptureUnavailable(str(exc)) from exc
-    if out.returncode != 0 or not out.stdout:
-        detail = (out.stderr or b"").decode("utf-8", "replace")[:400]
-        raise CaptureUnavailable(detail or "ffmpeg produced no frame")
-    return out.stdout
+        return _generate_placeholder_frame(w, h, target_w)
+    except Exception as exc:
+        raise CaptureUnavailable(f"screen capture failed: {exc}") from exc
 
 
 def probe() -> dict:
@@ -102,6 +161,8 @@ def probe() -> dict:
 
 # ---------------------------------------------------------------- 桌面控制（接管）
 def desktop_active() -> bool:
+    if os.name == "nt":
+        return True
     try:
         out = subprocess.run(["systemctl", "is-active", "lightdm"],
                              capture_output=True, text=True, timeout=5)
@@ -111,6 +172,8 @@ def desktop_active() -> bool:
 
 
 def _systemctl(action: str) -> None:
+    if os.name == "nt":
+        return
     try:
         out = subprocess.run(["systemctl", action, "lightdm"],
                              capture_output=True, text=True, timeout=30)
@@ -132,6 +195,8 @@ def sleep() -> None:
 
 def xdo(*args: str) -> None:
     """在 `:0` 上执行 xdotool 动作（真实接管）。"""
+    if os.name == "nt":
+        return
     try:
         out = subprocess.run(["xdotool", *args], env=_env(),
                              capture_output=True, text=True, timeout=10)

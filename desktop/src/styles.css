@@ -409,6 +409,210 @@ input, textarea { font: inherit; }
   letter-spacing: 0.08em;
 }
 .send-btn:hover { filter: brightness(1.08); }
+
+/* ---------------- Composer Toolbar & Capsules ---------------- */
+.composer-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-capsule {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(18, 23, 45, 0.75);
+  border: 1px solid rgba(120, 140, 255, 0.22);
+  border-radius: 9999px;
+  font-size: 12px;
+  color: var(--sub);
+  backdrop-filter: blur(6px);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.composer-capsule:hover {
+  border-color: rgba(56, 232, 255, 0.45);
+  background: rgba(24, 31, 62, 0.9);
+  color: var(--text);
+}
+
+.composer-capsule.active {
+  border-color: rgba(56, 232, 255, 0.35);
+  background: rgba(20, 28, 56, 0.85);
+  color: var(--text);
+}
+
+.composer-capsule.disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(14, 18, 36, 0.5);
+  user-select: none;
+}
+
+.capsule-icon {
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.capsule-label {
+  font-size: 11px;
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.capsule-text {
+  font-size: 12px;
+  color: #7b85a3;
+  white-space: nowrap;
+}
+
+.capsule-select-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.capsule-select {
+  background: transparent;
+  color: var(--text);
+  border: none;
+  outline: none;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 260px;
+  text-overflow: ellipsis;
+  padding: 0 2px;
+}
+
+.capsule-select option,
+.capsule-select optgroup {
+  background: #0d1124;
+  color: #e2e8f0;
+}
+
+.capsule-edit-icon {
+  background: transparent;
+  border: none;
+  color: var(--sub);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  opacity: 0.75;
+  transition: all 0.15s;
+}
+
+.capsule-edit-icon:hover {
+  opacity: 1;
+  color: var(--cyan);
+  background: rgba(56, 232, 255, 0.12);
+  transform: scale(1.08);
+}
+
+.capsule-inline-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.capsule-inline-input {
+  background: rgba(10, 14, 28, 0.95);
+  border: 1px solid var(--cyan);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #fff;
+  outline: none;
+  width: 170px;
+  box-shadow: 0 0 6px rgba(56, 232, 255, 0.25);
+}
+
+.capsule-btn-confirm,
+.capsule-btn-cancel {
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.capsule-btn-confirm {
+  background: rgba(56, 232, 255, 0.25);
+  color: var(--cyan);
+}
+.capsule-btn-confirm:hover {
+  background: var(--cyan);
+  color: #05060d;
+}
+
+.capsule-btn-cancel {
+  background: rgba(255, 93, 115, 0.22);
+  color: #ffa3b1;
+}
+.capsule-btn-cancel:hover {
+  background: #ff5d73;
+  color: #fff;
+}
+
+/* ---------------- 转向与停止按钮样式 ---------------- */
+.send-btn.btn-abort {
+  background: linear-gradient(135deg, #ff4d6d, #d90429) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 12px rgba(255, 77, 109, 0.5) !important;
+  animation: pulse-abort 1.8s infinite ease-in-out;
+  cursor: pointer;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+
+.send-btn.btn-abort:hover {
+  background: linear-gradient(135deg, #ff6b8b, #ef233c) !important;
+  filter: brightness(1.12);
+  box-shadow: 0 0 16px rgba(255, 77, 109, 0.75) !important;
+}
+
+@keyframes pulse-abort {
+  0% {
+    box-shadow: 0 0 6px rgba(255, 77, 109, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(255, 77, 109, 0.7);
+  }
+  100% {
+    box-shadow: 0 0 6px rgba(255, 77, 109, 0.4);
+  }
+}
+
+.send-btn.btn-steer {
+  background: linear-gradient(135deg, #00b4d8, #0077b6) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 12px rgba(0, 180, 216, 0.5) !important;
+  cursor: pointer;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  transition: all 0.2s ease;
+}
+
+.send-btn.btn-steer:hover {
+  background: linear-gradient(135deg, #48cae4, #0096c7) !important;
+  filter: brightness(1.1);
+  box-shadow: 0 0 16px rgba(72, 202, 228, 0.75) !important;
+}
+
 .error-bar {
   background: rgba(255, 93, 115, 0.08); color: #ffa3b1;
   border: 1px solid rgba(255, 93, 115, 0.3);
@@ -1567,6 +1771,23 @@ input, textarea { font: inherit; }
     font-size: 14px !important;
     min-height: 42px !important;
   }
+
+  .composer-toolbar {
+    gap: 6px !important;
+    margin-top: 6px !important;
+  }
+  .composer-capsule {
+    padding: 3px 8px !important;
+    font-size: 11px !important;
+  }
+  .capsule-select {
+    max-width: 170px !important;
+    font-size: 11px !important;
+  }
+  .capsule-inline-input {
+    width: 120px !important;
+  }
+
   .modal {
     width: 95vw !important;
     max-width: 480px !important;

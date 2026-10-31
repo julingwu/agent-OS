@@ -24,6 +24,7 @@ load_env()
 
 from .api import decisions, memory, relay, reports, tasks, verbs
 from .api_v1 import bots as v1_bots
+from .api_v1 import sessions as v1_sessions
 from .api_v1 import bot_memory as v1_bot_memory
 from .api_v1 import routines as v1_routines
 from .api_v1 import skills as v1_skills
@@ -150,6 +151,7 @@ app.add_middleware(
 app.include_router(verbs.router)
 app.include_router(v1_stream.router)
 app.include_router(v1_bots.router)
+app.include_router(v1_sessions.router)
 app.include_router(v1_computer.router)
 app.include_router(v1_workspace.router)
 app.include_router(v1_search.router)

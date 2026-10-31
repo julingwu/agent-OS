@@ -135,9 +135,39 @@ def _fix_assistant_reasoning_content(messages: list[dict]) -> list[dict]:
             fixed.append(m)
     return fixed
 
+
+def get_model_reasoning_levels(model_name: str) -> list[str]:
+    """导出模型自适应推理档位映射。
+
+    - o1, o3, o4 -> ["low", "medium", "high"]
+    - deepseek-reasoner, r1 -> ["none", "standard", "max"]
+    - claude-3-7, claude (含 thinking) -> ["none", "low", "medium", "high", "max"]
+    - 其他普通模型 -> []（空列表，表示不支持/无需推理档位）
+    """
+    import re
+    name = (model_name or "").strip().lower()
+    if not name:
+        return []
+    if re.search(r"\b(o1|o3|o4)\b", name) or any(name.startswith(p) for p in ("o1-", "o3-", "o4-", "o1", "o3", "o4")):
+        return ["low", "medium", "high"]
+    if "deepseek-reasoner" in name or "r1" in name:
+        return ["none", "standard", "max"]
+    if "claude-3-7" in name or "claude-3.7" in name or ("claude" in name and "thinking" in name):
+        return ["none", "low", "medium", "high", "max"]
+    return []
+
+
+def _is_reasoning_model(model_name: str) -> bool:
+    name = (model_name or "").strip().lower()
+    return bool(get_model_reasoning_levels(name)) or any(
+        x in name for x in ("o1", "o3", "o4", "reasoner", "r1")
+    )
+
+
 def chat(messages: list[dict], *, tools: list[dict] | None = None,
          max_tokens: int = 8192, temperature: float = 0.3,
-         timeout: float = 180.0, model: str | None = None) -> dict | None:
+         timeout: float = 180.0, model: str | None = None,
+         reasoning_effort: str | None = None) -> dict | None:
     """带工具调用的单轮对话，返回 {'message': {...}, 'usage': {...}}。
 
     与 complete() 的区别：这个必须拿到 usage —— 真实 token 数要进 finance 账本和
@@ -150,11 +180,19 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
     allowed, used_today, limit = llm_config.check_global_daily_token_gate()
     if not allowed:
         raise RuntimeError(f"daily_token_limit_exceeded: used {used_today} of {limit}")
-    body: dict = {"model": model or _model(), "messages": list(messages),
+    target_model = model or _model()
+    body: dict = {"model": target_model, "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens}
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
+
+    # 推理模型或显式指定 reasoning_effort 时，安全剔除 temperature，避免上游 400
+    if _is_reasoning_model(target_model) or reasoning_effort:
+        body.pop("temperature", None)
+    if reasoning_effort and reasoning_effort.strip().lower() not in ("none", ""):
+        body["reasoning_effort"] = reasoning_effort.strip().lower()
+
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     last_err: Exception | None = None
     for trust_env in (False, True):
@@ -205,7 +243,8 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
 
 def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
                 max_tokens: int = 8192, temperature: float = 0.3,
-                timeout: float = 300.0, model: str | None = None):
+                timeout: float = 300.0, model: str | None = None,
+                reasoning_effort: str | None = None):
     """流式单轮对话。逐块 yield ("delta", 文本)，最后 yield ("final", {message, usage})。
 
     为什么单独一个函数而不是给 chat() 加参数：
@@ -221,12 +260,19 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
     if not allowed:
         raise RuntimeError(f"daily_token_limit_exceeded: used {used_today} of {limit}")
 
-    body: dict = {"model": model or _model(), "messages": list(messages),
+    target_model = model or _model()
+    body: dict = {"model": target_model, "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens,
                   "stream": True, "stream_options": {"include_usage": True}}
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
+
+    # 推理模型或显式指定 reasoning_effort 时，安全剔除 temperature，避免上游 400
+    if _is_reasoning_model(target_model) or reasoning_effort:
+        body.pop("temperature", None)
+    if reasoning_effort and reasoning_effort.strip().lower() not in ("none", ""):
+        body["reasoning_effort"] = reasoning_effort.strip().lower()
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
     max_attempts = 3

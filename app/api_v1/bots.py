@@ -64,6 +64,7 @@ class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
     client_msg_id: str | None = Field(default=None, max_length=64)
     reply_to: int | None = None
+    reasoning_effort: str | None = None
 
 
 # ---------------------------------------------------------------- Bot
@@ -304,7 +305,7 @@ def create_session(body: SessionCreate, device: dict = Depends(require_device)) 
             "INSERT INTO sessions (id, kind, title, admin_bot_id, created_at)"
             " VALUES (?,?,?,?,?)",
             (session_id, body.kind, body.title or ("群聊" if body.kind == "group" else None),
-             admin, now),
+              admin, now),
         )
         for bid in body.bot_ids:
             conn.execute(
@@ -326,6 +327,13 @@ def get_session(session_id: str, device: dict = Depends(require_device)) -> dict
         return _session_row(conn, row)
 
 
+@router.post("/sessions/{session_id}/abort")
+def abort_session(session_id: str, device: dict = Depends(require_device)) -> dict:
+    """中止指定会话当前运行中的任务。"""
+    agent_loop.request_abort(session_id)
+    return {"ok": True, "session_id": session_id, "aborted": True}
+
+
 # ---------------------------------------------------------------- 消息
 @router.post("/sessions/{session_id}/messages", status_code=202)
 def post_message(session_id: str, body: MessageIn,
@@ -337,11 +345,14 @@ def post_message(session_id: str, body: MessageIn,
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
         bot_id = session["admin_bot_id"] or "bot_chief"
+        payload = {"text": body.text, "device_id": device["id"]}
+        if body.reasoning_effort is not None:
+            payload["reasoning_effort"] = body.reasoning_effort
         event = ev.emit(
             conn, bot_id=bot_id, session_id=session_id,
             kind="message.user", origin="user",
             actor={"type": "user", "id": device["id"]},
-            payload={"text": body.text, "device_id": device["id"]},
+            payload=payload,
             client_msg_id=body.client_msg_id,
             refs={"reply_to": body.reply_to} if body.reply_to else None,
         )

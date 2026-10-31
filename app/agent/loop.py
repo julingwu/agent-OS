@@ -29,6 +29,7 @@ from .. import bot_memory
 from .. import db
 from .. import events as ev
 from .. import llm
+from .. import llm_config
 from . import blackboard, memory_writer, tools
 
 logger = logging.getLogger("app.agent.loop")
@@ -52,6 +53,10 @@ MENTION_RE = re.compile(r"@([^\s@，,。.：:；;！!？?]{1,20})")
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
 
+_STATE_GUARD = threading.Lock()
+_QUEUED_SESSIONS: set[str] = set()
+_ABORT_REQUESTS: set[str] = set()
+
 
 def _session_lock(session_id: str) -> threading.Lock:
     with _LOCKS_GUARD:
@@ -62,6 +67,25 @@ def is_running(session_id: str) -> bool:
     with _LOCKS_GUARD:
         lock = _LOCKS.get(session_id)
         return bool(lock and lock.locked())
+
+
+def request_abort(session_id: str) -> None:
+    with _STATE_GUARD:
+        _ABORT_REQUESTS.add(session_id)
+
+
+def clear_abort(session_id: str) -> None:
+    with _STATE_GUARD:
+        _ABORT_REQUESTS.discard(session_id)
+
+
+def is_aborted(session_id: str) -> bool:
+    with _STATE_GUARD:
+        return session_id in _ABORT_REQUESTS
+
+
+def is_session_running(session_id: str) -> bool:
+    return is_running(session_id)
 
 
 def _now() -> str:
@@ -132,7 +156,7 @@ STREAM_FLUSH_SECONDS = 0.08
 
 
 def _chat_blocking_with_progress(conn, messages, *, bot_id, session_id, turn_id, model,
-                                 tools_specs=None, temperature=0.3):
+                                 tools_specs=None, temperature=0.3, reasoning_effort: str | None = None):
     """阻塞式/非流式模型调用，每 5 秒发送 thought.delta 心跳进度，避免界面假死。"""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
     import time
@@ -140,7 +164,8 @@ def _chat_blocking_with_progress(conn, messages, *, bot_id, session_id, turn_id,
     pool = ThreadPoolExecutor(max_workers=1)
     start = time.monotonic()
     future = pool.submit(llm.chat, messages, tools=tools_specs,
-                         temperature=temperature, model=model)
+                         temperature=temperature, model=model,
+                         reasoning_effort=reasoning_effort)
     try:
         while True:
             try:
@@ -157,7 +182,7 @@ def _chat_blocking_with_progress(conn, messages, *, bot_id, session_id, turn_id,
 
 
 def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
-                   tools_specs=None, temperature=0.3):
+                   tools_specs=None, temperature=0.3, reasoning_effort: str | None = None):
     """优先流式：边生成边发 message.delta（瞬态，不落库），让界面真的"在打字"。
 
     回落策略是硬的：
@@ -208,7 +233,8 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
 
     try:
         it = llm.chat_stream(messages, tools=tools_specs,
-                             temperature=temperature, model=model)
+                             temperature=temperature, model=model,
+                             reasoning_effort=reasoning_effort)
         last_flush = time.monotonic()
         last_thought_flush = time.monotonic()
         for kind, payload in it:
@@ -249,7 +275,8 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
         return _chat_blocking_with_progress(conn, messages, bot_id=bot_id,
                                             session_id=session_id, turn_id=turn_id,
                                             model=model, tools_specs=tools_specs,
-                                            temperature=temperature)
+                                            temperature=temperature,
+                                            reasoning_effort=reasoning_effort)
     finally:
         keepalive_timer.cancel()
 
@@ -435,6 +462,15 @@ def _default_model(conn) -> str | None:
         return None
 
 
+def resolve_turn_model(bot: dict, conn=None) -> str:
+    """模型层级继承：优先使用 bot.get("model")（若有且非空），否则使用全局默认配置。"""
+    bot_model = (bot.get("model") or "").strip()
+    if bot_model:
+        return bot_model
+    default_model = _default_model(conn) if conn is not None else None
+    return default_model or llm_config.resolve_llm_config()["model"]
+
+
 def _session_members(conn, session_id: str) -> list[dict]:
     rows = conn.execute(
         "SELECT b.id, b.name, b.persona FROM session_members m JOIN bots b ON b.id = m.member_id"
@@ -487,13 +523,18 @@ def build_bot_history(conn, session_id: str, bot_id: str, *,
 
 
 def _last_user_text(conn, session_id: str) -> str:
+    ev_obj = _last_user_event(conn, session_id)
+    return (ev_obj.payload.get("text") or "").strip() if ev_obj else ""
+
+
+def _last_user_event(conn, session_id: str) -> ev.Event | None:
     rows = ev.read(conn, since=0, session_id=session_id,
                    kinds=["message.user"], limit=ev.MAX_READ_LIMIT)
     for e in reversed(rows):
         text = (e.payload.get("text") or "").strip()
         if text:
-            return text
-    return ""
+            return e
+    return None
 
 
 
@@ -751,20 +792,23 @@ def _diagnose_error(err_str: str) -> tuple[str, str]:
 def run_turn(bot_id: str, session_id: str, *, db_path: str | None = None,
              hops: int = 0, task_hint: str | None = None) -> dict:
     """执行一轮对话。同步函数，调用方负责放到后台线程。"""
-    with _session_lock(session_id):
-        with db.open_conn(db_path) as conn:
-            try:
-                return _run_turn_locked(conn, bot_id, session_id, hops, task_hint)
-            except Exception as exc:
-                err_str = str(exc)
-                turn_id = "turn_err_" + __import__("secrets").token_hex(6)
-                _emit(conn, bot_id=bot_id, session_id=session_id, kind="error",
-                      turn_id=turn_id, payload={"code": "TURN_CRASHED", "message": err_str[:300]})
-                _emit(conn, bot_id=bot_id, session_id=session_id, kind="message.bot",
-                      turn_id=turn_id, payload={"text": f"⚠️ 系统后台处理出现异常：`{err_str[:200]}`。您可以直接发送「继续」重试。"})
-                _emit(conn, bot_id=bot_id, session_id=session_id, kind="turn.ended",
-                      turn_id=turn_id, payload={"status": "failed"})
-                return {"turn_id": turn_id, "status": "failed", "error": err_str}
+    try:
+        with _session_lock(session_id):
+            with db.open_conn(db_path) as conn:
+                try:
+                    return _run_turn_locked(conn, bot_id, session_id, hops, task_hint)
+                except Exception as exc:
+                    err_str = str(exc)
+                    turn_id = "turn_err_" + __import__("secrets").token_hex(6)
+                    _emit(conn, bot_id=bot_id, session_id=session_id, kind="error",
+                          turn_id=turn_id, payload={"code": "TURN_CRASHED", "message": err_str[:300]})
+                    _emit(conn, bot_id=bot_id, session_id=session_id, kind="message.bot",
+                          turn_id=turn_id, payload={"text": f"⚠️ 系统后台处理出现异常：`{err_str[:200]}`。您可以直接发送「继续」重试。"})
+                    _emit(conn, bot_id=bot_id, session_id=session_id, kind="turn.ended",
+                          turn_id=turn_id, payload={"status": "failed"})
+                    return {"turn_id": turn_id, "status": "failed", "error": err_str}
+    finally:
+        clear_abort(session_id)
 
 
 def _run_turn_locked(conn, bot_id: str, session_id: str,
@@ -776,7 +820,9 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     started = _emit(conn, bot_id=bot_id, session_id=session_id, kind="turn.started",
                     turn_id=turn_id, payload={"input_event_id": ev.cursor(conn), "hops": hops})
     members = _session_members(conn, session_id)
-    last_user = _last_user_text(conn, session_id)
+    last_user_ev = _last_user_event(conn, session_id)
+    last_user = (last_user_ev.payload.get("text") or "").strip() if last_user_ev else ""
+    reasoning_effort: str | None = last_user_ev.payload.get("reasoning_effort") if last_user_ev else None
 
     # 会话级黑板管理与断点接力看板 (Hermes Session Blackboard)
     board = blackboard.get_blackboard(conn, session_id)
@@ -810,9 +856,8 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     if task_hint:
         messages.append({"role": "user", "content": task_hint})
 
-    model = bot.get("model") or _default_model(conn)
+    model = resolve_turn_model(bot, conn)
 
-    from .. import llm_config
     gate_ok, used_today, limit = llm_config.check_global_daily_token_gate(conn)
     if not gate_ok:
         limit_str = f"{limit:,}"
@@ -830,6 +875,8 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
         return {"turn_id": turn_id, "status": "limit_exceeded", "event_id": started.id if started else 0,
                 "prompt_tokens": 0, "completion_tokens": 0}
 
+    last_seen_event_id = started.id if started else ev.cursor(conn)
+
     total_prompt = total_completion = 0
     status, final_text = "done", ""
     executed_steps_summary: list[str] = []
@@ -838,6 +885,44 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     max_steps = _get_max_steps()
     step = 0
     for step in range(max_steps):
+        # 1. 检查用户中止指令
+        if is_aborted(session_id):
+            clear_abort(session_id)
+            status = "aborted"
+            final_text = "⏹️ 任务已由用户手动停止。"
+            break
+
+        # 2. 检查在途实时新消息 (In-Flight Steering)
+        new_user_events = ev.read(
+            conn,
+            since=last_seen_event_id,
+            session_id=session_id,
+            kinds=["message.user"],
+            limit=ev.MAX_READ_LIMIT,
+        )
+        if new_user_events:
+            for u_ev in new_user_events:
+                last_seen_event_id = max(last_seen_event_id, u_ev.id)
+                u_text = (u_ev.payload.get("text") or "").strip()
+                if not u_text:
+                    continue
+                if u_ev.payload.get("reasoning_effort"):
+                    reasoning_effort = u_ev.payload["reasoning_effort"]
+                steering_prompt = (
+                    f"【用户在执行过程中追加了最新要求 / 调整方向】：\n{u_text}\n"
+                    "请结合当前已完成的步骤进度，立即按用户最新指令调整后续规划与执行动作。"
+                )
+                messages.append({"role": "user", "content": steering_prompt})
+                preview = u_text[:80] + ("..." if len(u_text) > 80 else "")
+                _emit(
+                    conn,
+                    bot_id=bot_id,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    kind="thought.delta",
+                    payload={"text": f"🔄 收到最新追加指令，正在调整后续执行方向：{preview}"},
+                )
+
         try:
             messages = _compact_context(messages)
             effective_tools = tools.get_effective_tool_specs(
@@ -848,7 +933,8 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
             resp = _chat_streamed(conn, messages, bot_id=bot_id,
                                   session_id=session_id, turn_id=turn_id,
                                   model=model, tools_specs=effective_tools,
-                                  temperature=temperature)
+                                  temperature=temperature,
+                                  reasoning_effort=reasoning_effort)
         except Exception as exc:                       # noqa: BLE001 - 模型失败要有兜底
             err_str = str(exc)
             _emit(conn, bot_id=bot_id, session_id=session_id, kind="error",
@@ -934,6 +1020,11 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
         messages.append(assistant_msg)
 
         for call in tool_calls:
+            if is_aborted(session_id):
+                clear_abort(session_id)
+                status = "aborted"
+                final_text = "⏹️ 任务已由用户手动停止。"
+                break
             fn = (call.get("function") or {})
             name = fn.get("name") or "unknown"
             if name != "unknown":
@@ -977,10 +1068,12 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                 status = "needs_human"
                 final_text = ""
                 break
-        if status == "needs_human":
+        if status in ("needs_human", "aborted"):
             break
 
-    if status == "done" and not final_text and step >= max_steps - 1:
+    if status == "aborted":
+        pass
+    elif status == "done" and not final_text and step >= max_steps - 1:
         # 工具步数真正用尽时（达到安全上限），强制模型用不带工具的一轮做收尾总结并提示用户回复「继续」
         try:
             wrap = llm.chat(
@@ -1020,13 +1113,13 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                         conn, bot_id=bot_id, session_id=session_id,
                         user_text=last_user, reply_text=final_text, model=model):
                     _emit(conn, bot_id=bot_id, session_id=session_id,
-                          kind="memory.updated", turn_id=turn_id,
-                          payload={"memory_id": item["id"], "action": "created",
-                                   "content": item["content"][:200]})
+                       kind="memory.updated", turn_id=turn_id,
+                       payload={"memory_id": item["id"], "action": "created",
+                                "content": item["content"][:200]})
             except Exception:  # noqa: BLE001 - 记忆失败不该影响对话
                 pass
         # Bot 间交接：回复里 @ 了同会话的其他 Bot，就把活转过去（带跳数上限防环）
-        if hops < MAX_HOPS:
+        if status == "done" and hops < MAX_HOPS:
             for target in _mention_targets(conn, session_id, final_text, exclude=bot_id):
                 _emit(conn, bot_id=bot_id, session_id=session_id, kind="handoff.created",
                       turn_id=turn_id, payload={
@@ -1044,7 +1137,6 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
 
     if total_prompt or total_completion:
         turn_used = total_prompt + total_completion
-        from .. import llm_config
         allowed, used_today, limit = llm_config.check_global_daily_token_gate(conn)
         _emit(conn, bot_id=bot_id, session_id=session_id, kind="budget.updated",
               turn_id=turn_id, payload={
@@ -1054,14 +1146,38 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                   "state": "ok" if allowed else "exhausted"})
 
     return {"turn_id": turn_id, "status": status, "event_id": started.id if started else 0,
-            "prompt_tokens": total_prompt, "completion_tokens": total_completion}
+            "prompt_tokens": total_prompt, "completion_tokens": total_completion,
+            "last_seen_event_id": last_seen_event_id}
 
 
 def run_turn_async(bot_id: str, session_id: str, *, hops: int = 0,
                    task_hint: str | None = None) -> None:
     """后台线程入口（由 API 层调用）。"""
+    with _STATE_GUARD:
+        if is_running(session_id):
+            _QUEUED_SESSIONS.add(session_id)
+            return
+
+    def _worker():
+        try:
+            res = run_turn(bot_id, session_id, hops=hops, task_hint=task_hint)
+            # 在收尾时，检查是否有未被消费的尾部消息，若有则接力消费，绝不漏掉用户的任何后续发言
+            if res.get("status") != "aborted":
+                last_seen = res.get("last_seen_event_id", 0)
+                with db.open_conn() as conn:
+                    tail = conn.execute(
+                        "SELECT 1 FROM events WHERE session_id=? AND id > ? AND kind='message.user' LIMIT 1",
+                        (session_id, last_seen),
+                    ).fetchone()
+                    if tail:
+                        logger.info(f"[In-Flight Relay] 会话 {session_id} 存在未消费尾部消息，接力启动新回合")
+                        run_turn_async(bot_id, session_id, hops=hops)
+        finally:
+            with _STATE_GUARD:
+                _QUEUED_SESSIONS.discard(session_id)
+
     db.spawn_bg_thread(
-        lambda: run_turn(bot_id, session_id, hops=hops, task_hint=task_hint),
+        _worker,
         name=f"agent-turn-{session_id[-6:]}-{bot_id[-4:]}",
         db=db.db_path(),
     )

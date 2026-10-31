@@ -24,6 +24,8 @@ web/src-tauri/target/
 web/src-tauri/gen/
 desktop/node_modules/
 ui_dist/*.exe
+ui_dist/*.apk
+*.apk
 web/dist/*.exe
 desktop/dist/
 desktop/dist-tauri/
