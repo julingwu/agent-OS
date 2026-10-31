@@ -267,6 +267,7 @@ def infer_model_capabilities(model_id: str) -> dict[str, Any]:
     - 思考能力识别：包含 scnet, reasoner, r1, o1, o3, o4, thinking, qwq, deepseek 等 -> supports_reasoning = True
       如果是 o1/o3/o4 则 reasoning_levels = ["low", "medium", "high"]；
       如果是 claude-3-7 / claude thinking 则 reasoning_levels = ["none", "low", "medium", "high", "max"]；
+      如果是 scnet 及通用 OpenAI 兼容模型 则 reasoning_levels = ["none", "low", "medium", "high"]；
       其余具备思考能力者为 ["none", "standard", "max"]；
       其他普通模型 -> supports_reasoning = False, reasoning_levels = []
     """
@@ -307,7 +308,10 @@ def infer_model_capabilities(model_id: str) -> dict[str, Any]:
     elif is_claude_thinking:
         supports_reasoning = True
         reasoning_levels = ["none", "low", "medium", "high", "max"]
-    elif any(k in name for k in ("scnet", "reasoner", "r1", "thinking", "qwq", "deepseek", "qwen-max")):
+    elif "scnet" in name:
+        supports_reasoning = True
+        reasoning_levels = ["none", "low", "medium", "high"]
+    elif any(k in name for k in ("reasoner", "r1", "thinking", "qwq", "deepseek", "qwen-max")):
         supports_reasoning = True
         reasoning_levels = ["none", "standard", "max"]
     else:

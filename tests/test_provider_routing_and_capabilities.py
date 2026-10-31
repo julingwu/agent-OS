@@ -127,7 +127,7 @@ def test_model_capabilities_inference():
     assert scnet_caps["context_window"] == "256K"
     assert scnet_caps["max_tokens"] == "32K"
     assert scnet_caps["supports_reasoning"] is True
-    assert scnet_caps["reasoning_levels"] == ["none", "standard", "max"]
+    assert scnet_caps["reasoning_levels"] == ["none", "low", "medium", "high"]
 
     # 2. deepseek-flash
     ds_caps = llm_config.infer_model_capabilities("deepseek-flash")
@@ -165,7 +165,7 @@ def test_model_capabilities_inference():
     assert norm_str["name"] == "SCNet-Max"
     assert norm_str["context_window"] == "256K"
     assert norm_str["supports_reasoning"] is True
-    assert norm_str["reasoning_levels"] == ["none", "standard", "max"]
+    assert norm_str["reasoning_levels"] == ["none", "low", "medium", "high"]
 
     norm_dict = llm_config.normalize_model_item({
         "id": "my-custom-model",
@@ -223,7 +223,7 @@ def test_llm_url_and_key_dispatch(monkeypatch):
 
     # 3. get_model_reasoning_levels 验证
     levels_scnet = llm.get_model_reasoning_levels("SCNet-Max")
-    assert levels_scnet == ["none", "standard", "max"]
+    assert levels_scnet == ["none", "low", "medium", "high"]
 
     levels_ds = llm.get_model_reasoning_levels("deepseek-chat")
     assert levels_ds == ["none", "standard", "max"]
@@ -334,7 +334,7 @@ def test_fetch_models_returns_rich_items(client, device):
         assert items_by_id["SCNet-Max"]["supports_reasoning"] is True
         assert items_by_id["SCNet-Max"]["context_window"] == "256K"
         assert items_by_id["SCNet-Max"]["max_tokens"] == "32K"
-        assert items_by_id["SCNet-Max"]["reasoning_levels"] == ["none", "standard", "max"]
+        assert items_by_id["SCNet-Max"]["reasoning_levels"] == ["none", "low", "medium", "high"]
 
         # deepseek-reasoner
         assert items_by_id["deepseek-reasoner"]["supports_reasoning"] is True
@@ -379,7 +379,7 @@ def test_get_models_returns_rich_items(client, device):
     assert scnet_item["context_window"] == "256K"
     assert scnet_item["max_tokens"] == "32K"
     assert scnet_item["supports_reasoning"] is True
-    assert scnet_item["reasoning_levels"] == ["none", "standard", "max"]
+    assert scnet_item["reasoning_levels"] == ["none", "low", "medium", "high"]
 
     qwen_item = items_by_id["qwen-turbo"]
     assert qwen_item["supports_reasoning"] is False

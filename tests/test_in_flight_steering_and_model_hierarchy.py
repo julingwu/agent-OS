@@ -163,6 +163,104 @@ def test_chat_temperature_mutual_exclusion(monkeypatch):
     assert "temperature" not in captured_bodies[0]
     assert "reasoning_effort" not in captured_bodies[0]
 
+    # Case F: reasoning_effort="standard" -> 自动映射为 "medium"
+    captured_bodies.clear()
+    llm.chat(messages, model="SCNet-Max", reasoning_effort="standard")
+    assert len(captured_bodies) == 1
+    assert captured_bodies[0].get("reasoning_effort") == "medium"
+    assert "temperature" not in captured_bodies[0]
+
+    # Case G: reasoning_effort="max" -> 自动映射为 "high"
+    captured_bodies.clear()
+    llm.chat(messages, model="SCNet-Max", reasoning_effort="max")
+    assert len(captured_bodies) == 1
+    assert captured_bodies[0].get("reasoning_effort") == "high"
+    assert "temperature" not in captured_bodies[0]
+
+
+def test_reasoning_effort_auto_healing_retry(monkeypatch):
+    """验证当上游网关因 reasoning_effort 返回 HTTP 400 (code 10013 / Invalid request parameters) 时，
+    chat() 与 chat_stream() 自动剔除 reasoning_effort 并重试成功自愈。
+    """
+    monkeypatch.setattr(llm, "_key", lambda *a, **kw: "sk-mock-key")
+    monkeypatch.setattr(llm, "is_offline", lambda: False)
+    monkeypatch.setattr(llm_config, "check_global_daily_token_gate", lambda *a: (True, 0, 1000000))
+
+    messages = [{"role": "user", "content": "hi"}]
+
+    # 1. 测试 chat() 遇 400 10013 自动自愈
+    call_records = []
+
+    def mock_post(self, url, json=None, headers=None, **kwargs):
+        call_records.append(dict(json or {}))
+        resp = MagicMock()
+        if len(call_records) == 1:
+            resp.status_code = 400
+            resp.text = '{"code": 10013, "message": "Invalid request parameters: reasoning_effort not supported"}'
+        else:
+            resp.status_code = 200
+            resp.json.return_value = {
+                "choices": [{"message": {"role": "assistant", "content": "healed response"}}],
+                "usage": {"prompt_tokens": 15, "completion_tokens": 8},
+            }
+        return resp
+
+    monkeypatch.setattr("httpx.Client.post", mock_post)
+
+    call_records.clear()
+    res = llm.chat(messages, model="SCNet-Max", reasoning_effort="standard")
+    assert res is not None
+    assert res["message"]["content"] == "healed response"
+    assert len(call_records) == 2
+    # 第一次尝试带标准映射后的 medium
+    assert call_records[0].get("reasoning_effort") == "medium"
+    # 第二次自动自愈重试已剔除 reasoning_effort
+    assert "reasoning_effort" not in call_records[1]
+
+    # 2. 测试 chat_stream() 遇 400 10013 自动自愈
+    stream_calls = []
+
+    class MockStreamResponse:
+        def __init__(self, is_first: bool):
+            self.is_first = is_first
+            self.status_code = 400 if is_first else 200
+            self.headers = {"content-type": "text/event-stream"} if not is_first else {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            return b'{"code": 10013, "message": "Invalid request parameters: unknown reasoning_effort"}'
+
+        def iter_lines(self):
+            if not self.is_first:
+                yield "data: " + json.dumps({
+                    "choices": [{"delta": {"content": "stream healed"}}],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 6}
+                })
+                yield "data: [DONE]"
+
+    def mock_stream(self, method, url, json=None, headers=None, **kwargs):
+        stream_calls.append(dict(json or {}))
+        return MockStreamResponse(is_first=(len(stream_calls) == 1))
+
+    monkeypatch.setattr("httpx.Client.stream", mock_stream)
+
+    stream_calls.clear()
+    events = list(llm.chat_stream(messages, model="SCNet-Max", reasoning_effort="max"))
+    assert len(stream_calls) == 2
+    assert stream_calls[0].get("reasoning_effort") == "high"
+    assert "reasoning_effort" not in stream_calls[1]
+
+    deltas = [val for kind, val in events if kind == "delta"]
+    assert "".join(deltas) == "stream healed"
+    finals = [val for kind, val in events if kind == "final"]
+    assert len(finals) == 1
+    assert finals[0]["message"]["content"] == "stream healed"
+
 
 # ---------------------------------------------------------------- 4. 中止 API 与状态管理
 def test_abort_api_and_state(client, device):

@@ -430,7 +430,7 @@ function getProfileFromLevels(levels) {
 
 const REASONING_PROFILES = {
   deepseek: ["none", "standard", "max"],
-  openai: ["low", "medium", "high"],
+  openai: ["none", "low", "medium", "high"],
   claude: ["none", "low", "medium", "high", "max"],
 };
 
@@ -455,7 +455,8 @@ function inferModelMetadata(modelInput) {
   // 推理思考能力
   const is_o_series = /\b(o1|o3|o4)\b/.test(name) || name.startsWith("o1-") || name.startsWith("o3-") || name.startsWith("o4-");
   const is_claude_thinking = name.includes("claude-3-7") || name.includes("claude-3.7") || (name.includes("claude") && name.includes("thinking"));
-  const is_common_reasoner = ["scnet", "reasoner", "r1", "thinking", "qwq", "deepseek", "qwen-max"].some((k) => name.includes(k));
+  const is_scnet = name.includes("scnet");
+  const is_common_reasoner = ["reasoner", "r1", "thinking", "qwq", "deepseek", "qwen-max"].some((k) => name.includes(k));
 
   let supports_reasoning = false;
   let reasoning_profile = "deepseek";
@@ -469,6 +470,10 @@ function inferModelMetadata(modelInput) {
     supports_reasoning = true;
     reasoning_profile = "claude";
     reasoning_levels = ["none", "low", "medium", "high", "max"];
+  } else if (is_scnet) {
+    supports_reasoning = true;
+    reasoning_profile = "openai";
+    reasoning_levels = ["none", "low", "medium", "high"];
   } else if (is_common_reasoner) {
     supports_reasoning = true;
     reasoning_profile = "deepseek";
@@ -559,8 +564,10 @@ function getModelReasoningLevels(modelName, allModels) {
   ) {
     return ["none", "low", "medium", "high", "max"];
   }
+  if (name.includes("scnet")) {
+    return ["none", "low", "medium", "high"];
+  }
   if (
-    name.includes("scnet") ||
     name.includes("deepseek") ||
     name.includes("reasoner") ||
     name.includes("r1") ||
@@ -577,18 +584,18 @@ function getModelReasoningLevels(modelName, allModels) {
 const REASONING_LABELS = {
   none: "关闭深度思考 (none)",
   low: "轻度思考 (low)",
-  medium: "平衡思考 (medium)",
-  standard: "标准深度思考 (standard)",
-  high: "高强度推理 (high)",
-  max: "极限深度推演 (max)",
+  medium: "标准深度思考 (medium)",
+  high: "极限深度思考 (high)",
+  standard: "标准深度思考 (medium)",
+  max: "极限深度思考 (high)",
 };
 
 const REASONING_SHORT_LABELS = {
   none: "思考: 关",
   low: "思考: 轻度",
-  medium: "思考: 平衡",
+  medium: "思考: 标准",
+  high: "思考: 极限",
   standard: "思考: 标准",
-  high: "思考: 深度",
   max: "思考: 极限",
 };
 
@@ -688,7 +695,7 @@ function MainApp({ onLogout }) {
   const [toast, setToast] = useState("");
   const [pairCode, setPairCode] = useState(null);
 
-  const [reasoningEffort, setReasoningEffort] = useState("standard");
+  const [reasoningEffort, setReasoningEffort] = useState("medium");
   const [editingCustomModel, setEditingCustomModel] = useState(false);
   const [customModelInput, setCustomModelInput] = useState("");
   const [showModelPicker, setShowModelPicker] = useState(false);
@@ -1170,7 +1177,8 @@ function MainApp({ onLogout }) {
       const effModel = (activeBot?.model || "").trim() || settings?.model || models?.default || "deepseek-chat";
       const effLevels = getModelReasoningLevels(effModel, models);
       if (effLevels.length > 0 && reasoningEffort) {
-        payload.reasoning_effort = reasoningEffort;
+        const effortMap = { standard: "medium", max: "high" };
+        payload.reasoning_effort = effortMap[reasoningEffort] || reasoningEffort;
       }
       await api(`/v1/sessions/${activeId}/messages`, {
         method: "POST",

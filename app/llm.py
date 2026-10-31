@@ -4,6 +4,7 @@
 失败一律返回 None，由调用方回落到模板 —— 文档生成不能把项目卡死。
 """
 from __future__ import annotations
+import logging
 import time
 
 import contextvars
@@ -15,8 +16,34 @@ import httpx
 
 from . import llm_config
 
+log = logging.getLogger("app.llm")
+
 API_URL = os.environ.get("LLM_URL", "https://api.deepseek.com/chat/completions")
 MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
+
+# OpenAI 规范思考强度映射表与合法枚举
+REASONING_EFFORT_MAP: dict[str, str | None] = {
+    "none": None,
+    "low": "low",
+    "standard": "medium",
+    "medium": "medium",
+    "high": "high",
+    "max": "high",
+}
+VALID_REASONING_EFFORTS = {"low", "medium", "high"}
+
+
+def normalize_reasoning_effort(effort: str | None) -> str | None:
+    """标准化推理思考深度档位至 OpenAI 兼容规范枚举 (low / medium / high)。"""
+    if not effort:
+        return None
+    key = str(effort).strip().lower()
+    if key in REASONING_EFFORT_MAP:
+        mapped = REASONING_EFFORT_MAP[key]
+        return mapped if mapped in VALID_REASONING_EFFORTS else None
+    if key in VALID_REASONING_EFFORTS:
+        return key
+    return None
 
 
 def _key(model: str | None = None) -> str | None:
@@ -210,11 +237,12 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
         body["tool_choice"] = "auto"
 
     # 纯推理模型或显式指定非空 reasoning_effort 时，安全剔除 temperature，避免上游 400
-    has_active_reasoning = bool(reasoning_effort and reasoning_effort.strip().lower() not in ("none", ""))
+    norm_effort = normalize_reasoning_effort(reasoning_effort)
+    has_active_reasoning = bool(norm_effort)
     if _is_pure_reasoning_model(target_model) or has_active_reasoning:
         body.pop("temperature", None)
-    if has_active_reasoning:
-        body["reasoning_effort"] = reasoning_effort.strip().lower()
+    if norm_effort:
+        body["reasoning_effort"] = norm_effort
 
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     try:
@@ -229,8 +257,16 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
                     r = c.post(target_url, json=body, headers=headers)
                 if r.status_code != 200:
                     text = r.text[:400]
-                    if r.status_code == 400 and "reasoning_content" in text.lower():
+                    text_lower = text.lower()
+                    if r.status_code == 400 and "reasoning_content" in text_lower:
                         body["messages"] = _fix_assistant_reasoning_content(body["messages"])
+                        continue
+                    if r.status_code == 400 and ("10013" in text or "invalid request parameters" in text_lower) and "reasoning_effort" in body:
+                        log.warning(
+                            "Upstream rejected reasoning_effort (%s): %s. Auto-healing by removing reasoning_effort and retrying.",
+                            target_model, text[:200]
+                        )
+                        body.pop("reasoning_effort", None)
                         continue
                     if r.status_code in (429, 500, 502, 503, 504) and attempt < 2:
                         time.sleep(1.5)
@@ -258,6 +294,13 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
                 err_str = str(exc).lower()
                 if "reasoning_content" in err_str:
                     body["messages"] = _fix_assistant_reasoning_content(body["messages"])
+                    continue
+                if ("10013" in err_str or "invalid request parameters" in err_str) and "reasoning_effort" in body:
+                    log.warning(
+                        "Upstream rejected reasoning_effort (%s): %s. Auto-healing by removing reasoning_effort and retrying.",
+                        target_model, err_str[:200]
+                    )
+                    body.pop("reasoning_effort", None)
                     continue
                 if any(code in err_str for code in ("429", "500", "502", "503", "504")) and attempt < 2:
                     time.sleep(1.5)
@@ -299,11 +342,12 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
         body["tool_choice"] = "auto"
 
     # 纯推理模型或显式指定非空 reasoning_effort 时，安全剔除 temperature，避免上游 400
-    has_active_reasoning = bool(reasoning_effort and reasoning_effort.strip().lower() not in ("none", ""))
+    norm_effort = normalize_reasoning_effort(reasoning_effort)
+    has_active_reasoning = bool(norm_effort)
     if _is_pure_reasoning_model(target_model) or has_active_reasoning:
         body.pop("temperature", None)
-    if has_active_reasoning:
-        body["reasoning_effort"] = reasoning_effort.strip().lower()
+    if norm_effort:
+        body["reasoning_effort"] = norm_effort
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     try:
         target_url = _url(model=target_model)
@@ -326,35 +370,45 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
                 with c.stream("POST", target_url, json=body, headers=headers) as r:
                     if r.status_code != 200:
                         text = r.read().decode("utf-8", "replace")[:400]
-                        if r.status_code == 400 and "reasoning_content" in text.lower():
+                        text_lower = text.lower()
+                        if r.status_code == 400 and "reasoning_content" in text_lower:
                             body["messages"] = _fix_assistant_reasoning_content(body["messages"])
+                            continue
+                        if r.status_code == 400 and ("10013" in text or "invalid request parameters" in text_lower) and "reasoning_effort" in body:
+                            log.warning(
+                                "Upstream stream rejected reasoning_effort (%s): %s. Auto-healing by removing reasoning_effort and retrying.",
+                                target_model, text[:200]
+                            )
+                            body.pop("reasoning_effort", None)
                             continue
                         if r.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
                             time.sleep(1.5)
                             continue
                         raise RuntimeError(f"http_{r.status_code}: {text[:200]}")
 
-                    ctype = (r.headers.get("content-type") or "").lower()
-                    if "text/event-stream" not in ctype and "application/x-ndjson" not in ctype:
-                        raw = r.read().decode("utf-8", "replace")
-                        try:
-                            data = json.loads(raw)
-                        except Exception:
-                            data = {}
-                        choice = (data.get("choices") or [{}])[0]
-                        msg = choice.get("message") or {}
-                        if "reasoning_content" in msg or "reasoning" in msg:
-                            msg.setdefault("reasoning_content", msg.get("reasoning_content") or msg.get("reasoning"))
-                        u = data.get("usage") or {}
-                        rec = {"prompt_tokens": int(u.get("prompt_tokens") or 0),
-                               "completion_tokens": int(u.get("completion_tokens") or 0)}
-                        _record_usage("agent", rec)
-                        if msg.get("reasoning_content"):
-                            yield "thought", msg["reasoning_content"]
-                        if msg.get("content"):
-                            yield "delta", msg["content"]
-                        yield "final", {"message": msg, "usage": rec, "finish_reason": choice.get("finish_reason")}
-                        return
+                    r_headers = getattr(r, "headers", None)
+                    if r_headers is not None:
+                        ctype = (r_headers.get("content-type") or "").lower()
+                        if "text/event-stream" not in ctype and "application/x-ndjson" not in ctype and "json" in ctype:
+                            raw = r.read().decode("utf-8", "replace")
+                            try:
+                                data = json.loads(raw)
+                            except Exception:
+                                data = {}
+                            choice = (data.get("choices") or [{}])[0]
+                            msg = choice.get("message") or {}
+                            if "reasoning_content" in msg or "reasoning" in msg:
+                                msg.setdefault("reasoning_content", msg.get("reasoning_content") or msg.get("reasoning"))
+                            u = data.get("usage") or {}
+                            rec = {"prompt_tokens": int(u.get("prompt_tokens") or 0),
+                                   "completion_tokens": int(u.get("completion_tokens") or 0)}
+                            _record_usage("agent", rec)
+                            if msg.get("reasoning_content"):
+                                yield "thought", msg["reasoning_content"]
+                            if msg.get("content"):
+                                yield "delta", msg["content"]
+                            yield "final", {"message": msg, "usage": rec, "finish_reason": choice.get("finish_reason")}
+                            return
 
                     for line in r.iter_lines():
                         if not line or not line.startswith("data:"):
@@ -412,12 +466,21 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
 
         except Exception as exc:
             last_err = exc
-            if started_yielding or attempt >= max_attempts - 1:
+            if started_yielding:
                 raise
             err_str = str(exc).lower()
             if "reasoning_content" in err_str:
                 body["messages"] = _fix_assistant_reasoning_content(body["messages"])
                 continue
+            if ("10013" in err_str or "invalid request parameters" in err_str) and "reasoning_effort" in body:
+                log.warning(
+                    "Upstream stream error with reasoning_effort (%s): %s. Auto-healing by removing reasoning_effort and retrying.",
+                    target_model, err_str[:200]
+                )
+                body.pop("reasoning_effort", None)
+                continue
+            if attempt >= max_attempts - 1:
+                raise
             if any(code in err_str for code in ("429", "500", "502", "503", "504")):
                 time.sleep(1.5)
                 continue
