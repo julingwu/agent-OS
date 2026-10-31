@@ -8,9 +8,15 @@ from app.agent import loop as agent_loop
 
 
 def test_system_prompt_cloud_execution_policy():
-    """验证系统提示词中包含云端服务器默认优先、严禁做选择题、严控本地电脑等准则。"""
+    """验证系统提示词中包含自然对话轻量问候、云端服务器默认优先、主动执行闭环、严控本地电脑等准则。"""
     bot = {"id": "bot_test", "name": "分析师", "persona": "你是顶级战略与数据分析师。"}
     prompt = agent_loop._system_prompt(bot)
+
+    # 0. 自然对话与轻量问候准则
+    assert "【自然对话与轻量问候准则】" in prompt
+    assert "日常打招呼" in prompt
+    assert "保持自然、亲切、简洁、温和的回应" in prompt
+    assert "严禁在此类简单问候中输出任何任务编号" in prompt
 
     # 1. 云端 Linux 服务器运行环境
     assert "专属云端 Linux 服务器" in prompt
@@ -24,11 +30,10 @@ def test_system_prompt_cloud_execution_policy():
     assert "render_chart" in prompt
     assert "100% 默认在云端服务器直接执行并交付" in prompt
 
-    # 3. 严禁推卸与做选择题
-    assert "【严禁推卸与做选择题】" in prompt
-    assert "严禁在能够自主执行时向用户提问“你选方案 A 还是方案 B”、“你要我怎么做”" in prompt
-    assert "绝不把执行责任推给用户" in prompt
-    assert "必须先动手跑出完整结果再汇报" in prompt
+    # 3. 主动执行闭环（正面表述，杜绝消极机械反向规约）
+    assert "【主动执行闭环】" in prompt
+    assert "在接收到具体任务时，优先自主完成调研与执行闭环" in prompt
+    assert "直接交付完整方案与成果，避免不必要的反问推诿" in prompt
     assert "ask_human" in prompt
 
     # 4. 本地个人电脑（local_*）严格管控铁律

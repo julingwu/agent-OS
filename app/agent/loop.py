@@ -282,11 +282,12 @@ def _chat_streamed(conn, messages, *, bot_id, session_id, turn_id, model,
 
 
 # ================================================================
-# 动态风格旋钮系统 (Dynamic Style Knob: Strict / Insight / Fun)
+# 动态风格旋钮系统 (Dynamic Style Knob: Strict / Insight / Fun / General)
 # 对标 Grok 标杆特性，支持在严谨极客、商业智囊与幽默犀利间丝滑切换
 # ================================================================
 
 STYLE_GUIDES: dict[str, str] = {
+    "general": "【交互风格：自然通用 (General)】保持自然友好、务实清晰、重点突出。",
     "strict": (
         "【当前交互风格：极客严谨模式 (Strict Geek)】\n"
         "- 【第一性原理与零套话废话】：恪守第一性原理，彻底剔除套话、废话与一切公关辞令，直击技术本质与底层事实。\n"
@@ -310,8 +311,11 @@ STYLE_GUIDES: dict[str, str] = {
 }
 # 支持别名映射
 STYLE_GUIDES["grok"] = STYLE_GUIDES["fun"]
+STYLE_GUIDES["balanced"] = STYLE_GUIDES["general"]
 
 STYLE_TEMPERATURES: dict[str, float] = {
+    "general": 0.4,
+    "balanced": 0.4,
     "strict": 0.2,
     "insight": 0.4,
     "fun": 0.7,
@@ -320,9 +324,9 @@ STYLE_TEMPERATURES["grok"] = 0.7
 
 
 def get_style_temperature(style_mode: str | None) -> float:
-    """获取风格模式对应的模型推导采样温度（strict 0.2 / insight 0.4 / fun 0.7）。"""
+    """获取风格模式对应的模型推导采样温度（general/balanced 0.4 / strict 0.2 / insight 0.4 / fun 0.7）。"""
     if not style_mode:
-        return STYLE_TEMPERATURES["insight"]
+        return STYLE_TEMPERATURES["general"]
     mode = str(style_mode).lower().strip()
     return STYLE_TEMPERATURES.get(mode, 0.4)
 
@@ -331,34 +335,44 @@ def detect_style_mode(user_text: str | None) -> str | None:
     """智能检测用户输入中显式指定的风格模式（Grok 标杆特性）。
 
     支持指令与标签：
-    - 前缀指令：/fun, /strict, /insight, /grok (映射为 fun)
-    - 结构化标签：[style:fun], [style:strict], [style:insight], [style:grok]
-    - 中文风格标签：风格:诙谐, 风格:严谨, 风格:洞察, 风格：诙谐, 风格:幽默, 风格:犀利 等
+    - 前缀指令：/fun, /strict, /insight, /grok (映射为 fun), /general, /balanced
+    - 结构化标签：[style:fun], [style:strict], [style:insight], [style:grok], [style:general], [style:balanced]
+    - 中文风格标签：风格:通用, 风格:平衡, 风格:自然, 风格:诙谐, 风格:严谨, 风格:洞察 等
     """
     if not user_text:
         return None
     raw = str(user_text).strip()
 
-    # 1. 匹配前缀指令，如 /fun, /strict, /insight, /grok
-    prefix_m = re.match(r"^/(fun|strict|insight|grok)\b", raw, re.IGNORECASE)
+    # 1. 匹配前缀指令，如 /fun, /strict, /insight, /grok, /general, /balanced
+    prefix_m = re.match(r"^/(fun|strict|insight|grok|general|balanced)\b", raw, re.IGNORECASE)
     if prefix_m:
         cmd = prefix_m.group(1).lower()
-        return "fun" if cmd == "grok" else cmd
+        if cmd == "grok":
+            return "fun"
+        if cmd == "balanced":
+            return "general"
+        return cmd
 
-    # 2. 匹配中英文方括号标签，如 [style:fun], 【style:strict】, [style=insight]
-    tag_m = re.search(r"[\[【]style\s*[:=]\s*(fun|strict|insight|grok)[\]】]", raw, re.IGNORECASE)
+    # 2. 匹配中英文方括号标签，如 [style:fun], 【style:strict】, [style=insight], [style:general]
+    tag_m = re.search(r"[\[【]style\s*[:=]\s*(fun|strict|insight|grok|general|balanced)[\]】]", raw, re.IGNORECASE)
     if tag_m:
         tag = tag_m.group(1).lower()
-        return "fun" if tag == "grok" else tag
+        if tag == "grok":
+            return "fun"
+        if tag == "balanced":
+            return "general"
+        return tag
 
-    # 3. 匹配中文风格标记，如 风格:诙谐, 风格：严谨, 风格:洞察, [风格:幽默] 等
+    # 3. 匹配中文风格标记，如 风格:通用, 风格:平衡, 风格:自然, 风格:诙谐, 风格:幽默, 风格:犀利 等
     cn_m = re.search(
-        r"(?:[\[【])?风格\s*[:：]\s*(诙谐|幽默|犀利|严谨|极客|洞察|智囊|fun|strict|insight|grok)(?:[\]】])?",
+        r"(?:[\[【])?风格\s*[:：]\s*(通用|平衡|自然|诙谐|幽默|犀利|严谨|极客|洞察|智囊|fun|strict|insight|grok|general|balanced)(?:[\]】])?",
         raw,
         re.IGNORECASE,
     )
     if cn_m:
         kw = cn_m.group(1).lower()
+        if kw in ("通用", "平衡", "自然", "general", "balanced"):
+            return "general"
         if kw in ("诙谐", "幽默", "犀利", "fun", "grok"):
             return "fun"
         if kw in ("严谨", "极客", "strict"):
@@ -374,10 +388,10 @@ def strip_style_command(text: str | None) -> str:
     if not text:
         return ""
     cleaned = text
-    cleaned = re.sub(r"^\s*/(fun|strict|insight|grok)\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"[\[【]style\s*[:=]\s*(fun|strict|insight|grok)[\]】]", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\s*/(fun|strict|insight|grok|general|balanced)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"[\[【]style\s*[:=]\s*(fun|strict|insight|grok|general|balanced)[\]】]", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(
-        r"(?:[\[【])?风格\s*[:：]\s*(?:诙谐|幽默|犀利|严谨|极客|洞察|智囊|fun|strict|insight|grok)(?:[\]】])?",
+        r"(?:[\[【])?风格\s*[:：]\s*(?:通用|平衡|自然|诙谐|幽默|犀利|严谨|极客|洞察|智囊|fun|strict|insight|grok|general|balanced)(?:[\]】])?",
         "",
         cleaned,
         flags=re.IGNORECASE,
@@ -411,10 +425,14 @@ def _system_prompt(bot: dict, members: list[dict] | None = None,
     # 1. 静态规范与核心原则（置顶以最大化命中 KV Prompt Cache）
     static_body = (
         f"{persona}\n\n"
+        "【自然对话与轻量问候准则】：\n"
+        "- 当用户只是发送日常打招呼（如“哈喽”、“你好”、“在吗”、“Hi”）或简短闲聊时，保持自然、亲切、简洁、温和的回应（1~2 句话即可），礼貌询问用户今天有什么可以协助的；\n"
+        "- 严禁在此类简单问候中输出任何任务编号（如 T0、T1）、内部执行准则、金融测算行话或宣誓性口号；\n"
+        "- 只有当用户提出明确、具体的实质性工作或问题时，才根据任务需要展开专业推演与工具调度。\n\n"
         "运行环境与执行策略（最高优先准则）：\n"
         "- 系统运行在专属云端 Linux 服务器，直连全网并配备强大的云端工程能力（多引擎实时联网、文件代码深度编辑、后台守护进程、子代理并行分派）。\n"
         "- 【默认第一优先：云端服务器直接闭环执行】：所有信息检索（web_search/web_fetch）、代码执行与构建（exec/process_*）、数据挖掘与统计、文档解析（doc_read）、图表生成（render_chart）以及研报产出，必须 100% 默认在云端服务器直接执行并交付。\n"
-        "- 【严禁推卸与做选择题】：严禁在能够自主执行时向用户提问“你选方案 A 还是方案 B”、“你要我怎么做”，绝不把执行责任推给用户；必须先动手跑出完整结果再汇报；只有在遇到不可逆的严重异常或凭据缺失时才调用 ask_human。\n"
+        "- 【主动执行闭环】：在接收到具体任务时，优先自主完成调研与执行闭环，直接交付完整方案与成果，避免不必要的反问推诿；遇到不可逆关键操作时通过 ask_human 确认。\n"
         "- 【本地个人电脑（local_*）严格管控铁律】：local_* 系列工具专用于操作用户本人的本地桌面（如屏幕控制、操作本地客户端）。除非用户在当前提问中明确且主动输入了“在我电脑上”、“在我本机运行”、“打开我本地微信/Excel”、“读取我本机 D 盘”等显式指令，否则：绝对禁止主动提议“尝试在你本地电脑上执行/搜索”；绝对禁止向用户列出任何本地电脑操作选项；绝对禁止调用任何 local_* 工具！\n"
         f"{peer_line}{memory_line}\n"
         "核心工作原则与能力（非常重要）：\n"
@@ -828,15 +846,21 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
     board = blackboard.get_blackboard(conn, session_id)
     is_cont = blackboard.is_continuation_intent(last_user)
 
-    # 动态风格旋钮检测与持久化 (Dynamic Style Knob: Strict / Insight / Fun)
+    # 动态风格旋钮检测与持久化 (Dynamic Style Knob: Strict / Insight / Fun / General)
     detected_style = detect_style_mode(last_user)
     if detected_style:
         style_mode = detected_style
         # 用户显式指定新风格时，持久化记录到黑板，供本轮与后续轮次沿用
         blackboard.save_blackboard(conn, session_id, style_mode=style_mode)
     else:
-        # 继承黑板持久化记录的风格，默认回退至 insight 洞察智囊模式
-        style_mode = board.get("style_mode") or "insight"
+        # 继承黑板持久化记录的风格，默认回退至 general 自然通用模式（仅在显式 /insight 或商业研报任务时进入 insight 模式）
+        persisted = board.get("style_mode")
+        if persisted:
+            style_mode = persisted
+        elif last_user and any(kw in last_user for kw in ("商业研报", "投资研报", "行业研报", "尽职调查", "商业尽调")):
+            style_mode = "insight"
+        else:
+            style_mode = "general"
 
     temperature = get_style_temperature(style_mode)
 

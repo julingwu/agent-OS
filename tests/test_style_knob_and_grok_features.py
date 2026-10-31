@@ -20,6 +20,8 @@ class TestStyleKnobDetection:
         ("/strict 审查这段生产代码", "strict"),
         ("/insight 评估低空经济投资可行性", "insight"),
         ("/grok 怎么看待这次技术突破", "fun"),
+        ("/general 帮我写个邮件", "general"),
+        ("/balanced 保持平衡模式", "general"),
         ("  /fun   前后有空格的输入", "fun"),
         ("/FUN 大写前缀支持", "fun"),
     ])
@@ -31,12 +33,17 @@ class TestStyleKnobDetection:
         ("【style:strict】量化测算估值模型", "strict"),
         ("吐槽一下公关通稿 [style:fun]", "fun"),
         ("怎么看待这个方案 [style:grok]", "fun"),
+        ("请处理这个日常事务 [style:general]", "general"),
+        ("【style:balanced】日常回复", "general"),
         ("支持等号标签 [style=strict]", "strict"),
     ])
     def test_bracket_tags(self, text: str, expected: str):
         assert loop.detect_style_mode(text) == expected
 
     @pytest.mark.parametrize("text,expected", [
+        ("风格:通用 帮忙润色这封通知", "general"),
+        ("风格:自然 轻松聊聊", "general"),
+        ("风格:平衡 回应日常问询", "general"),
         ("风格:诙谐 评价一下现在的行业黑话", "fun"),
         ("风格：诙谐 中文全角冒号测试", "fun"),
         ("风格:幽默 讲讲这个技术的槽点", "fun"),
@@ -131,6 +138,12 @@ class TestBlackboardStylePersistence:
 class TestPromptInjectionAndTemperature:
     """测试系统提示词动态风格指南注入与模型温度参数联动。"""
 
+    def test_system_prompt_injection_general(self):
+        bot = {"id": "b0", "name": "General", "persona": "日常助手"}
+        prompt = loop._system_prompt(bot, style_mode="general")
+        assert "自然通用" in prompt
+        assert "保持自然友好、务实清晰、重点突出" in prompt
+
     def test_system_prompt_injection_strict(self):
         bot = {"id": "b1", "name": "Geek", "persona": "极客工程师"}
         prompt = loop._system_prompt(bot, style_mode="strict")
@@ -163,11 +176,13 @@ class TestPromptInjectionAndTemperature:
         assert "当前交互风格" not in prompt
 
     def test_temperature_linking(self):
-        """测试采样温度联动匹配：strict 0.2 / insight 0.4 / fun 0.7。"""
+        """测试采样温度联动匹配：strict 0.2 / insight 0.4 / fun 0.7 / general 0.4。"""
         assert loop.get_style_temperature("strict") == 0.2
         assert loop.get_style_temperature("insight") == 0.4
         assert loop.get_style_temperature("fun") == 0.7
         assert loop.get_style_temperature("grok") == 0.7
+        assert loop.get_style_temperature("general") == 0.4
+        assert loop.get_style_temperature("balanced") == 0.4
         assert loop.get_style_temperature(None) == 0.4
 
 
