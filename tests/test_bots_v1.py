@@ -197,3 +197,115 @@ def test_loop_emits_diagnostic_bubble_on_llm_failure(client, monkeypatch):
         assert "报错原因" in text
         assert "推荐方案" in text
         assert "429" in text
+
+
+def test_workspace_upload_publish_event_flag(client, device):
+    """测试文件上传时的 publish_event 开关，默认不发 artifact.attached 事件。"""
+    import base64
+
+    b64_data = base64.b64encode(b"hello image data").decode("utf-8")
+
+    # 1. 默认 publish_event=False，不应在事件流产生 artifact.attached
+    res1 = client.post(
+        "/v1/workspace/upload",
+        headers=_auth(device),
+        json={
+            "filename": "tray_img.png",
+            "data_b64": b64_data,
+            "session_id": "ses_chief",
+            "publish_event": False,
+        },
+    )
+    assert res1.status_code == 200
+    data1 = res1.json()
+    assert data1["ok"] is True
+    assert "uploads/" in data1["path"]
+    assert data1["artifact_id"]
+
+    # 验证没有 artifact.attached 事件
+    msgs1 = client.get("/v1/sessions/ses_chief/messages", headers=_auth(device)).json()
+    from app import db, events as ev
+    with db.get_conn() as conn:
+        events = ev.read(conn, session_id="ses_chief", kinds=["artifact.attached"], limit=10)
+        assert len(events) == 0
+
+    # 2. 显式传 publish_event=True，应生成 artifact.attached 事件
+    res2 = client.post(
+        "/v1/workspace/upload",
+        headers=_auth(device),
+        json={
+            "filename": "stream_img.png",
+            "data_b64": b64_data,
+            "session_id": "ses_chief",
+            "publish_event": True,
+        },
+    )
+    assert res2.status_code == 200
+    with db.get_conn() as conn:
+        events2 = ev.read(conn, session_id="ses_chief", kinds=["artifact.attached"], limit=10)
+        assert len(events2) >= 1
+
+
+def test_message_with_attachments_and_pure_image(client, device):
+    """测试发送带有附件的消息以及纯图片消息，核验 list_messages、build_bot_history、_last_user_text。"""
+    from app import db
+    from app.agent import loop
+
+    # 1. 校验空文本且无附件抛出 422
+    err_res = client.post(
+        "/v1/sessions/ses_chief/messages",
+        headers=_auth(device),
+        json={"text": "   ", "attachments": []},
+    )
+    assert err_res.status_code == 422
+
+    # 2. 发送图文消息
+    attachment_item = {
+        "name": "photo.png",
+        "path": "uploads/photo.png",
+        "artifact_id": "art_123",
+        "url": "/v1/artifacts/art_123",
+        "bytes": 1024,
+        "kind": "image",
+    }
+    res_mixed = client.post(
+        "/v1/sessions/ses_chief/messages",
+        headers=_auth(device),
+        json={
+            "text": "请帮我看看这张图",
+            "attachments": [attachment_item],
+            "client_msg_id": "c-mixed-1",
+        },
+    )
+    assert res_mixed.status_code == 202
+
+    # 3. 发送纯图片消息（无文本）
+    res_pure = client.post(
+        "/v1/sessions/ses_chief/messages",
+        headers=_auth(device),
+        json={
+            "text": "",
+            "attachments": [attachment_item],
+            "client_msg_id": "c-pure-1",
+        },
+    )
+    assert res_pure.status_code == 202
+
+    # 4. 核验 list_messages 返回 attachments
+    msgs_res = client.get("/v1/sessions/ses_chief/messages", headers=_auth(device)).json()
+    items = msgs_res["items"]
+    pure_item = next(m for m in items if m.get("text") == "" and len(m.get("attachments", [])) > 0)
+    assert pure_item["attachments"][0]["name"] == "photo.png"
+    assert pure_item["attachments"][0]["path"] == "uploads/photo.png"
+
+    # 5. 核验 build_bot_history 与 _last_user_text / _last_user_event
+    with db.get_conn() as conn:
+        history = loop.build_bot_history(conn, "ses_chief", "bot_chief")
+        user_msgs = [m for m in history if m["role"] == "user"]
+        assert any("请帮我看看这张图\n\n[附件: uploads/photo.png]" in m["content"] for m in user_msgs)
+        assert any("[用户发送了图片附件: uploads/photo.png，请查阅并给出专业分析或回复]" in m["content"] for m in user_msgs)
+
+        last_ev = loop._last_user_event(conn, "ses_chief")
+        assert last_ev is not None
+        last_text = loop._last_user_text(conn, "ses_chief")
+        assert "uploads/photo.png" in last_text

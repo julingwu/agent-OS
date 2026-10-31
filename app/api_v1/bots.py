@@ -16,7 +16,7 @@ import secrets
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .. import db
 from .. import events as ev
@@ -60,11 +60,27 @@ class SessionCreate(BaseModel):
     title: str | None = None
 
 
+class MessageAttachment(BaseModel):
+    name: str
+    path: str
+    artifact_id: str | None = None
+    url: str | None = None
+    bytes: int | None = None
+    kind: str | None = "image"
+
+
 class MessageIn(BaseModel):
-    text: str = Field(min_length=1, max_length=20000)
+    text: str = Field(default="", max_length=20000)
+    attachments: list[MessageAttachment] = Field(default_factory=list)
     client_msg_id: str | None = Field(default=None, max_length=64)
     reply_to: int | None = None
     reasoning_effort: str | None = None
+
+    @model_validator(mode="after")
+    def check_text_or_attachments(self):
+        if not self.text.strip() and not self.attachments:
+            raise ValueError("Either text or attachments must be provided")
+        return self
 
 
 # ---------------------------------------------------------------- Bot
@@ -345,7 +361,11 @@ def post_message(session_id: str, body: MessageIn,
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
         bot_id = session["admin_bot_id"] or "bot_chief"
-        payload = {"text": body.text, "device_id": device["id"]}
+        payload = {
+            "text": body.text,
+            "device_id": device["id"],
+            "attachments": [a.model_dump() for a in body.attachments],
+        }
         if body.reasoning_effort is not None:
             payload["reasoning_effort"] = body.reasoning_effort
         event = ev.emit(
@@ -369,7 +389,7 @@ def post_message(session_id: str, body: MessageIn,
             "targets": targets}
 
 
-def _route_targets(conn, session, text: str) -> list[str]:
+def _route_targets(conn, session, text: str | None = None) -> list[str]:
     """群聊按 @ 点名路由；没点名就给管理员 Bot。单聊永远给管理员。"""
     admin = session["admin_bot_id"] or "bot_chief"
     if session["kind"] != "group":
@@ -401,8 +421,14 @@ def list_messages(
         cursor = ev.cursor(conn)
     return {
         "items": [
-            {"id": e.id, "ts": e.ts, "kind": e.kind,
-             "text": e.payload.get("text", ""), "actor": e.actor}
+            {
+                "id": e.id,
+                "ts": e.ts,
+                "kind": e.kind,
+                "text": e.payload.get("text", ""),
+                "attachments": e.payload.get("attachments", []),
+                "actor": e.actor,
+            }
             for e in items
         ],
         "cursor": cursor,

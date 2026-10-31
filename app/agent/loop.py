@@ -526,10 +526,18 @@ def build_bot_history(conn, session_id: str, bot_id: str, *,
     msgs: list[dict] = []
     for e in rows[-limit:]:
         text = (e.payload.get("text") or "").strip()
-        if not text:
+        attachments = e.payload.get("attachments") or []
+        if not text and not attachments:
             continue
         if e.kind == "message.user":
-            msgs.append({"role": "user", "content": text})
+            if attachments:
+                if text:
+                    content = f"{text}\n\n" + " ".join(f"[附件: {a.get('path') or a.get('name')}]" for a in attachments)
+                else:
+                    content = f"[用户发送了图片附件: " + ", ".join(a.get("path") or a.get("name") for a in attachments) + "，请查阅并给出专业分析或回复]"
+            else:
+                content = text
+            msgs.append({"role": "user", "content": content})
         elif e.bot_id == bot_id:
             msgs.append({"role": "assistant", "content": text})
         else:
@@ -540,9 +548,21 @@ def build_bot_history(conn, session_id: str, bot_id: str, *,
     return msgs
 
 
+_recent_context_messages = build_bot_history
+
+
 def _last_user_text(conn, session_id: str) -> str:
     ev_obj = _last_user_event(conn, session_id)
-    return (ev_obj.payload.get("text") or "").strip() if ev_obj else ""
+    if not ev_obj:
+        return ""
+    text = (ev_obj.payload.get("text") or "").strip()
+    if text:
+        return text
+    attachments = ev_obj.payload.get("attachments") or []
+    if attachments:
+        paths = [a.get("path") or a.get("name") for a in attachments if a.get("path") or a.get("name")]
+        return f"[用户发送了图片附件: {', '.join(paths)}]"
+    return ""
 
 
 def _last_user_event(conn, session_id: str) -> ev.Event | None:
@@ -550,7 +570,8 @@ def _last_user_event(conn, session_id: str) -> ev.Event | None:
                    kinds=["message.user"], limit=ev.MAX_READ_LIMIT)
     for e in reversed(rows):
         text = (e.payload.get("text") or "").strip()
-        if text:
+        attachments = e.payload.get("attachments") or []
+        if text or attachments:
             return e
     return None
 
@@ -839,7 +860,7 @@ def _run_turn_locked(conn, bot_id: str, session_id: str,
                     turn_id=turn_id, payload={"input_event_id": ev.cursor(conn), "hops": hops})
     members = _session_members(conn, session_id)
     last_user_ev = _last_user_event(conn, session_id)
-    last_user = (last_user_ev.payload.get("text") or "").strip() if last_user_ev else ""
+    last_user = _last_user_text(conn, session_id)
     reasoning_effort: str | None = last_user_ev.payload.get("reasoning_effort") if last_user_ev else None
 
     # 会话级黑板管理与断点接力看板 (Session Blackboard)

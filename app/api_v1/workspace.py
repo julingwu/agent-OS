@@ -82,6 +82,7 @@ class WorkspaceUploadBody(BaseModel):
     data_b64: str
     session_id: Optional[str] = None
     bot_id: Optional[str] = None
+    publish_event: bool = False
 
 
 def _clean_filename(name: str) -> str:
@@ -102,6 +103,7 @@ async def workspace_upload(
     filename = ""
     target_session = None
     target_bot = None
+    publish_event = False
 
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" in content_type:
@@ -112,6 +114,9 @@ async def workspace_upload(
             data = await file_obj.read()
         target_session = form.get("session_id")
         target_bot = form.get("bot_id")
+        raw_pe = form.get("publish_event")
+        if raw_pe is not None:
+            publish_event = str(raw_pe).strip().lower() in ("true", "1", "yes")
     else:
         try:
             body = await request.json()
@@ -120,6 +125,7 @@ async def workspace_upload(
         filename = body.get("filename", "")
         target_session = body.get("session_id")
         target_bot = body.get("bot_id")
+        publish_event = bool(body.get("publish_event", False))
         raw_b64 = str(body.get("data_b64") or "").strip()
         if raw_b64.startswith("data:"):
             raw_b64 = raw_b64.split(",", 1)[-1]
@@ -149,7 +155,7 @@ async def workspace_upload(
 
     art = artifacts.save_bytes(clean_name, data, kind=mime)
 
-    if target_session:
+    if target_session and publish_event:
         try:
             with db.get_conn() as conn:
                 event = ev.emit(

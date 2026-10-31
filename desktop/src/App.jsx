@@ -767,68 +767,165 @@ function MainApp({ onLogout }) {
 
   const streamRef = useRef(null);
   const fileInputRef = useRef(null);
-  const [uploadingFile, setUploadingFile] = useState(false);
+  const [attachments, setAttachments] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
 
-  const uploadFileDirectly = async (file, customName) => {
-    if (!file) return;
-    setUploadingFile(true);
-    try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const b64 = reader.result;
-        try {
-          const fileName = customName || file.name || `upload_${Date.now()}.png`;
-          const res = await api("/v1/workspace/upload", {
-            method: "POST",
-            body: {
-              filename: fileName,
-              data_b64: b64,
-              session_id: activeId,
-              bot_id: activeBot?.id,
-            },
-          });
-          if (res.ok) {
-            setToast(`已上传：${res.filename}`);
-            const isImg = (file.type && file.type.indexOf("image") !== -1) || /\.(png|jpe?g|gif|webp)$/i.test(res.filename);
-            const tag = isImg ? `[已上传图片: ${res.path}]` : `[已上传文件: ${res.path}]`;
-            setDraft((prev) => (prev ? `${prev} ${tag}` : `${tag}，请查阅并处理。`));
-          } else {
-            setError(res.error || "上传失败");
-          }
-        } catch (err) {
-          setError(err.message || "上传失败");
-        } finally {
-          setUploadingFile(false);
-          if (fileInputRef.current) fileInputRef.current.value = "";
+  // 切换会话时，释放并清空当前未发送的附件
+  useEffect(() => {
+    setAttachments((prev) => {
+      prev.forEach((a) => {
+        if (a.previewUrl && a.previewUrl.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(a.previewUrl);
+          } catch {}
         }
-      };
-      reader.readAsDataURL(file);
-    } catch (err) {
-      setError(err.message || "文件读取失败");
-      setUploadingFile(false);
+      });
+      return [];
+    });
+  }, [activeId]);
+
+  const removeAttachment = useCallback((id) => {
+    setAttachments((prev) => {
+      const target = prev.find((a) => a.id === id);
+      if (target?.previewUrl && target.previewUrl.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(target.previewUrl);
+        } catch {}
+      }
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  const enqueueFiles = useCallback((files) => {
+    if (!files) return;
+    const list = Array.from(files);
+    const imageFiles = list.filter((f) => {
+      if (!f) return false;
+      if (f.type && f.type.startsWith("image/")) return true;
+      return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.name || "");
+    });
+
+    if (imageFiles.length === 0) {
+      if (list.length > 0) {
+        setToast("仅支持上传图片文件");
+      }
+      return;
     }
+
+    setAttachments((prev) => {
+      const remainingSlots = 5 - prev.length;
+      if (remainingSlots <= 0) {
+        setToast("最多支持 5 张图片");
+        return prev;
+      }
+
+      const filesToAdd = imageFiles.slice(0, remainingSlots);
+      if (imageFiles.length > remainingSlots) {
+        setToast(`最多支持 5 张图片，已选取前 ${remainingSlots} 张`);
+      }
+
+      const newItems = filesToAdd.map((file, idx) => {
+        const id = `att_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 7)}`;
+        const previewUrl = URL.createObjectURL(file);
+        const name = file.name || `image_${Date.now()}_${idx + 1}.png`;
+        return {
+          id,
+          file,
+          name,
+          size: file.size || 0,
+          previewUrl,
+          status: "uploading",
+          path: "",
+          artifact_id: "",
+          url: "",
+        };
+      });
+
+      // 异步上传至工作区 uploads/ 产物目录
+      newItems.forEach((item) => {
+        const reader = new FileReader();
+        reader.onload = async () => {
+          const b64 = reader.result;
+          try {
+            const res = await api("/v1/workspace/upload", {
+              method: "POST",
+              body: {
+                filename: item.name,
+                data_b64: b64,
+                session_id: activeId,
+                bot_id: activeBot?.id,
+                publish_event: false,
+              },
+            });
+            if (res && res.ok) {
+              setAttachments((curr) =>
+                curr.map((a) =>
+                  a.id === item.id
+                    ? {
+                        ...a,
+                        status: "done",
+                        path: res.path,
+                        artifact_id: res.artifact_id,
+                        url: res.url,
+                        name: res.filename || a.name,
+                      }
+                    : a
+                )
+              );
+            } else {
+              setAttachments((curr) =>
+                curr.map((a) => (a.id === item.id ? { ...a, status: "error" } : a))
+              );
+              setToast(`“${item.name}” 上传失败: ${res?.error || "未知错误"}`);
+            }
+          } catch (err) {
+            setAttachments((curr) =>
+              curr.map((a) => (a.id === item.id ? { ...a, status: "error" } : a))
+            );
+            setToast(`“${item.name}” 上传失败: ${err.message || String(err)}`);
+          }
+        };
+        reader.onerror = () => {
+          setAttachments((curr) =>
+            curr.map((a) => (a.id === item.id ? { ...a, status: "error" } : a))
+          );
+          setToast(`“${item.name}” 读取失败`);
+        };
+        reader.readAsDataURL(item.file);
+      });
+
+      return [...prev, ...newItems];
+    });
+  }, [activeId, activeBot?.id]);
+
+  const handleFileUpload = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      enqueueFiles(e.target.files);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (file) await uploadFileDirectly(file);
-  };
-
-  const handlePaste = async (e) => {
+  const handlePaste = (e) => {
     const items = e.clipboardData?.items;
-    if (!items) return;
+    if (!items || items.length === 0) return;
+    const files = [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
-      if (item.type && item.type.indexOf("image") !== -1) {
+      if (item.type && item.type.startsWith("image/")) {
         const file = item.getAsFile();
         if (file) {
-          e.preventDefault();
-          const ext = (item.type && item.type.split("/")[1]) || "png";
-          const customName = `screenshot_${Date.now()}.${ext === "jpeg" ? "jpg" : ext}`;
-          await uploadFileDirectly(file, customName);
-          break;
+          const ext = (item.type.split("/")[1] || "png").replace("jpeg", "jpg");
+          const customName =
+            file.name && file.name !== "image.png"
+              ? file.name
+              : `screenshot_${Date.now()}_${i + 1}.${ext}`;
+          files.push(new File([file], customName, { type: file.type }));
         }
       }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      enqueueFiles(files);
     }
   };
 
@@ -1167,13 +1264,43 @@ function MainApp({ onLogout }) {
   }, [showMenu]);
 
   /* ---------------- 动作 ---------------- */
+  const isUploading = attachments.some((a) => a.status === "uploading");
+  const hasAttachments = attachments.length > 0 && attachments.every((a) => a.status === "done");
+  const canSend = Boolean(draft.trim() || hasAttachments) && !isUploading;
+
   const send = async () => {
+    if (!canSend || !activeId) return;
     const text = draft.trim();
-    if (!text || !activeId) return;
+    const validAttachments = attachments
+      .filter((a) => a.status === "done")
+      .map((a) => ({
+        name: a.name,
+        path: a.path,
+        artifact_id: a.artifact_id || undefined,
+        url: a.url || undefined,
+        bytes: a.size || undefined,
+        kind: "image",
+      }));
+
+    // 清理前端预览创建的 blob URL
+    attachments.forEach((att) => {
+      if (att.previewUrl && att.previewUrl.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(att.previewUrl);
+        } catch {}
+      }
+    });
+
     setDraft("");
+    setAttachments([]);
     scrollToBottom(false);
+
     try {
-      const payload = { text, client_msg_id: crypto.randomUUID() };
+      const payload = {
+        text,
+        client_msg_id: crypto.randomUUID(),
+        attachments: validAttachments,
+      };
       const effModel = (activeBot?.model || "").trim() || settings?.model || models?.default || "deepseek-chat";
       const effLevels = getModelReasoningLevels(effModel, models);
       if (effLevels.length > 0 && reasoningEffort) {
@@ -1813,7 +1940,20 @@ function MainApp({ onLogout }) {
                   <div className="bubble-text md"
                        dangerouslySetInnerHTML={{ __html: renderMarkdown(m.text) }} />
                 ) : (
-                  <div className="bubble-text">{m.text}</div>
+                  <>
+                    {m.attachments && m.attachments.length > 0 && (
+                      <div className="bubble-attachments">
+                        {m.attachments.map((att, idx) => (
+                          <MessageAttachmentItem
+                            key={att.artifact_id || att.path || idx}
+                            item={att}
+                            onOpen={(art) => setLightbox(art)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {m.text ? <div className="bubble-text">{m.text}</div> : null}
+                  </>
                 )}
                 <div className="bubble-time">{formatTime(m.ts)}</div>
               </div>
@@ -1855,23 +1995,88 @@ function MainApp({ onLogout }) {
           </button>
         )}
 
-        <div className="composer">
+        <div
+          className={`composer ${isDragging ? "drag-over" : ""}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault();
+            setIsDragging(false);
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragging(false);
+            if (e.dataTransfer?.files?.length) {
+              enqueueFiles(e.dataTransfer.files);
+            }
+          }}
+        >
           {error && <div className="error-bar" onClick={() => setError("")}>{error}（点击关闭）</div>}
+
+          {/* 附件托盘 (Attachment Tray) */}
+          {attachments.length > 0 && (
+            <div className="composer-tray">
+              {attachments.map((item) => (
+                <div key={item.id} className={`tray-card ${item.status}`}>
+                  <div className="tray-thumb-wrap">
+                    <img
+                      src={item.previewUrl || item.url}
+                      alt={item.name}
+                      className="tray-thumb"
+                      onClick={() => {
+                        if (item.previewUrl || item.url) {
+                          setLightbox({ url: item.previewUrl || item.url, name: item.name });
+                        }
+                      }}
+                      title="点击预览大图"
+                    />
+                    {item.status === "uploading" && (
+                      <div className="tray-spinner-overlay" title="上传中…">
+                        <span className="tray-spinner" />
+                      </div>
+                    )}
+                    {item.status === "error" && (
+                      <div className="tray-error-overlay" title="上传失败">
+                        ⚠️
+                      </div>
+                    )}
+                  </div>
+                  <div className="tray-info">
+                    <span className="tray-name" title={item.name}>{item.name}</span>
+                    <span className="tray-size">{formatFileSize(item.size)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="tray-close"
+                    onClick={() => removeAttachment(item.id)}
+                    title="移除图片"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="composer-row">
             <input
               type="file"
               ref={fileInputRef}
               style={{ display: "none" }}
+              multiple
+              accept="image/*"
               onChange={handleFileUpload}
             />
             <button
               type="button"
               className="attach-btn"
-              title="上传文件到工作区与当前会话"
+              title="添加图片 (支持多选 / 粘贴 / 拖拽)"
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploadingFile}
+              disabled={attachments.length >= 5 || isUploading}
             >
-              {uploadingFile ? "⏳" : "📎"}
+              {isUploading ? "⏳" : "📎"}
             </button>
             <textarea
               value={draft}
@@ -1881,23 +2086,14 @@ function MainApp({ onLogout }) {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  if (draft.trim()) {
+                  if (canSend) {
                     send();
                   }
                 }
               }}
             />
             {isRunning ? (
-              !draft.trim() ? (
-                <button
-                  type="button"
-                  className="send-btn btn-abort"
-                  onClick={abortCurrentSession}
-                  title="停止当前正在执行的任务"
-                >
-                  ⏹ 停止
-                </button>
-              ) : (
+              canSend ? (
                 <button
                   type="button"
                   className="send-btn btn-steer"
@@ -1906,16 +2102,25 @@ function MainApp({ onLogout }) {
                 >
                   ↪ 转向 / 追加
                 </button>
+              ) : (
+                <button
+                  type="button"
+                  className="send-btn btn-abort"
+                  onClick={abortCurrentSession}
+                  title="停止当前正在执行的任务"
+                >
+                  ⏹ 停止
+                </button>
               )
             ) : (
               <button
                 type="button"
                 className="send-btn"
                 onClick={send}
-                disabled={!draft.trim()}
-                title="发送消息 (Enter)"
+                disabled={!canSend}
+                title={canSend ? "发送消息 (Enter)" : isUploading ? "图片上传中…" : "请输入消息或添加图片"}
               >
-                发送
+                {isUploading ? "上传中…" : "发送"}
               </button>
             )}
           </div>
@@ -2436,20 +2641,95 @@ function clearArtifactCache() {
   ARTIFACT_URLS.clear();
 }
 
+function formatFileSize(bytes) {
+  if (!bytes || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 async function artifactObjectUrl(art) {
+  if (art?.previewUrl) return art.previewUrl;
   const key = art.artifact_id || art.url || art.name;
+  if (!key) return "";
   const hit = ARTIFACT_URLS.get(key);
   if (hit) return hit;
   const conn = getConn() || {};
   const base = (conn.baseUrl || "").replace(/\/$/, "");
-  const path = art.url || `/v1/artifacts/${art.artifact_id}`;
-  const res = await fetch(`${base}${path}`, {
+  let path = art.url || (art.artifact_id ? `/v1/artifacts/${art.artifact_id}` : "");
+  if (!path) return "";
+  if (path.startsWith("blob:") || path.startsWith("data:")) return path;
+  let fullUrl = path;
+  if (!fullUrl.startsWith("http://") && !fullUrl.startsWith("https://")) {
+    fullUrl = `${base}${path.startsWith("/") ? "" : "/"}${path}`;
+  }
+  const res = await fetch(fullUrl, {
     headers: conn.token ? { Authorization: `Bearer ${conn.token}` } : {},
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const url = URL.createObjectURL(await res.blob());
   ARTIFACT_URLS.set(key, url);
   return url;
+}
+
+function MessageAttachmentItem({ item, onOpen }) {
+  const [src, setSrc] = useState(item.previewUrl || "");
+  const [loading, setLoading] = useState(!item.previewUrl);
+  const [err, setErr] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    if (src) return;
+    if (!item?.artifact_id && !item?.url) {
+      setLoading(false);
+      setErr(true);
+      return;
+    }
+    setLoading(true);
+    setErr(false);
+    artifactObjectUrl(item)
+      .then((u) => {
+        if (alive) {
+          setSrc(u);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (alive) {
+          setErr(true);
+          setLoading(false);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [item?.artifact_id, item?.url, src]);
+
+  const handleClick = () => {
+    if (src) {
+      onOpen({ url: src, name: item.name });
+    }
+  };
+
+  return (
+    <div className="bubble-att-item" onClick={handleClick} title={item.name || "点击放大预览"}>
+      {src ? (
+        <img src={src} alt={item.name || "附件图片"} className="bubble-att-thumb" />
+      ) : loading ? (
+        <div className="bubble-att-loading">
+          <span className="tray-spinner" />
+        </div>
+      ) : (
+        <div className="bubble-att-err" title="图片加载失败">
+          ⚠️
+        </div>
+      )}
+      <div className="bubble-att-info">
+        <span className="bubble-att-name" title={item.name}>{item.name || "图片"}</span>
+        {item.bytes ? <span className="bubble-att-size">{formatFileSize(item.bytes)}</span> : null}
+      </div>
+    </div>
+  );
 }
 
 function ArtifactBubble({ item, ts, onOpen }) {
@@ -4323,7 +4603,14 @@ function renderMarkdown(text) {
 }
 
 function toMessage(e) {
-  return { id: e.id, kind: e.kind, text: e.text ?? e.payload?.text ?? "", ts: e.ts, actor: e.actor };
+  return {
+    id: e.id,
+    kind: e.kind,
+    text: e.text ?? e.payload?.text ?? "",
+    attachments: e.attachments ?? e.payload?.attachments ?? [],
+    ts: e.ts,
+    actor: e.actor,
+  };
 }
 
 // artifact.attached → 消息流里的一条（kind 复用事件名，渲染时单独分支）
