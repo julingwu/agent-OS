@@ -76,6 +76,22 @@ def test_create_bot_from_role_template_and_seed_skills(client, device):
     assert any("用例设计" in n or "复现" in n for n in names)
 
 
+def test_create_bot_with_role_general_preset(client, device):
+    created = client.post("/v1/bots", headers=_auth(device), json={
+        "name": "通用助理",
+        "role_id": "ROLE-GENERAL",
+    }).json()
+    assert created["role"] == "assistant"
+    assert "全能通用助手" in created["persona"]
+
+    skills_res = client.get(f"/v1/skills?bot_id={created['id']}", headers=_auth(device)).json()
+    assert skills_res["count"] >= 4
+    names = [s["name"] for s in skills_res["items"]]
+    assert "日常问答与检索" in names
+    assert "第一性原理决策分析" in names
+
+
+
 def test_create_session_rejects_unknown_bot(client, device):
     res = client.post("/v1/sessions", headers=_auth(device),
                       json={"kind": "direct", "bot_ids": ["bot_nope"]})

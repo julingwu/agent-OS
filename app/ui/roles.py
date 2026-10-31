@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS role_templates (
 """
 
 SEED = [
+    ("ROLE-GENERAL", "通用助理", "assistant",
+     "你是全能通用助手，负责协助用户处理日常各类综合事务、深度思考分析、执行工作流与工具调度。说话简明务实，给结论、给结构、给证据；遇到不确定时明确说明。",
+     "deepseek-chat", "日常问答与检索,任务拆解与总结,工具调度与协助,第一性原理决策分析", "web_fetch,file_write,code_exec", "analysis.md", 0),
     ("ROLE-DEV", "Python极客", "dev",
      "你是资深 Python 工程师。先给最小可运行实现，再补边界处理；代码必须能直接跑。",
      "deepseek-chat", "写代码,调试,脚本,重构", "code_exec,file_write", "solution.py", 0),
@@ -77,6 +80,7 @@ SEED = [
 
 # 请求文本 → 标签。CEO 调度台先用它做初筛，再让模型确认（M15 基础版不调模型）。
 TAG_WORDS: dict[str, tuple[str, ...]] = {
+    "assistant": ("通用", "助理", "助手", "综合", "日常", "全能"),
     "dev": ("开发", "写代码", "脚本", "爬虫", "接口", "程序", "计算器", "bug", "重构", "python", "代码", "量化", "mql5", "ea"),
     "design": ("设计", "界面", "ui", "原型", "配色", "海报", "视觉", "分镜", "aigc", "视频", "运镜", "剪辑"),
     "content": ("文案", "文章", "公众号", "稿子", "推文", "slogan", "软文", "小说", "剧本", "网文", "短剧", "故事", "公关", "声明"),

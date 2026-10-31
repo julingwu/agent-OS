@@ -2110,14 +2110,23 @@ function resourceList(title, items, onPick, render) {
 }
 
 /* ============================== 弹层：新建 Bot ============================== */
+const DEFAULT_GENERAL_PRESET = {
+  id: "ROLE-GENERAL",
+  name: "通用助理",
+  role: "assistant",
+  persona: "你是全能通用助手，负责协助用户处理日常各类综合事务、深度思考分析、执行工作流与工具调度。说话简明务实，给结论、给结构、给证据；遇到不确定时明确说明。",
+  skills: ["日常问答与检索", "任务拆解与总结", "工具调度与协助", "第一性原理决策分析"],
+};
+
 function NewBotModal({ onSubmit, onClose }) {
   const [roles, setRoles] = useState([]);
-  const [selectedRoleId, setSelectedRoleId] = useState("");
-  const [name, setName] = useState("");
-  const [role, setRole] = useState("");
-  const [persona, setPersona] = useState("");
-  const [roleSkills, setRoleSkills] = useState([]);
+  const [selectedRoleId, setSelectedRoleId] = useState(DEFAULT_GENERAL_PRESET.id);
+  const [name, setName] = useState(DEFAULT_GENERAL_PRESET.name);
+  const [role, setRole] = useState(DEFAULT_GENERAL_PRESET.role);
+  const [persona, setPersona] = useState(DEFAULT_GENERAL_PRESET.persona);
+  const [roleSkills, setRoleSkills] = useState(DEFAULT_GENERAL_PRESET.skills);
   const [err, setErr] = useState("");
+  const nameInputRef = useRef(null);
 
   useEffect(() => {
     api("/v1/roles")
@@ -2125,15 +2134,32 @@ function NewBotModal({ onSubmit, onClose }) {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (nameInputRef.current) {
+      nameInputRef.current.focus();
+      nameInputRef.current.select();
+    }
+  }, []);
+
   const onPickRole = (id) => {
     setSelectedRoleId(id);
     if (!id) {
+      setName("");
+      setRole("");
+      setPersona("");
       setRoleSkills([]);
+      return;
+    }
+    if (id === DEFAULT_GENERAL_PRESET.id) {
+      setName(DEFAULT_GENERAL_PRESET.name);
+      setRole(DEFAULT_GENERAL_PRESET.role);
+      setPersona(DEFAULT_GENERAL_PRESET.persona);
+      setRoleSkills(DEFAULT_GENERAL_PRESET.skills);
       return;
     }
     const r = roles.find((x) => x.id === id);
     if (!r) return;
-    if (!name.trim() || roles.some((x) => x.name === name)) {
+    if (!name.trim() || name === DEFAULT_GENERAL_PRESET.name || roles.some((x) => x.name === name)) {
       setName(r.name);
     }
     setRole(r.tag || r.name);
@@ -2158,7 +2184,8 @@ function NewBotModal({ onSubmit, onClose }) {
   };
 
   const PREFERRED_INDUSTRY_ORDER = ["文学与创作", "自媒体与创作", "个人智库", "研发", "金融", "市场", "设计", "法务", "运营", "通用"];
-  const rawIndustries = Array.from(new Set(roles.map((r) => r.industry || "通用")));
+  const otherRoles = roles.filter((r) => r.id !== DEFAULT_GENERAL_PRESET.id);
+  const rawIndustries = Array.from(new Set(otherRoles.map((r) => r.industry || "通用")));
   const industries = [
     ...PREFERRED_INDUSTRY_ORDER.filter((ind) => rawIndustries.includes(ind)),
     ...rawIndustries.filter((ind) => !PREFERRED_INDUSTRY_ORDER.includes(ind)),
@@ -2170,16 +2197,21 @@ function NewBotModal({ onSubmit, onClose }) {
         <h3>新建 Bot</h3>
         <label>{roles.length ? `选择角色预设（从 ${roles.length} 个专业角色库选择）` : "选择角色预设（从专业角色库选择）"}</label>
         <select value={selectedRoleId} onChange={(e) => onPickRole(e.target.value)}>
+          <option value="ROLE-GENERAL">✨ 通用助理 (推荐通用模板)</option>
           <option value="">-- 自定义空白角色 --</option>
-          {industries.map((ind) => (
-            <optgroup key={ind} label={ind}>
-              {roles.filter((r) => (r.industry || "通用") === ind).map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} ({r.tag})
-                </option>
-              ))}
-            </optgroup>
-          ))}
+          {industries.map((ind) => {
+            const list = otherRoles.filter((r) => (r.industry || "通用") === ind);
+            if (!list.length) return null;
+            return (
+              <optgroup key={ind} label={ind}>
+                {list.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name} ({r.tag})
+                  </option>
+                ))}
+              </optgroup>
+            );
+          })}
         </select>
 
         {roleSkills.length > 0 && (
@@ -2192,7 +2224,15 @@ function NewBotModal({ onSubmit, onClose }) {
         )}
 
         <label>名字</label>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="比如：小文 / 数据合规顾问" autoFocus />
+        <input
+          ref={nameInputRef}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onFocus={(e) => e.target.select()}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          placeholder="比如：小文 / 数据合规顾问"
+          autoFocus
+        />
         <label>职责（可选）</label>
         <input value={role} onChange={(e) => setRole(e.target.value)} placeholder="content / legal / dev" />
         <label>人格提示词（可选）</label>

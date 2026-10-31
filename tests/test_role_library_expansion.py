@@ -192,3 +192,17 @@ def test_instantiate_new_role(clean_conn):
     assert emp["role_id"] == role["id"]
     assert emp["name"] == "黄金与贵金属宏观策略分析师"
     assert "XAU/USD" in emp["soul"]
+
+
+def test_role_general_template(clean_conn):
+    all_roles = roles.list_roles(clean_conn)
+    gen = next((r for r in all_roles if r["id"] == "ROLE-GENERAL"), None)
+    assert gen is not None, "ROLE-GENERAL must exist in role_templates"
+    assert gen["name"] == "通用助理"
+    assert gen["tag"] == "assistant"
+    assert "全能通用助手" in gen["prompt"]
+    assert "日常问答与检索" in gen["skills"]
+    assert gen["tools"] == "web_fetch,file_write,code_exec"
+    assert gen["deliverable"] == "analysis.md"
+    assert "assistant" in roles.tags_of("请通用助手帮我做一下日常问答")
+
