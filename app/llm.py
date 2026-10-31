@@ -140,8 +140,9 @@ def get_model_reasoning_levels(model_name: str) -> list[str]:
     """导出模型自适应推理档位映射。
 
     - o1, o3, o4 -> ["low", "medium", "high"]
-    - deepseek-reasoner, r1 -> ["none", "standard", "max"]
+    - deepseek 系列（deepseek-flash, deepseek-chat, deepseek-reasoner, r1 等） -> ["none", "standard", "max"]
     - claude-3-7, claude (含 thinking) -> ["none", "low", "medium", "high", "max"]
+    - qwq, qwen-max (含 thinking) -> ["none", "standard", "max"]
     - 其他普通模型 -> []（空列表，表示不支持/无需推理档位）
     """
     import re
@@ -150,18 +151,24 @@ def get_model_reasoning_levels(model_name: str) -> list[str]:
         return []
     if re.search(r"\b(o1|o3|o4)\b", name) or any(name.startswith(p) for p in ("o1-", "o3-", "o4-", "o1", "o3", "o4")):
         return ["low", "medium", "high"]
-    if "deepseek-reasoner" in name or "r1" in name:
+    if "deepseek" in name or "r1" in name or "reasoner" in name:
         return ["none", "standard", "max"]
     if "claude-3-7" in name or "claude-3.7" in name or ("claude" in name and "thinking" in name):
         return ["none", "low", "medium", "high", "max"]
+    if "qwq" in name or "qwen-max" in name or "thinking" in name:
+        return ["none", "standard", "max"]
     return []
+
+
+def _is_pure_reasoning_model(model_name: str) -> bool:
+    """纯推理模型（强制不可带 temperature，否则上游 400）。"""
+    name = (model_name or "").strip().lower()
+    return any(x in name for x in ("reasoner", "r1", "o1", "o3", "o4"))
 
 
 def _is_reasoning_model(model_name: str) -> bool:
     name = (model_name or "").strip().lower()
-    return bool(get_model_reasoning_levels(name)) or any(
-        x in name for x in ("o1", "o3", "o4", "reasoner", "r1")
-    )
+    return bool(get_model_reasoning_levels(name))
 
 
 def chat(messages: list[dict], *, tools: list[dict] | None = None,
@@ -187,10 +194,11 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
         body["tools"] = tools
         body["tool_choice"] = "auto"
 
-    # 推理模型或显式指定 reasoning_effort 时，安全剔除 temperature，避免上游 400
-    if _is_reasoning_model(target_model) or reasoning_effort:
+    # 纯推理模型或显式指定非空 reasoning_effort 时，安全剔除 temperature，避免上游 400
+    has_active_reasoning = bool(reasoning_effort and reasoning_effort.strip().lower() not in ("none", ""))
+    if _is_pure_reasoning_model(target_model) or has_active_reasoning:
         body.pop("temperature", None)
-    if reasoning_effort and reasoning_effort.strip().lower() not in ("none", ""):
+    if has_active_reasoning:
         body["reasoning_effort"] = reasoning_effort.strip().lower()
 
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
@@ -268,10 +276,11 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
         body["tools"] = tools
         body["tool_choice"] = "auto"
 
-    # 推理模型或显式指定 reasoning_effort 时，安全剔除 temperature，避免上游 400
-    if _is_reasoning_model(target_model) or reasoning_effort:
+    # 纯推理模型或显式指定非空 reasoning_effort 时，安全剔除 temperature，避免上游 400
+    has_active_reasoning = bool(reasoning_effort and reasoning_effort.strip().lower() not in ("none", ""))
+    if _is_pure_reasoning_model(target_model) or has_active_reasoning:
         body.pop("temperature", None)
-    if reasoning_effort and reasoning_effort.strip().lower() not in ("none", ""):
+    if has_active_reasoning:
         body["reasoning_effort"] = reasoning_effort.strip().lower()
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 

@@ -431,7 +431,8 @@ function getModelReasoningLevels(modelName) {
   ) {
     return ["low", "medium", "high"];
   }
-  if (name.includes("deepseek-reasoner") || name.includes("r1")) {
+  // 包含 deepseek / r1 / reasoner 的所有模型均支持推理思考档位
+  if (name.includes("deepseek") || name.includes("r1") || name.includes("reasoner")) {
     return ["none", "standard", "max"];
   }
   if (
@@ -441,24 +442,34 @@ function getModelReasoningLevels(modelName) {
   ) {
     return ["none", "low", "medium", "high", "max"];
   }
+  if (name.includes("qwq") || name.includes("qwen-max") || name.includes("thinking")) {
+    return ["none", "standard", "max"];
+  }
   return [];
 }
 
 const REASONING_LABELS = {
-  none: "关掉深度思考极速回复 (none)",
+  none: "关闭深度思考 (none)",
   low: "轻度思考 (low)",
   medium: "平衡思考 (medium)",
-  standard: "标准思考 (standard)",
+  standard: "标准深度思考 (standard)",
   high: "高强度推理 (high)",
   max: "极限深度推演 (max)",
 };
 
-const RECOMMENDED_MODELS = [
+const REASONING_SHORT_LABELS = {
+  none: "思考: 关",
+  low: "思考: 轻度",
+  medium: "思考: 平衡",
+  standard: "思考: 标准",
+  high: "思考: 深度",
+  max: "思考: 极限",
+};
+
+const DEFAULT_FALLBACK_MODELS = [
+  "deepseek-flash",
   "deepseek-chat",
   "deepseek-reasoner",
-  "gpt-4o",
-  "o3-mini",
-  "claude-3-7-sonnet",
 ];
 
 /* ============================== 主界面 ============================== */
@@ -551,9 +562,27 @@ function MainApp({ onLogout }) {
   const [toast, setToast] = useState("");
   const [pairCode, setPairCode] = useState(null);
 
-  const [reasoningEffort, setReasoningEffort] = useState("medium");
+  const [reasoningEffort, setReasoningEffort] = useState("standard");
   const [editingCustomModel, setEditingCustomModel] = useState(false);
   const [customModelInput, setCustomModelInput] = useState("");
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [showReasoningPicker, setShowReasoningPicker] = useState(false);
+  const modelPickerRef = useRef(null);
+  const reasoningPickerRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target)) {
+        setShowModelPicker(false);
+        setEditingCustomModel(false);
+      }
+      if (reasoningPickerRef.current && !reasoningPickerRef.current.contains(e.target)) {
+        setShowReasoningPicker(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const activeSession = sessions.find((s) => s.id === activeId);
   const activeBot =
@@ -564,24 +593,30 @@ function MainApp({ onLogout }) {
     ) || bots[0];
   const activeBotId = activeBot?.id;
 
-  const globalModel = settings?.model || models?.default || "deepseek-chat";
+  const globalModel = settings?.model || models?.default || "deepseek-flash";
   const effectiveModel = (activeBot?.model || "").trim() || globalModel;
   const reasoningLevels = useMemo(() => getModelReasoningLevels(effectiveModel), [effectiveModel]);
   const isRunning = status === "thinking" || status === "running" || !!activeSession?.running;
 
   const modelOptions = useMemo(() => {
-    const list = [...RECOMMENDED_MODELS];
+    const list = [];
     (models?.items || []).forEach((m) => {
       const id = typeof m === "string" ? m : m?.id;
       if (id && !list.includes(id)) {
         list.push(id);
       }
     });
-    if (activeBot?.model && !list.includes(activeBot.model)) {
-      list.push(activeBot.model);
+    if (list.length === 0) {
+      list.push(...DEFAULT_FALLBACK_MODELS);
+    }
+    if (effectiveModel && !list.includes(effectiveModel)) {
+      list.unshift(effectiveModel);
+    }
+    if (models?.default && !list.includes(models.default)) {
+      list.push(models.default);
     }
     return list;
-  }, [models, activeBot?.model]);
+  }, [models, effectiveModel]);
 
   useEffect(() => {
     if (reasoningLevels.length > 0) {
@@ -1373,7 +1408,7 @@ function MainApp({ onLogout }) {
       });
       setBots((prev) => prev.map((b) => (b.id === botId ? { ...b, model: updated.model } : b)));
       setDetails((prev) => (prev && prev.id === botId ? { ...prev, model: updated.model } : prev));
-      notify(model ? `模型已切换为 ${model}` : "已跟随全局默认模型");
+      notify(`模型已切换为 ${model || effectiveModel}`);
     } catch (e) {
       setError(String(e.message || e));
     }
@@ -1751,122 +1786,147 @@ function MainApp({ onLogout }) {
             )}
           </div>
 
-          <div className="composer-toolbar">
-            {/* Bot 模型选择胶囊 */}
-            <div className="composer-capsule model-capsule">
-              <span className="capsule-icon">
-                {activeBot?.model ? "🤖" : "🌐"}
-              </span>
-              {editingCustomModel ? (
-                <div className="capsule-inline-editor">
-                  <input
-                    type="text"
-                    className="capsule-inline-input"
-                    value={customModelInput}
-                    placeholder="输入自定义模型 (如 deepseek-v3)"
-                    autoFocus
-                    onChange={(e) => setCustomModelInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        saveCustomModel();
-                      } else if (e.key === "Escape") {
-                        setEditingCustomModel(false);
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="capsule-btn-confirm"
-                    title="确定保存"
-                    onClick={saveCustomModel}
-                  >
-                    ✓
-                  </button>
-                  <button
-                    type="button"
-                    className="capsule-btn-cancel"
-                    title="取消"
-                    onClick={() => setEditingCustomModel(false)}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ) : (
-                <div className="capsule-select-wrapper">
-                  <select
-                    className="capsule-select"
-                    value={activeBot?.model || ""}
-                    onChange={(e) => {
-                      if (e.target.value === "__custom__") {
-                        setCustomModelInput(activeBot?.model || "");
+          <div className="hermes-toolbar">
+            {/* Hermes 极简模型切换 Pill */}
+            <div className="hermes-pill-wrapper" ref={modelPickerRef}>
+              <button
+                type="button"
+                className={`hermes-pill ${showModelPicker ? "active" : ""}`}
+                onClick={() => {
+                  setShowModelPicker(!showModelPicker);
+                  setShowReasoningPicker(false);
+                }}
+                title={`当前生效模型: ${effectiveModel} (点击切换)`}
+              >
+                <span className="hermes-pill-dot" />
+                <span className="hermes-pill-text">{effectiveModel}</span>
+                <svg className="hermes-chevron" viewBox="0 0 16 16" width="10" height="10">
+                  <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+
+              {showModelPicker && (
+                <div className="hermes-popover model-popover">
+                  <div className="hermes-popover-header">
+                    <span>可用模型</span>
+                    <span className="hermes-popover-count">{modelOptions.length} 个模型</span>
+                  </div>
+                  <div className="hermes-popover-list">
+                    {modelOptions.map((m) => {
+                      const isSelected = m === effectiveModel;
+                      return (
+                        <div
+                          key={m}
+                          className={`hermes-popover-item ${isSelected ? "selected" : ""}`}
+                          onClick={() => {
+                            saveBotModel(activeBot?.id, m);
+                            setShowModelPicker(false);
+                          }}
+                        >
+                          <span className="hermes-item-label">{m}</span>
+                          {isSelected && <span className="hermes-item-check">✓</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="hermes-popover-divider" />
+                  {editingCustomModel ? (
+                    <div className="hermes-popover-input-row">
+                      <input
+                        type="text"
+                        className="hermes-popover-input"
+                        placeholder="输入模型名称 (如 deepseek-v3)"
+                        value={customModelInput}
+                        autoFocus
+                        onChange={(e) => setCustomModelInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            saveCustomModel();
+                            setShowModelPicker(false);
+                          } else if (e.key === "Escape") {
+                            setEditingCustomModel(false);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="hermes-btn-sm confirm"
+                        onClick={() => {
+                          saveCustomModel();
+                          setShowModelPicker(false);
+                        }}
+                      >
+                        确定
+                      </button>
+                      <button
+                        type="button"
+                        className="hermes-btn-sm cancel"
+                        onClick={() => setEditingCustomModel(false)}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="hermes-popover-action"
+                      onClick={() => {
+                        setCustomModelInput("");
                         setEditingCustomModel(true);
-                      } else {
-                        saveBotModel(activeBot.id, e.target.value);
-                      }
-                    }}
-                    title={`当前 Bot 生效模型: ${effectiveModel}`}
-                  >
-                    <option value="">
-                      🌐 跟随全局默认 (当前: {globalModel})
-                    </option>
-                    <optgroup label="推荐与可用模型">
-                      {modelOptions.map((m) => (
-                        <option key={m} value={m}>
-                          {m === "deepseek-reasoner"
-                            ? "deepseek-reasoner (深度思考)"
-                            : m === "o3-mini"
-                            ? "o3-mini (推理强化)"
-                            : m === "claude-3-7-sonnet"
-                            ? "claude-3-7-sonnet (混合思考)"
-                            : m}
-                        </option>
-                      ))}
-                    </optgroup>
-                    <option value="__custom__">✏️ 手动输入自定义模型...</option>
-                  </select>
-                  <button
-                    type="button"
-                    className="capsule-edit-icon"
-                    title="手动输入自定义模型"
-                    onClick={() => {
-                      setCustomModelInput(activeBot?.model || "");
-                      setEditingCustomModel(true);
-                    }}
-                  >
-                    ✏️
-                  </button>
+                      }}
+                    >
+                      <span>+ 输入自定义模型...</span>
+                    </button>
+                  )}
                 </div>
               )}
             </div>
 
-            {/* 自适应推理强度胶囊 */}
-            {reasoningLevels.length === 0 ? (
-              <div
-                className="composer-capsule reasoning-capsule disabled"
-                title="当前模型为标准对话模型，无需配置思考档位"
-              >
-                <span className="capsule-icon">⚡</span>
-                <span className="capsule-text">标准模式 (不支持/无需思考档位)</span>
-              </div>
-            ) : (
-              <div
-                className="composer-capsule reasoning-capsule active"
-                title="根据当前选择模型自适应匹配思考档位"
-              >
-                <span className="capsule-icon">🧠</span>
-                <span className="capsule-label">推理强度:</span>
-                <select
-                  className="capsule-select"
-                  value={reasoningEffort}
-                  onChange={(e) => setReasoningEffort(e.target.value)}
+            {/* Hermes 极简自适应思考推演档位 (仅在支持推理的模型展示，绝不显示丑陋的“不支持”占位块) */}
+            {reasoningLevels.length > 0 && (
+              <div className="hermes-pill-wrapper" ref={reasoningPickerRef}>
+                <button
+                  type="button"
+                  className={`hermes-pill ${showReasoningPicker ? "active" : ""}`}
+                  onClick={() => {
+                    setShowReasoningPicker(!showReasoningPicker);
+                    setShowModelPicker(false);
+                  }}
+                  title="思考推演强度设置"
                 >
-                  {reasoningLevels.map((lvl) => (
-                    <option key={lvl} value={lvl}>
-                      {REASONING_LABELS[lvl] || lvl}
-                    </option>
-                  ))}
-                </select>
+                  <span className="hermes-pill-icon">🧠</span>
+                  <span className="hermes-pill-text">{REASONING_SHORT_LABELS[reasoningEffort] || reasoningEffort}</span>
+                  <svg className="hermes-chevron" viewBox="0 0 16 16" width="10" height="10">
+                    <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+
+                {showReasoningPicker && (
+                  <div className="hermes-popover reasoning-popover">
+                    <div className="hermes-popover-header">
+                      <span>思考推演强度</span>
+                    </div>
+                    <div className="hermes-popover-list">
+                      {reasoningLevels.map((lvl) => {
+                        const isSelected = lvl === reasoningEffort;
+                        return (
+                          <div
+                            key={lvl}
+                            className={`hermes-popover-item ${isSelected ? "selected" : ""}`}
+                            onClick={() => {
+                              setReasoningEffort(lvl);
+                              setShowReasoningPicker(false);
+                            }}
+                          >
+                            <span className="hermes-item-label">{REASONING_LABELS[lvl] || lvl}</span>
+                            {isSelected && <span className="hermes-item-check">✓</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1894,19 +1954,12 @@ function MainApp({ onLogout }) {
             <div className="kv model-row">
               <span>模型</span>
               <select
-                value={activeBot?.model || ""}
+                value={effectiveModel}
                 onChange={(e) => saveBotModel(activeBot.id, e.target.value)}
               >
-                <option value="">跟随全局默认（当前: {globalModel}）</option>
                 {modelOptions.map((m) => (
                   <option key={m} value={m}>
-                    {m === "deepseek-reasoner"
-                      ? "deepseek-reasoner (深度思考)"
-                      : m === "o3-mini"
-                      ? "o3-mini (推理强化)"
-                      : m === "claude-3-7-sonnet"
-                      ? "claude-3-7-sonnet (混合思考)"
-                      : m}
+                    {m}
                   </option>
                 ))}
               </select>

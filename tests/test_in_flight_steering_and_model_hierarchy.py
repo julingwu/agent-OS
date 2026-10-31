@@ -87,9 +87,11 @@ def test_get_model_reasoning_levels():
     assert llm.get_model_reasoning_levels("o3-mini") == ["low", "medium", "high"]
     assert llm.get_model_reasoning_levels("o4") == ["low", "medium", "high"]
 
-    # deepseek-reasoner / r1 系列
+    # deepseek 系列（含 deepseek-flash / deepseek-chat / deepseek-reasoner / r1）
     assert llm.get_model_reasoning_levels("deepseek-reasoner") == ["none", "standard", "max"]
     assert llm.get_model_reasoning_levels("deepseek-r1") == ["none", "standard", "max"]
+    assert llm.get_model_reasoning_levels("deepseek-flash") == ["none", "standard", "max"]
+    assert llm.get_model_reasoning_levels("deepseek-chat") == ["none", "standard", "max"]
     assert llm.get_model_reasoning_levels("r1") == ["none", "standard", "max"]
 
     # claude-3-7 / claude thinking 系列
@@ -98,7 +100,6 @@ def test_get_model_reasoning_levels():
     assert llm.get_model_reasoning_levels("claude-3-5-sonnet-thinking") == ["none", "low", "medium", "high", "max"]
 
     # 普通无推理档位模型
-    assert llm.get_model_reasoning_levels("deepseek-chat") == []
     assert llm.get_model_reasoning_levels("gpt-4o") == []
     assert llm.get_model_reasoning_levels("qwen-2.5-72b") == []
     assert llm.get_model_reasoning_levels("") == []
