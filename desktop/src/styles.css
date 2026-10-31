@@ -607,6 +607,37 @@ input, textarea { font: inherit; }
   color: #38bdf8;
 }
 
+.hermes-popover-settings-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px dashed rgba(56, 189, 248, 0.35);
+  border-radius: 6px;
+  color: #38bdf8;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  margin-top: 2px;
+}
+
+.hermes-popover-settings-btn:hover {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: #38bdf8;
+  color: #fff;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+}
+
+.hermes-popover-settings-btn .popover-action-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
 .hermes-popover-input-row {
   display: flex;
   align-items: center;
@@ -1250,7 +1281,10 @@ input, textarea { font: inherit; }
 
 /* ---------- 设置 ---------- */
 .settings-modal {
-  width: 780px; height: 580px;
+  width: 820px;
+  max-width: 95vw;
+  height: 620px;
+  max-height: 92vh;
   display: flex;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -2132,5 +2166,637 @@ input, textarea { font: inherit; }
 }
 .attach-btn:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+
+
+/* ==================== DSH 风格模型提供商与配置 ==================== */
+.dsh-models-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dsh-section-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dsh-section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dsh-count-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sub);
+  font-weight: 500;
+}
+
+.dsh-notice {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.dsh-notice.success {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.dsh-notice.error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* 提供商列表与卡片 */
+.dsh-providers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dsh-empty-card {
+  padding: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--sub);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+}
+
+.dsh-provider-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  transition: all 0.15s ease;
+}
+
+.dsh-provider-card:hover {
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(56, 189, 248, 0.25);
+}
+
+.dsh-provider-card.active {
+  background: rgba(56, 189, 248, 0.05);
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.08);
+}
+
+.dsh-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.dsh-card-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dsh-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dsh-status-dot.online {
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+}
+
+.dsh-status-dot.offline {
+  background: #64748b;
+}
+
+.dsh-provider-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.dsh-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.dsh-badge.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.dsh-badge.custom {
+  background: rgba(255, 255, 255, 0.06);
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.dsh-badge.preset {
+  background: rgba(147, 51, 234, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(147, 51, 234, 0.3);
+}
+
+.dsh-card-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dsh-meta-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #64748b;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dsh-meta-divider {
+  color: #475569;
+}
+
+.dsh-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  flex-shrink: 0;
+}
+
+.dsh-btn-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.dsh-btn-sm:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.dsh-btn-sm.default-btn {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.3);
+  background: rgba(56, 189, 248, 0.06);
+}
+
+.dsh-btn-sm.default-btn:hover {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: #38bdf8;
+  color: #fff;
+}
+
+.dsh-btn-sm.delete-btn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
+}
+
+/* 下部表单 */
+.dsh-form-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dsh-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dsh-form-header h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.dsh-editing-badge {
+  font-size: 10px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.dsh-form-tabs {
+  display: flex;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  gap: 4px;
+}
+
+.dsh-form-tab-btn {
+  flex: 1;
+  padding: 7px 12px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  font-family: inherit;
+}
+
+.dsh-form-tab-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+}
+
+.dsh-form-tab-btn.active {
+  background: rgba(56, 189, 248, 0.16);
+  color: #38bdf8;
+  font-weight: 600;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.dsh-form-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.dsh-form-desc {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.5;
+  margin: 0 0 4px;
+}
+
+.dsh-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.dsh-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #cbd5e1;
+}
+
+.dsh-subtext {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.dsh-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dsh-input, .dsh-select {
+  flex: 1;
+  background: rgba(5, 7, 16, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #f8fafc;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.12s ease;
+}
+
+.dsh-input:focus, .dsh-select:focus {
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.2);
+}
+
+.dsh-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 折叠设置 */
+.dsh-collapsible {
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.dsh-collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.02);
+  transition: background 0.12s ease;
+}
+
+.dsh-collapsible-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.dsh-collapsible-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dsh-toggle-arrow {
+  color: #38bdf8;
+  font-size: 12px;
+}
+
+.dsh-collapsible-hint {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.dsh-collapsible-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* 模型目录区域 */
+.dsh-model-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.dsh-catalog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dsh-catalog-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.dsh-fetch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #38bdf8;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.dsh-fetch-btn:hover:not(:disabled) {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: #38bdf8;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
+  color: #fff;
+}
+
+.dsh-fetch-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.dsh-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(56, 189, 248, 0.3);
+  border-top-color: #38bdf8;
+  border-radius: 50%;
+  animation: dshSpin 0.75s linear infinite;
+  display: inline-block;
+}
+
+@keyframes dshSpin {
+  to { transform: rotate(360deg); }
+}
+
+.dsh-fetch-status {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.dsh-fetch-status.ok {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.dsh-fetch-status.err {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.dsh-pills-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.dsh-pills-empty {
+  font-size: 11px;
+  color: #64748b;
+  padding: 4px 0;
+}
+
+.dsh-model-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 11px;
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  user-select: none;
+}
+
+.dsh-model-pill:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.dsh-model-pill.default {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+  font-weight: 500;
+}
+
+.dsh-pill-def-tag {
+  font-size: 9px;
+  background: rgba(56, 189, 248, 0.2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.dsh-pill-remove {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dsh-pill-remove:hover {
+  color: #f87171;
+}
+
+.dsh-add-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.dsh-input-sm {
+  flex: 1;
+  background: rgba(5, 7, 16, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #f8fafc;
+  outline: none;
+  font-family: inherit;
+}
+
+.dsh-input-sm:focus {
+  border-color: rgba(56, 189, 248, 0.5);
+}
+
+.dsh-btn-sm.add-model-btn {
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.3);
+  color: #38bdf8;
+}
+
+.dsh-btn-sm.add-model-btn:hover {
+  background: rgba(56, 189, 248, 0.2);
+  color: #fff;
+}
+
+.dsh-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.dsh-btn {
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.dsh-btn.cancel {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #94a3b8;
+}
+
+.dsh-btn.cancel:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+
+.dsh-btn.save.primary {
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  border: none;
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(14, 165, 233, 0.35);
+}
+
+.dsh-btn.save.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+  box-shadow: 0 6px 18px rgba(14, 165, 233, 0.45);
+}
+
+.dsh-btn.save.primary:disabled {
+  opacity: 0.6;
   cursor: not-allowed;
 }

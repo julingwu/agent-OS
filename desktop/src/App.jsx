@@ -1830,55 +1830,18 @@ function MainApp({ onLogout }) {
                     })}
                   </div>
                   <div className="hermes-popover-divider" />
-                  {editingCustomModel ? (
-                    <div className="hermes-popover-input-row">
-                      <input
-                        type="text"
-                        className="hermes-popover-input"
-                        placeholder="输入模型名称 (如 deepseek-v3)"
-                        value={customModelInput}
-                        autoFocus
-                        onChange={(e) => setCustomModelInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            saveCustomModel();
-                            setShowModelPicker(false);
-                          } else if (e.key === "Escape") {
-                            setEditingCustomModel(false);
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        className="hermes-btn-sm confirm"
-                        onClick={() => {
-                          saveCustomModel();
-                          setShowModelPicker(false);
-                        }}
-                      >
-                        确定
-                      </button>
-                      <button
-                        type="button"
-                        className="hermes-btn-sm cancel"
-                        onClick={() => setEditingCustomModel(false)}
-                      >
-                        取消
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      className="hermes-popover-action"
-                      onClick={() => {
-                        setCustomModelInput("");
-                        setEditingCustomModel(true);
-                      }}
-                    >
-                      <span>+ 输入自定义模型...</span>
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="hermes-popover-action hermes-popover-settings-btn"
+                    onClick={() => {
+                      setShowModelPicker(false);
+                      setSettingsTab("models");
+                      setModal("settings");
+                    }}
+                  >
+                    <span className="popover-action-icon">⚙️</span>
+                    <span>配置第三方模型与自定义 API...</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -2186,6 +2149,10 @@ function MainApp({ onLogout }) {
           models={models} pairCode={pairCode} onGenPairCode={generatePairCode}
           integrations={integrations} localDevices={localDevices}
           onClose={() => setModal(null)}
+          onReloadAll={async () => {
+            await loadSettings();
+            await loadBasics();
+          }}
         />
       )}
 
@@ -2663,17 +2630,902 @@ function AppsModal({ onClose }) {
 
 /* ============================== 弹层：设置 ============================== */
 const PROVIDER_PRESETS = [
-  { id: "deepseek", label: "DeepSeek 官方", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-chat", models: ["deepseek-chat", "deepseek-reasoner"] },
-  { id: "openai", label: "OpenAI 官方", baseUrl: "https://api.openai.com/v1", defaultModel: "gpt-4o", models: ["gpt-4o", "gpt-4.1", "o3-mini"] },
-  { id: "openrouter", label: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", defaultModel: "anthropic/claude-3.7-sonnet", models: ["anthropic/claude-3.7-sonnet", "google/gemini-2.5-pro", "openai/gpt-4o", "deepseek/deepseek-r1"] },
-  { id: "dashscope", label: "阿里云百炼 (通义千问)", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", defaultModel: "qwen-max", models: ["qwen-max", "qwen-plus", "qwq-32b"] },
-  { id: "ark", label: "火山引擎方舟 (豆包/DeepSeek)", baseUrl: "https://ark.cn-beijing.volces.com/api/v3", defaultModel: "doubao-1-5-pro-32k-250115", models: ["doubao-1-5-pro-32k-250115", "deepseek-r1-250120"] },
-  { id: "siliconflow", label: "硅基流动 (SiliconFlow)", baseUrl: "https://api.siliconflow.cn/v1", defaultModel: "deepseek-ai/DeepSeek-V3", models: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"] },
-  { id: "moonshot", label: "Moonshot (Kimi)", baseUrl: "https://api.moonshot.cn/v1", defaultModel: "kimi-k2-0711-preview", models: ["kimi-k2-0711-preview", "moonshot-v1-128k"] },
-  { id: "custom", label: "自定义 (OpenAI 兼容规范)", baseUrl: "", defaultModel: "", models: [] },
+  {
+    id: "deepseek",
+    label: "DeepSeek 官方",
+    baseUrl: "https://api.deepseek.com",
+    defaultModel: "deepseek-chat",
+    models: ["deepseek-chat", "deepseek-reasoner", "deepseek-flash"],
+  },
+  {
+    id: "siliconflow",
+    label: "硅基流动 (SiliconFlow)",
+    baseUrl: "https://api.siliconflow.cn/v1",
+    defaultModel: "deepseek-ai/DeepSeek-V3",
+    models: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen2.5-72B-Instruct"],
+  },
+  {
+    id: "moonshot",
+    label: "Moonshot (月之暗面 / Kimi)",
+    baseUrl: "https://api.moonshot.cn/v1",
+    defaultModel: "moonshot-v1-8k",
+    models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+  },
+  {
+    id: "zhipu",
+    label: "智谱 AI (GLM)",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    defaultModel: "glm-4-plus",
+    models: ["glm-4-plus", "glm-4-flash", "glm-4-long"],
+  },
+  {
+    id: "dashscope",
+    label: "阿里云百炼 (通义千问)",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    defaultModel: "qwen-plus",
+    models: ["qwen-plus", "qwen-max", "qwen-turbo"],
+  },
+  {
+    id: "openai",
+    label: "OpenAI 官方",
+    baseUrl: "https://api.openai.com/v1",
+    defaultModel: "gpt-4o",
+    models: ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic (Claude)",
+    baseUrl: "https://api.anthropic.com/v1",
+    defaultModel: "claude-3-7-sonnet",
+    models: ["claude-3-7-sonnet", "claude-3-5-sonnet"],
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    defaultModel: "deepseek/deepseek-r1",
+    models: ["deepseek/deepseek-r1", "anthropic/claude-3.7-sonnet", "openai/gpt-4o"],
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    baseUrl: "https://api.groq.com/openai/v1",
+    defaultModel: "llama-3.3-70b-versatile",
+    models: ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b"],
+  },
+  {
+    id: "minimax",
+    label: "MiniMax (海螺)",
+    baseUrl: "https://api.minimax.chat/v1",
+    defaultModel: "abab6.5s-chat",
+    models: ["abab6.5s-chat", "MiniMax-Text-01"],
+  },
+  {
+    id: "ollama",
+    label: "Ollama (本地)",
+    baseUrl: "http://localhost:11434/v1",
+    defaultModel: "llama3.2",
+    models: ["llama3.2", "qwen2.5"],
+  },
+  {
+    id: "ark",
+    label: "火山引擎方舟 (豆包/DeepSeek)",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    defaultModel: "doubao-1-5-pro-32k-250115",
+    models: ["doubao-1-5-pro-32k-250115", "deepseek-r1-250120"],
+  },
+  {
+    id: "custom",
+    label: "自定义 (OpenAI 兼容规范)",
+    baseUrl: "",
+    defaultModel: "",
+    models: [],
+  },
 ];
 
-function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, onSleep, vault, onOpenVault, models, pairCode, onGenPairCode, integrations, localDevices, onClose }) {
+/* ==================== DSH 风格模型提供商与 API 配置 ==================== */
+function DshModelsPane({ onReloadAll, models }) {
+  const [providers, setProviders] = useState([]);
+  const [activeProviderId, setActiveProviderId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [formTab, setFormTab] = useState("preset");
+
+  // Tab 1: 第三方模型提供商状态
+  const [presetId, setPresetId] = useState("deepseek");
+  const [presetName, setPresetName] = useState("DeepSeek 官方");
+  const [presetBaseUrl, setPresetBaseUrl] = useState("https://api.deepseek.com");
+  const [presetApiKey, setPresetApiKey] = useState("");
+  const [presetHasKey, setPresetHasKey] = useState(false);
+  const [presetKeyMasked, setPresetKeyMasked] = useState("");
+  const [showPresetKey, setShowPresetKey] = useState(false);
+  const [presetCustomOpen, setPresetCustomOpen] = useState(true);
+  const [presetModels, setPresetModels] = useState([
+    "deepseek-chat",
+    "deepseek-reasoner",
+    "deepseek-flash",
+  ]);
+  const [presetDefaultModel, setPresetDefaultModel] = useState("deepseek-chat");
+  const [newPresetModelInput, setNewPresetModelInput] = useState("");
+
+  // Tab 2: 自定义模型 API 状态
+  const [customProviderId, setCustomProviderId] = useState("");
+  const [customName, setCustomName] = useState("");
+  const [customBaseUrl, setCustomBaseUrl] = useState("");
+  const [customProtocol, setCustomProtocol] = useState("openai");
+  const [customApiKey, setCustomApiKey] = useState("");
+  const [customHasKey, setCustomHasKey] = useState(false);
+  const [customKeyMasked, setCustomKeyMasked] = useState("");
+  const [showCustomKey, setShowCustomKey] = useState(false);
+  const [customModels, setCustomModels] = useState([]);
+  const [customDefaultModel, setCustomDefaultModel] = useState("");
+  const [newCustomModelInput, setNewCustomModelInput] = useState("");
+
+  // 通用状态
+  const [makeDefault, setMakeDefault] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchStatus, setFetchStatus] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const formRef = useRef(null);
+
+  const showNotice = (type, text) => {
+    setNotice({ type, text });
+    setTimeout(() => setNotice(null), 3500);
+  };
+
+  const loadProviders = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api("/v1/settings/providers");
+      if (res && res.providers) {
+        setProviders(res.providers);
+        setActiveProviderId(res.active_provider_id || "");
+      }
+    } catch (err) {
+      console.error("loadProviders error:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadProviders();
+  }, [loadProviders]);
+
+  const handleActivate = async (id) => {
+    try {
+      const res = await api(`/v1/settings/providers/${id}/activate`, { method: "POST" });
+      if (res && res.ok) {
+        setActiveProviderId(res.active_provider_id || id);
+        await loadProviders();
+        if (onReloadAll) await onReloadAll();
+        showNotice("success", "✓ 已切换当前默认模型服务提供商");
+      }
+    } catch (err) {
+      showNotice("error", `激活失败: ${err.message || err}`);
+    }
+  };
+
+  const handleDelete = async (id, name) => {
+    if (!window.confirm(`确定要删除提供商 "${name || id}" 吗？`)) return;
+    try {
+      const res = await api(`/v1/settings/providers/${id}`, { method: "DELETE" });
+      if (res && res.ok) {
+        if (editingId === id) {
+          resetForm();
+        }
+        await loadProviders();
+        if (onReloadAll) await onReloadAll();
+        showNotice("success", "✓ 已成功删除提供商");
+      }
+    } catch (err) {
+      showNotice("error", `删除失败: ${err.message || err}`);
+    }
+  };
+
+  const handleEdit = (p) => {
+    setEditingId(p.id);
+    setFetchStatus(null);
+    const isCustom = p.kind === "custom" || p.preset_id === "custom" || !PROVIDER_PRESETS.some((x) => x.id === (p.preset_id || p.kind));
+    if (isCustom) {
+      setFormTab("custom");
+      setCustomProviderId(p.id);
+      setCustomName(p.name || "");
+      setCustomBaseUrl(p.base_url || "");
+      setCustomProtocol("openai");
+      setCustomApiKey("");
+      setCustomHasKey(!!p.has_key);
+      setCustomKeyMasked(p.api_key_masked || p.api_key || "");
+      setCustomModels(Array.isArray(p.models) ? [...p.models] : []);
+      setCustomDefaultModel(p.model || (p.models && p.models[0]) || "");
+    } else {
+      setFormTab("preset");
+      const pid = p.preset_id || p.kind || "deepseek";
+      setPresetId(pid);
+      setPresetName(p.name || "");
+      setPresetBaseUrl(p.base_url || "");
+      setPresetApiKey("");
+      setPresetHasKey(!!p.has_key);
+      setPresetKeyMasked(p.api_key_masked || p.api_key || "");
+      setPresetModels(Array.isArray(p.models) ? [...p.models] : []);
+      setPresetDefaultModel(p.model || (p.models && p.models[0]) || "");
+      setPresetCustomOpen(true);
+    }
+    setMakeDefault(p.id === activeProviderId || !!p.is_active);
+    setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  };
+
+  const resetForm = () => {
+    setEditingId(null);
+    setFetchStatus(null);
+    setMakeDefault(false);
+    if (formTab === "preset") {
+      const def = PROVIDER_PRESETS[0];
+      setPresetId(def.id);
+      setPresetName(def.label);
+      setPresetBaseUrl(def.baseUrl);
+      setPresetApiKey("");
+      setPresetHasKey(false);
+      setPresetKeyMasked("");
+      setPresetModels([...def.models]);
+      setPresetDefaultModel(def.defaultModel);
+      setNewPresetModelInput("");
+    } else {
+      setCustomProviderId("");
+      setCustomName("");
+      setCustomBaseUrl("");
+      setCustomProtocol("openai");
+      setCustomApiKey("");
+      setCustomHasKey(false);
+      setCustomKeyMasked("");
+      setCustomModels([]);
+      setCustomDefaultModel("");
+      setNewCustomModelInput("");
+    }
+  };
+
+  const handlePresetChange = (pid) => {
+    const preset = PROVIDER_PRESETS.find((x) => x.id === pid);
+    if (!preset) return;
+    setPresetId(pid);
+    setPresetName(preset.label);
+    setPresetBaseUrl(preset.baseUrl);
+    setPresetModels([...preset.models]);
+    setPresetDefaultModel(preset.defaultModel || preset.models[0] || "");
+    setFetchStatus(null);
+    if (!editingId) {
+      setPresetApiKey("");
+      setPresetHasKey(false);
+      setPresetKeyMasked("");
+    }
+  };
+
+  const fetchRemoteModels = async (baseUrl, apiKey, providerKind) => {
+    if (!baseUrl || !baseUrl.trim()) {
+      showNotice("error", "请先填写 API 地址");
+      return;
+    }
+    setFetchingModels(true);
+    setFetchStatus(null);
+    try {
+      const res = await api("/v1/settings/fetch-models", {
+        method: "POST",
+        body: {
+          base_url: baseUrl.trim(),
+          api_key: apiKey ? apiKey.trim() : undefined,
+          provider: providerKind || "openai",
+        },
+      });
+      if (res && res.ok && Array.isArray(res.models)) {
+        if (res.models.length === 0) {
+          setFetchStatus({
+            ok: true,
+            msg: "远端未返回可用模型列表，请手动输入添加",
+          });
+        } else {
+          setFetchStatus({
+            ok: true,
+            msg: `✓ 成功获取并合并 ${res.models.length} 个远端模型 (${res.latency_ms || 0}ms)`,
+          });
+          if (formTab === "preset") {
+            setPresetModels((prev) => Array.from(new Set([...prev, ...res.models])));
+            if (!presetDefaultModel && res.models.length > 0) {
+              setPresetDefaultModel(res.models[0]);
+            }
+          } else {
+            setCustomModels((prev) => Array.from(new Set([...prev, ...res.models])));
+            if (!customDefaultModel && res.models.length > 0) {
+              setCustomDefaultModel(res.models[0]);
+            }
+          }
+        }
+      } else {
+        setFetchStatus({
+          ok: false,
+          msg: `获取失败: ${res?.error || "未能获取远端模型列表"}`,
+        });
+      }
+    } catch (err) {
+      setFetchStatus({
+        ok: false,
+        msg: `请求异常: ${err.message || err}`,
+      });
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const addPresetModel = () => {
+    const val = newPresetModelInput.trim();
+    if (!val) return;
+    if (!presetModels.includes(val)) {
+      setPresetModels((prev) => [...prev, val]);
+      if (!presetDefaultModel) setPresetDefaultModel(val);
+    }
+    setNewPresetModelInput("");
+  };
+
+  const removePresetModel = (modelName) => {
+    setPresetModels((prev) => {
+      const nextList = prev.filter((m) => m !== modelName);
+      if (presetDefaultModel === modelName) {
+        setPresetDefaultModel(nextList[0] || "");
+      }
+      return nextList;
+    });
+  };
+
+  const addCustomModel = () => {
+    const val = newCustomModelInput.trim();
+    if (!val) return;
+    if (!customModels.includes(val)) {
+      setCustomModels((prev) => [...prev, val]);
+      if (!customDefaultModel) setCustomDefaultModel(val);
+    }
+    setNewCustomModelInput("");
+  };
+
+  const removeCustomModel = (modelName) => {
+    setCustomModels((prev) => {
+      const nextList = prev.filter((m) => m !== modelName);
+      if (customDefaultModel === modelName) {
+        setCustomDefaultModel(nextList[0] || "");
+      }
+      return nextList;
+    });
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      let payload = {};
+      if (formTab === "preset") {
+        const preset = PROVIDER_PRESETS.find((x) => x.id === presetId) || PROVIDER_PRESETS[0];
+        const bUrl = (presetBaseUrl || preset.baseUrl || "").trim();
+        if (!bUrl) {
+          showNotice("error", "请填写 API 地址");
+          setSaving(false);
+          return;
+        }
+        const mList = presetModels.length > 0 ? presetModels : [...preset.models];
+        payload = {
+          id: editingId || `prv_${presetId}_${Date.now().toString(36)}`,
+          name: (presetName || preset.label).trim(),
+          kind: presetId,
+          preset_id: presetId,
+          base_url: bUrl,
+          models: mList,
+          model: presetDefaultModel || mList[0] || "deepseek-chat",
+          is_active: makeDefault || undefined,
+        };
+        if (presetApiKey && presetApiKey.trim()) {
+          payload.api_key = presetApiKey.trim();
+        }
+      } else {
+        const cId = (customProviderId || "").trim();
+        if (!cId) {
+          showNotice("error", "请填写 Provider ID (如 vertex-relay)");
+          setSaving(false);
+          return;
+        }
+        const bUrl = (customBaseUrl || "").trim();
+        if (!bUrl) {
+          showNotice("error", "请填写 API 地址");
+          setSaving(false);
+          return;
+        }
+        payload = {
+          id: editingId || cId,
+          name: (customName || cId).trim(),
+          kind: "custom",
+          preset_id: "custom",
+          base_url: bUrl,
+          models: customModels,
+          model: customDefaultModel || customModels[0] || "",
+          is_active: makeDefault || undefined,
+        };
+        if (customApiKey && customApiKey.trim()) {
+          payload.api_key = customApiKey.trim();
+        }
+      }
+
+      const res = await api("/v1/settings/providers", {
+        method: "POST",
+        body: payload,
+      });
+
+      if (res && res.ok) {
+        showNotice("success", `✓ 提供商 "${payload.name}" 保存成功`);
+        resetForm();
+        await loadProviders();
+        if (onReloadAll) await onReloadAll();
+      } else {
+        showNotice("error", `保存失败: ${res?.error || "未知错误"}`);
+      }
+    } catch (err) {
+      showNotice("error", `保存失败: ${err.message || err}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="dsh-models-container">
+      {/* 顶部：已配置模型提供商列表 */}
+      <div className="dsh-section-header">
+        <div className="dsh-section-title-row">
+          <h3>已配置模型提供商</h3>
+          <span className="dsh-count-badge">{providers.length} 个服务商</span>
+        </div>
+        <p className="hint">已在系统中注册的大模型服务与自定义中转站，默认服务商将作为所有助手的底座基准。</p>
+      </div>
+
+      {notice && (
+        <div className={`dsh-notice ${notice.type}`}>
+          {notice.text}
+        </div>
+      )}
+
+      <div className="dsh-providers-list">
+        {loading && providers.length === 0 ? (
+          <div className="dsh-empty-card">正在加载模型提供商列表…</div>
+        ) : providers.length === 0 ? (
+          <div className="dsh-empty-card">暂无已配置的模型提供商，请在下方添加并配置。</div>
+        ) : (
+          providers.map((p) => {
+            const isDefault = p.id === activeProviderId || !!p.is_active;
+            const isCustom = p.kind === "custom" || p.preset_id === "custom";
+            return (
+              <div key={p.id} className={`dsh-provider-card ${isDefault ? "active" : ""}`}>
+                <div className="dsh-card-main">
+                  <div className="dsh-card-top-row">
+                    <span
+                      className={`dsh-status-dot ${p.has_key || p.base_url ? "online" : "offline"}`}
+                      title={p.has_key ? "已配置密钥与接口地址" : "未配置密钥"}
+                    />
+                    <span className="dsh-provider-name">{p.name || p.id}</span>
+                    {isDefault && <span className="dsh-badge active">✓ 默认</span>}
+                    {isCustom ? (
+                      <span className="dsh-badge custom">自定义</span>
+                    ) : (
+                      <span className="dsh-badge preset">{p.preset_id || p.kind}</span>
+                    )}
+                  </div>
+                  <div className="dsh-card-meta-row">
+                    <span className="dsh-meta-url" title={p.base_url}>{p.base_url || "未设置 Base URL"}</span>
+                    <span className="dsh-meta-divider">·</span>
+                    <span className="dsh-meta-models">{(p.models || []).length} 个模型</span>
+                    {p.model && (
+                      <>
+                        <span className="dsh-meta-divider">·</span>
+                        <span className="dsh-meta-default-model">默认: {p.model}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <div className="dsh-card-actions">
+                  {!isDefault && (
+                    <button
+                      type="button"
+                      className="dsh-btn-sm default-btn"
+                      onClick={() => handleActivate(p.id)}
+                      title="设为全局默认提供商"
+                    >
+                      设为默认
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="dsh-btn-sm edit-btn"
+                    onClick={() => handleEdit(p)}
+                    title="在下方编辑此提供商配置"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    type="button"
+                    className="dsh-btn-sm delete-btn"
+                    onClick={() => handleDelete(p.id, p.name)}
+                    title="删除此提供商"
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <div className="settings-divider" style={{ margin: "14px 0 10px" }} />
+
+      {/* 下部：提供商配置表单（复刻用户截图 DSH 双 Tab 结构） */}
+      <div className="dsh-form-wrapper" ref={formRef}>
+        <div className="dsh-form-header">
+          <h4>{editingId ? `编辑模型提供商: ${editingId}` : "添加模型服务商与 API"}</h4>
+          {editingId && (
+            <span className="dsh-editing-badge">正在编辑模式</span>
+          )}
+        </div>
+
+        {/* 双 Tab 切换按钮 */}
+        <div className="dsh-form-tabs">
+          <button
+            type="button"
+            className={`dsh-form-tab-btn ${formTab === "preset" ? "active" : ""}`}
+            onClick={() => {
+              setFormTab("preset");
+              setFetchStatus(null);
+            }}
+          >
+            第三方模型提供商
+          </button>
+          <button
+            type="button"
+            className={`dsh-form-tab-btn ${formTab === "custom" ? "active" : ""}`}
+            onClick={() => {
+              setFormTab("custom");
+              setFetchStatus(null);
+            }}
+          >
+            自定义模型 API
+          </button>
+        </div>
+
+        {/* 表单主体 */}
+        <div className="dsh-form-card">
+          {formTab === "preset" ? (
+            <>
+              <p className="dsh-form-desc">从内置目录中选择 OpenAI、Anthropic、Kimi 等提供商，填入其 API 密钥即可使用。</p>
+              
+              <div className="dsh-form-group">
+                <label className="dsh-label">提供商</label>
+                <select
+                  className="dsh-select"
+                  value={presetId}
+                  onChange={(e) => handlePresetChange(e.target.value)}
+                >
+                  {PROVIDER_PRESETS.filter((p) => p.id !== "custom").map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="dsh-form-group">
+                <label className="dsh-label">API 密钥</label>
+                <div className="dsh-input-row">
+                  <input
+                    type={showPresetKey ? "text" : "password"}
+                    className="dsh-input"
+                    value={presetApiKey}
+                    placeholder={
+                      presetHasKey
+                        ? `已配置 (${presetKeyMasked || "***"}) · 留空保持不变`
+                        : "请输入 API 密钥 (sk-...)"
+                    }
+                    onChange={(e) => setPresetApiKey(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="dsh-btn-sm toggle-key-btn"
+                    onClick={() => setShowPresetKey(!showPresetKey)}
+                  >
+                    {showPresetKey ? "隐藏" : "显示"}
+                  </button>
+                </div>
+              </div>
+
+              {/* 可折叠项 > 自定义设置 */}
+              <div className="dsh-collapsible">
+                <div
+                  className="dsh-collapsible-header"
+                  onClick={() => setPresetCustomOpen(!presetCustomOpen)}
+                >
+                  <span className="dsh-collapsible-title">
+                    <span className="dsh-toggle-arrow">{presetCustomOpen ? "▾" : "▸"}</span> 自定义设置
+                  </span>
+                  <span className="dsh-collapsible-hint">{presetCustomOpen ? "收起" : "展开高级选项"}</span>
+                </div>
+
+                {presetCustomOpen && (
+                  <div className="dsh-collapsible-body">
+                    <div className="dsh-form-group">
+                      <label className="dsh-label">API 地址 (Base URL)</label>
+                      <input
+                        type="text"
+                        className="dsh-input"
+                        value={presetBaseUrl}
+                        placeholder="https://api.deepseek.com"
+                        onChange={(e) => setPresetBaseUrl(e.target.value)}
+                      />
+                      <span className="dsh-subtext">自动智能兼容 /v1 与 /chat/completions 后缀；支持中转代理</span>
+                    </div>
+
+                    <div className="dsh-model-catalog">
+                      <div className="dsh-catalog-header">
+                        <span className="dsh-catalog-title">模型目录 ({presetModels.length})</span>
+                        <button
+                          type="button"
+                          className="dsh-fetch-btn"
+                          disabled={fetchingModels}
+                          onClick={() => fetchRemoteModels(presetBaseUrl, presetApiKey, presetId)}
+                        >
+                          {fetchingModels && <span className="dsh-spinner" />}
+                          <span>{fetchingModels ? "正在探测远端模型…" : "⚡ 获取可用模型"}</span>
+                        </button>
+                      </div>
+
+                      {fetchStatus && (
+                        <div className={`dsh-fetch-status ${fetchStatus.ok ? "ok" : "err"}`}>
+                          {fetchStatus.msg}
+                        </div>
+                      )}
+
+                      <div className="dsh-pills-wrap">
+                        {presetModels.length === 0 ? (
+                          <span className="dsh-pills-empty">暂无模型，请点击获取或手动添加</span>
+                        ) : (
+                          presetModels.map((m) => (
+                            <span
+                              key={m}
+                              className={`dsh-model-pill ${m === presetDefaultModel ? "default" : ""}`}
+                              onClick={() => setPresetDefaultModel(m)}
+                              title="点击设为默认模型"
+                            >
+                              <span className="dsh-pill-text">{m}</span>
+                              {m === presetDefaultModel && <span className="dsh-pill-def-tag">默认</span>}
+                              <button
+                                type="button"
+                                className="dsh-pill-remove"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removePresetModel(m);
+                                }}
+                                title="删除此模型"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))
+                        )}
+                      </div>
+
+                      <div className="dsh-add-model-row">
+                        <input
+                          type="text"
+                          className="dsh-input-sm"
+                          value={newPresetModelInput}
+                          placeholder="输入模型 ID (如 deepseek-chat 或 gpt-4o)"
+                          onChange={(e) => setNewPresetModelInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              addPresetModel();
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="dsh-btn-sm add-model-btn"
+                          onClick={addPresetModel}
+                        >
+                          + 添加模型
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="dsh-form-desc">连接中转站、自部署服务或其他兼容 OpenAI / Anthropic 协议的接口，需填写 API 地址、协议和模型。</p>
+
+              <div className="dsh-form-group">
+                <label className="dsh-label">Provider ID (唯一标识)</label>
+                <input
+                  type="text"
+                  className="dsh-input"
+                  value={customProviderId}
+                  placeholder="例如: vertex-relay, amd, scnet, vllm"
+                  disabled={!!editingId}
+                  onChange={(e) => setCustomProviderId(e.target.value)}
+                />
+                <span className="dsh-subtext">英文字母、数字和横杠，用于系统唯一标识</span>
+              </div>
+
+              <div className="dsh-form-group">
+                <label className="dsh-label">显示名称</label>
+                <input
+                  type="text"
+                  className="dsh-input"
+                  value={customName}
+                  placeholder="例如: Vertex 中转站, 本地集群"
+                  onChange={(e) => setCustomName(e.target.value)}
+                />
+              </div>
+
+              <div className="dsh-form-group">
+                <label className="dsh-label">API 地址 (Base URL)</label>
+                <input
+                  type="text"
+                  className="dsh-input"
+                  value={customBaseUrl}
+                  placeholder="https://gateway.example.com/v1"
+                  onChange={(e) => setCustomBaseUrl(e.target.value)}
+                />
+                <span className="dsh-subtext">中转站或自部署服务的 API 根路径</span>
+              </div>
+
+              <div className="dsh-form-group">
+                <label className="dsh-label">API 协议</label>
+                <select
+                  className="dsh-select"
+                  value={customProtocol}
+                  onChange={(e) => setCustomProtocol(e.target.value)}
+                >
+                  <option value="openai">OpenAI Chat Completions (标准兼容)</option>
+                  <option value="anthropic">Anthropic Messages</option>
+                </select>
+              </div>
+
+              <div className="dsh-form-group">
+                <label className="dsh-label">API 密钥 (API Key)</label>
+                <div className="dsh-input-row">
+                  <input
+                    type={showCustomKey ? "text" : "password"}
+                    className="dsh-input"
+                    value={customApiKey}
+                    placeholder={
+                      customHasKey
+                        ? `已配置 (${customKeyMasked || "***"}) · 留空保持不变`
+                        : "输入 API 密钥 (无需鉴权可留空)"
+                    }
+                    onChange={(e) => setCustomApiKey(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="dsh-btn-sm toggle-key-btn"
+                    onClick={() => setShowCustomKey(!showCustomKey)}
+                  >
+                    {showCustomKey ? "隐藏" : "显示"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="dsh-model-catalog">
+                <div className="dsh-catalog-header">
+                  <span className="dsh-catalog-title">模型目录 ({customModels.length})</span>
+                  <button
+                    type="button"
+                    className="dsh-fetch-btn"
+                    disabled={fetchingModels}
+                    onClick={() => fetchRemoteModels(customBaseUrl, customApiKey, customProtocol)}
+                  >
+                    {fetchingModels && <span className="dsh-spinner" />}
+                    <span>{fetchingModels ? "正在探测远端模型…" : "⚡ 获取可用模型"}</span>
+                  </button>
+                </div>
+
+                {fetchStatus && (
+                  <div className={`dsh-fetch-status ${fetchStatus.ok ? "ok" : "err"}`}>
+                    {fetchStatus.msg}
+                  </div>
+                )}
+
+                <div className="dsh-pills-wrap">
+                  {customModels.length === 0 ? (
+                    <span className="dsh-pills-empty">暂无模型，请点击获取可用模型或在下方手动添加</span>
+                  ) : (
+                    customModels.map((m) => (
+                      <span
+                        key={m}
+                        className={`dsh-model-pill ${m === customDefaultModel ? "default" : ""}`}
+                        onClick={() => setCustomDefaultModel(m)}
+                        title="点击设为默认模型"
+                      >
+                        <span className="dsh-pill-text">{m}</span>
+                        {m === customDefaultModel && <span className="dsh-pill-def-tag">默认</span>}
+                        <button
+                          type="button"
+                          className="dsh-pill-remove"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeCustomModel(m);
+                          }}
+                          title="删除此模型"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+
+                <div className="dsh-add-model-row">
+                  <input
+                    type="text"
+                    className="dsh-input-sm"
+                    value={newCustomModelInput}
+                    placeholder="输入模型 ID (例如: gpt-4o, claude-3-7-sonnet)"
+                    onChange={(e) => setNewCustomModelInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        addCustomModel();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="dsh-btn-sm add-model-btn"
+                    onClick={addCustomModel}
+                  >
+                    + 添加模型
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          <label className="checkline" style={{ marginTop: "4px" }}>
+            <input
+              type="checkbox"
+              checked={makeDefault}
+              onChange={(e) => setMakeDefault(e.target.checked)}
+            />
+            设为当前全局默认提供商
+          </label>
+
+          <div className="dsh-form-actions">
+            <button
+              type="button"
+              className="dsh-btn cancel"
+              onClick={resetForm}
+            >
+              {editingId ? "取消编辑" : "重置"}
+            </button>
+            <button
+              type="button"
+              className="dsh-btn save primary"
+              disabled={saving}
+              onClick={handleSave}
+            >
+              {saving ? "正在保存…" : editingId ? "保存修改" : "保存提供商"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, onSleep, vault, onOpenVault, models, pairCode, onGenPairCode, integrations, localDevices, onClose, onReloadAll }) {
   const [local, setLocal] = useState(settings || {});
   const [saved, setSaved] = useState(false);
   const [showKey, setShowKey] = useState(false);
@@ -2767,7 +3619,12 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
     <div className="modal-mask" onClick={onClose}>
       <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="settings-nav">
-          {[["general", "通用"], ["computer", "电脑"], ["vault", "保险库"]].map(([id, label]) => (
+          {[
+            ["general", "通用"],
+            ["models", "模型"],
+            ["computer", "电脑"],
+            ["vault", "保险库"],
+          ].map(([id, label]) => (
             <button key={id} className={tab === id ? "settings-tab on" : "settings-tab"} onClick={() => setTab(id)}>
               {label}
             </button>
@@ -2776,8 +3633,20 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
         <div className="settings-body">
           {tab === "general" && (
             <>
-              <h3>全局大模型配置</h3>
-              <p className="hint">统一管理底座模型、接口地址与秘钥。所有助手默认继承此处配置。</p>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>全局大模型配置</h3>
+                  <p className="hint" style={{ margin: "4px 0 0" }}>统一管理底座模型、接口地址与秘钥。所有助手默认继承此处配置。</p>
+                </div>
+                <button
+                  type="button"
+                  className="mini-btn"
+                  style={{ borderColor: "rgba(56, 189, 248, 0.4)", color: "#38bdf8", whiteSpace: "nowrap" }}
+                  onClick={() => setTab("models")}
+                >
+                  ⚙️ 管理服务商与模型列表
+                </button>
+              </div>
 
               <label>服务提供商 (Provider Preset)</label>
               <select
@@ -2972,6 +3841,9 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
                 <button className="mini-btn" onClick={onGenPairCode}>生成配对码</button>
               )}
             </>
+          )}
+          {tab === "models" && (
+            <DshModelsPane onReloadAll={onReloadAll} models={models} />
           )}
           {tab === "computer" && (
             <>

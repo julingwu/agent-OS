@@ -21,46 +21,74 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "deepseek": {
         "label": "DeepSeek 官方",
         "base_url": "https://api.deepseek.com",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
+        "models": ["deepseek-chat", "deepseek-reasoner", "deepseek-flash"],
+    },
+    "siliconflow": {
+        "label": "硅基流动 (SiliconFlow)",
+        "base_url": "https://api.siliconflow.cn/v1",
+        "models": [
+            "deepseek-ai/DeepSeek-V3",
+            "deepseek-ai/DeepSeek-R1",
+            "Qwen/Qwen2.5-72B-Instruct",
+        ],
+    },
+    "moonshot": {
+        "label": "Moonshot (月之暗面/Kimi)",
+        "base_url": "https://api.moonshot.cn/v1",
+        "models": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+    },
+    "zhipu": {
+        "label": "智谱 AI (GLM)",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "models": ["glm-4-plus", "glm-4-flash", "glm-4-long"],
+    },
+    "dashscope": {
+        "label": "阿里云百炼 (通义千问)",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "models": ["qwen-plus", "qwen-max", "qwen-turbo"],
     },
     "openai": {
         "label": "OpenAI 官方",
         "base_url": "https://api.openai.com/v1",
-        "models": ["gpt-4o", "gpt-4.1", "o3-mini"],
+        "models": ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
+    },
+    "anthropic": {
+        "label": "Anthropic (Claude)",
+        "base_url": "https://api.anthropic.com/v1",
+        "models": ["claude-3-7-sonnet", "claude-3-5-sonnet"],
     },
     "openrouter": {
         "label": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
         "models": [
-            "anthropic/claude-3.7-sonnet",
-            "google/gemini-2.5-pro",
-            "openai/gpt-4o",
             "deepseek/deepseek-r1",
+            "anthropic/claude-3.7-sonnet",
+            "openai/gpt-4o",
         ],
     },
-    "dashscope": {
-        "label": "阿里云百炼 (通义千问)",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "models": ["qwen-max", "qwen-plus", "qwq-32b"],
+    "groq": {
+        "label": "Groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "models": ["llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b"],
+    },
+    "minimax": {
+        "label": "MiniMax",
+        "base_url": "https://api.minimax.chat/v1",
+        "models": ["abab6.5s-chat", "MiniMax-Text-01"],
+    },
+    "ollama": {
+        "label": "Ollama (本地)",
+        "base_url": "http://localhost:11434/v1",
+        "models": ["llama3.2", "qwen2.5"],
     },
     "ark": {
         "label": "火山引擎方舟 (豆包/DeepSeek)",
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "models": ["doubao-1-5-pro-32k-250115", "deepseek-r1-250120"],
     },
-    "siliconflow": {
-        "label": "硅基流动 (SiliconFlow)",
-        "base_url": "https://api.siliconflow.cn/v1",
-        "models": ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1"],
-    },
-    "moonshot": {
-        "label": "Moonshot (Kimi)",
-        "base_url": "https://api.moonshot.cn/v1",
-        "models": ["kimi-k2-0711-preview", "moonshot-v1-128k"],
-    },
     "custom": {
         "label": "自定义 OpenAI 兼容接口",
-        "base_url": "",
+        "base_url": "https://gateway.example.com/v1",
         "models": [],
     },
 }
@@ -241,8 +269,27 @@ def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
     """
     settings = _get_app_settings(conn)
 
+    # Active provider fallback
+    active_p = None
+    providers = settings.get("llm_providers")
+    if isinstance(providers, list):
+        active_id = settings.get("active_provider_id")
+        for p in providers:
+            if isinstance(p, dict):
+                if active_id and p.get("id") == active_id:
+                    active_p = p
+                    break
+                elif p.get("is_active"):
+                    active_p = p
+                    break
+        if not active_p and providers and isinstance(providers[0], dict):
+            active_p = providers[0]
+
     # 1. API Key
     stored_key = str(settings.get("llm_api_key") or "").strip()
+    if not stored_key and active_p:
+        stored_key = str(active_p.get("api_key") or "").strip()
+
     api_key = (
         stored_key
         or os.environ.get("DEEPSEEK_API_KEY")
@@ -253,6 +300,9 @@ def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
 
     # 2. Chat URL
     stored_base = str(settings.get("llm_base_url") or "").strip()
+    if not stored_base and active_p:
+        stored_base = str(active_p.get("base_url") or "").strip()
+
     if stored_base:
         chat_url = normalize_chat_completions_url(stored_base)
     elif os.environ.get("LLM_URL"):
@@ -265,13 +315,21 @@ def resolve_llm_config(model: str | None = None, conn=None) -> dict[str, Any]:
             chat_url = "https://api.deepseek.com/chat/completions"
 
     # 3. Model
+    setting_model = str(settings.get("model") or "").strip()
+    if not setting_model and active_p:
+        setting_model = str(active_p.get("model") or "").strip()
+
     resolved_model = (
         (model or "").strip()
-        or str(settings.get("model") or "").strip()
+        or setting_model
         or os.environ.get("LLM_MODEL", "deepseek-chat").strip()
     )
 
-    provider = str(settings.get("llm_provider") or "deepseek").strip()
+    provider = str(
+        settings.get("llm_provider")
+        or (active_p.get("preset_id") or active_p.get("kind") if active_p else "")
+        or "deepseek"
+    ).strip()
 
     return {
         "api_key": api_key,
