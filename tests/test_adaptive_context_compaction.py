@@ -236,7 +236,7 @@ def test_session_blackboard_state_and_breakpoint_inheritance():
 
     # 5. 格式化黑板断点看板 Prompt 注入
     prompt_block = blackboard.format_blackboard_prompt(board)
-    assert "【当前任务黑板 / 断点进度看板" in prompt_block
+    assert "【当前任务会话黑板与断点进度看板】" in prompt_block
     assert "核心任务目标：生成 2026 年宏观资产配置研报与相关图表" in prompt_block
     assert "charts/gold_10y_trend.png" in prompt_block
     assert "reports/macro_2026.html" in prompt_block

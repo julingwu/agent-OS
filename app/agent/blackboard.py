@@ -5,7 +5,7 @@
   2. 记录已生成的交付物清单（artifacts: 研报、图表、脚本、数据）；
   3. 记录已完成的关键执行步骤（completed_steps）；
   4. 记录断点接力指引（next_step_hint）；
-  5. 彻底解决用户发送「继续」时的失忆与重复执行，实现跨轮无缝断点接力。
+  5. 支持用户发送「继续」时的上下文衔接，实现跨轮断点接力。
 """
 
 from __future__ import annotations
@@ -300,7 +300,7 @@ def format_blackboard_prompt(board: dict[str, Any]) -> str:
     goal = board.get("last_goal") or "待定"
     artifacts = board.get("artifacts") or []
     completed_steps = board.get("completed_steps") or []
-    next_hint = board.get("next_step_hint") or "从已有成果直接向下推进，杜绝重复第一步！"
+    next_hint = board.get("next_step_hint") or "从已有成果直接向下推进。"
 
     charts = [a["path"] for a in artifacts if isinstance(a, dict) and a.get("kind") in ("chart", "diagram")]
     docs = [a["path"] for a in artifacts if isinstance(a, dict) and a.get("kind") in ("doc", "artifact")]
@@ -324,14 +324,14 @@ def format_blackboard_prompt(board: dict[str, Any]) -> str:
     steps_text = "\n".join(step_lines) if step_lines else "  - （尚无历史执行步骤）"
 
     return (
-        "【当前任务黑板 / 断点进度看板（Hermes Session Blackboard）】\n"
+        "【当前任务会话黑板与断点进度看板】\n"
         f"- 核心任务目标：{goal}\n"
         "- 已生成产物清单（重要：以下文件已在工作区生成，严禁重复生成或重复爬取！）：\n"
         f"{art_text}\n"
         "- 之前已完成的关键执行步骤：\n"
         f"{steps_text}\n"
         f"- 断点接力指引：{next_hint}\n"
-        "⚡ 注意：用户回复「继续」时，直接依据上述黑板已有成果往下做，严禁失忆，绝不从第一步重头再来！"
+        "⚡ 任务断点接力：用户发送「继续」时，直接依据上述黑板记录的已完成资产与下一步指引继续推进。"
     )
 
 

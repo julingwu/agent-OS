@@ -157,14 +157,14 @@ class TestPromptInjectionAndTemperature:
         prompt = loop._system_prompt(bot, style_mode="insight")
         assert "洞察智囊模式" in prompt
         assert "合伙人/CEO/首席研究员视角" in prompt
-        assert "多情景测算大表" in prompt
+        assert "深度推演与权衡分析" in prompt
         assert "风险对冲与落地动作" in prompt
 
     def test_system_prompt_injection_fun(self):
         bot = {"id": "b3", "name": "Grok", "persona": "幽默伙伴"}
         prompt = loop._system_prompt(bot, style_mode="fun")
         assert "诙谐犀利模式" in prompt
-        assert "马斯克与 Grok 经典犀利幽默" in prompt
+        assert "机智幽默与犀利表达" in prompt
         assert "反讽戏谑" in prompt
         assert "公关黑话" in prompt
         assert "金句" in prompt
