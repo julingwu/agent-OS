@@ -17,7 +17,7 @@ on:
       - master
       - main
     paths:
-      - 'desktop/**'
+      - 'program/desktop/**'
       - '.github/workflows/build-android.yml'
 
 jobs:
@@ -69,28 +69,28 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: 'desktop/package-lock.json'
+          cache-dependency-path: 'program/desktop/package-lock.json'
 
       - name: Install desktop dependencies
         run: |
-          cd desktop
+          cd program/desktop
           npm install
 
       - name: Initialize Tauri Android project
         run: |
-          cd desktop
+          cd program/desktop
           npx tauri android init --ci --skip-targets-install
 
       - name: Inject Private Root CA & Network Security Config
         run: |
-          RES_DIR="desktop/src-tauri/gen/android/app/src/main/res"
+          RES_DIR="program/desktop/src-tauri/gen/android/app/src/main/res"
           mkdir -p "$RES_DIR/raw"
           mkdir -p "$RES_DIR/xml"
 
           # 1. 复制自建根证书到 res/raw/ca.crt
-          cp desktop/ca.crt "$RES_DIR/raw/ca.crt"
+          cp program/desktop/ca.crt "$RES_DIR/raw/ca.crt"
 
-          # 2. 生成网络安全配置文件：信任内置 CA 证书与系统证书，放行 193.112.172.223 私有 HTTPS
+          # 2. 生成网络安全配置文件：信任内置 CA 证书与系统证书，放行 203.0.113.10 私有 HTTPS
           cat << 'EOF' > "$RES_DIR/xml/network_security_config.xml"
           <?xml version="1.0" encoding="utf-8"?>
           <network-security-config>
@@ -101,7 +101,7 @@ jobs:
                   </trust-anchors>
               </base-config>
               <domain-config cleartextTrafficPermitted="true">
-                  <domain includeSubdomains="true">193.112.172.223</domain>
+                  <domain includeSubdomains="true">203.0.113.10</domain>
                   <domain includeSubdomains="true">localhost</domain>
                   <domain includeSubdomains="true">127.0.0.1</domain>
                   <trust-anchors>
@@ -113,7 +113,7 @@ jobs:
           EOF
 
           # 3. 将 networkSecurityConfig 配置注入 AndroidManifest.xml (安全注入，避免重复属性)
-          MANIFEST="desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml"
+          MANIFEST="program/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml"
           if grep -q "android:networkSecurityConfig" "$MANIFEST"; then
             echo "networkSecurityConfig already present"
           else
@@ -125,7 +125,7 @@ jobs:
       - name: Build Android APK
         id: build_apk
         run: |
-          cd desktop
+          cd program/desktop
           TARGET_FLAG="${{ github.event.inputs.target || 'aarch64' }}"
           if [ "$TARGET_FLAG" = "all" ]; then
             npx tauri android build --apk --debug --verbose 2>&1 | tee ../android_build.log
@@ -153,7 +153,7 @@ jobs:
         if: success()
         run: |
           mkdir -p output_apk
-          find desktop/src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -exec cp {} output_apk/ \;
+          find program/desktop/src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -exec cp {} output_apk/ \;
           ls -la output_apk/
 
       - name: Upload APK artifact

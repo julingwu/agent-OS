@@ -23,9 +23,9 @@
 
 ### 服务器现状（2026-10-26 23:45）
 - 腾讯云 Lighthouse `lhins-f4zsj3q9`，Debian 13.2 (trixie)，内核 6.12.86，4C/8G/59G（已用 8%）
-- 公网 `193.112.172.223`；SSH 密钥：`~/.ssh/oa_agent_ed25519.pem`（KeyId `lhkp-9eb1goob`）
+- 公网 `203.0.113.10`；SSH 密钥：`~/.ssh/oa_agent_ed25519.pem`（KeyId `example-key-id`）
 - 桌面：XFCE on `:0` @1600×900，lightdm autologin `oaagent`，xrdp 3389，x11vnc 5900（仅 localhost）
-- **服务端已上线**：`https://193.112.172.223/` → nginx(443, 自签) → uvicorn(127.0.0.1:8077)
+- **服务端已上线**：`https://203.0.113.10/` → nginx(443, 自签) → uvicorn(127.0.0.1:8077)
   - TLS 指纹 SHA256：`C7:0D:05:48:13:7A:26:A8:E5:33:86:EB:43:D1:98:6C:E4:B5:2C:67:78:23:40:C4:8A:B6:A0:C6:D0:68:96:53`
   - systemd：`agent-os.service`；代码 `/opt/agent-os/app-src`；数据 `/opt/agent-os/data/oa.db`；工作区 `/opt/agent-os/workspace`
   - Python 3.13.5 + fastapi 0.162.0；`/v1/health` 200；`/v1/events` 需 Bearer 令牌（未带 401）
@@ -74,12 +74,12 @@
   - **本地工具**：`local_info / local_list / local_read / local_write / local_exec`，经 `app/local_bridge.py` → exe Rust 执行
   - **逐次审批**：默认每次调用弹「本地电脑操作请求」，允许只对这一次生效；180 秒未决自动撤回卡片（`approval.decided: expired`）；刷新界面不再回放历史审批（`GET /v1/local/approvals` + 启动游标）
   - **设置里可见状态**：设置 → 通用 →「本地桥已连接 N 台 / 未连接」；`local_enabled`（默认关）、`local_approval`（默认开）
-  - **真机验证**：exe 内点「允许这一次」后读到 `DESKTOP-PCZ6S91 / juling.wu.ext / C:\Users\juling.wu.ext`
+  - **真机验证**：exe 内点「允许这一次」后读到 `DESKTOP-PCZ6S91 / juling.wu.ext / C:\Users\Public`
   - **exe 修复**：手动建窗补 `--ignore-certificate-errors`（否则自签证书下静默退回登录页）；登录页增加"连不上服务器 + 重试连接"提示
   - **dsh-im 接入引导**：设置新增「IM 机器人」页（12 渠道、安装命令可复制、指南/GitHub 链接，`GET /v1/integrations`）；「连接应用」保留为未来 MCP 管理入口，不再放假开关
   - 测试：**744 条全量用例通过**（其中 v1 95 条，本地桥 10 条）
 - `GET /v1/bots/{id}/details`（今日用量）、`GET /v1/bots/{id}/library`、`GET /v1/workspace`、`GET /v1/workspace/raw`
-- **网页版界面已上线：`https://193.112.172.223/ui/`**（三栏：Bot/会话、聊天、详情·资料库·电脑）
+- **网页版界面已上线：`https://203.0.113.10/ui/`**（三栏：Bot/会话、聊天、详情·资料库·电脑）
   - 2026-10-27：整体改版为**暗色赛博风**；根路径 `/` 302 → `/ui/`；新增居中登录页（服务器地址/设备令牌，连接前先探活验令牌）；旧工作台移到 `/legacy`（登录后管理入口，不在登录页暴露）
   - 截图：`build/shots/login_cyber.png`（登录页）、`build/shots/app_ui2.png`（主界面）
   - 首次打开需接受自签证书；登录后令牌存 localStorage
@@ -209,7 +209,7 @@
 - **v1.9（2026-10-28）**：三块硬骨头一起啃（用户要求 1/2/3 全做，语音跳过）
   - **① 安心债：真实 TLS 证书链**（详见 `docs/design/TLS.md`）
     * 没有域名只有 IP，所以自建 CA：RSA4096/10 年根 + RSA2048/397 天叶证书，
-      SAN 含 `193.112.172.223 / 127.0.0.1 / localhost`；`deploy/tls/gen_ca_and_cert.sh` 幂等，
+      SAN 含 `203.0.113.10 / 127.0.0.1 / localhost`；`deploy/tls/gen_ca_and_cert.sh` 幂等，
       支持 `--force/--new-ca/--revoke/--gen-crl/--print`
     * **踩到 Windows 的硬要求**：只装根证书不够 —— Schannel（curl/WebView2 同底）建链时强制吊销检查，
       私有 CA 没有 CRL 分发点直接报 `CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`（curl exit 35）。

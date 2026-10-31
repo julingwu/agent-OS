@@ -1,0 +1,17 @@
+@echo off
+setlocal
+chcp 65001 >nul
+cd /d "%~dp0"
+echo [1/2] Running isolated regression tests...
+".venv\Scripts\python.exe" -m pytest tests/test_controlled_release.py tests/test_agent_v1.py tests/test_agent_full_toolkit.py tests/test_bots_v1.py tests/test_processes_v1.py tests/test_routines_skills_v1.py tests/test_events_v1.py tests/test_stream_v1.py tests/test_streaming_v1.py -q --disable-warnings
+if errorlevel 1 goto failed
+echo [2/2] Verifying real backends and Agent-initiated releases with a temporary database...
+".venv\Scripts\python.exe" -X utf8 scripts/verify_controlled_release.py
+if errorlevel 1 goto failed
+echo [PASS] Controlled release verification completed. Production services were not restarted.
+pause
+exit /b 0
+:failed
+echo [FAIL] Verification failed. Review the error above before using this build.
+pause
+exit /b 1

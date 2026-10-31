@@ -1,0 +1,11 @@
+Set WshShell = CreateObject("WScript.Shell")
+Dim fso, scriptDir
+Set fso = CreateObject("Scripting.FileSystemObject")
+scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
+WshShell.CurrentDirectory = scriptDir
+
+' 静默启动双轨调度管理器 (pythonw 无窗口模式)
+WshShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & scriptDir & "\start-backend.ps1""", 0, False
+
+' 稍等 1.5 秒后端与网关就绪，自动打开浏览器
+' start-backend.ps1 opens the browser only after readiness succeeds.

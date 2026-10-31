@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+pytest
+httpx
+cryptography
+pymysql
+python-multipart
+defusedxml
+Pillow
+requests
+python-dotenv
+websockets
+beautifulsoup4
+python-docx
+openpyxl
+pypdf

@@ -37,8 +37,8 @@ flowchart LR
 | [`start-daemon.cmd`](file:///d:/Agent-OS/start-daemon.cmd) | 一键静默启动本地守护进程 | 双击运行（桌面有对应快捷方式） |
 | [`stop-daemon.cmd`](file:///d:/Agent-OS/stop-daemon.cmd) | 一键停止本地守护进程 | 双击运行 |
 | [`open-web.cmd`](file:///d:/Agent-OS/open-web.cmd) | 一键在浏览器打开 AgentOS Web 控制台 | 双击即可在默认浏览器打开 |
-| `C:\Users\anxin\Desktop\AgentOS Web 工作台.url` | 桌面直达 Web 工作台快捷方式 | 双击直接进入界面 |
-| `C:\Users\anxin\Desktop\启动本地守护进程.cmd` | 桌面一键启动本地守护进程 | 双击后台静默常驻 |
+| `C:\Users\Public\Desktop\AgentOS Web 工作台.url` | 桌面直达 Web 工作台快捷方式 | 双击直接进入界面 |
+| `C:\Users\Public\Desktop\启动本地守护进程.cmd` | 桌面一键启动本地守护进程 | 双击后台静默常驻 |
 
 ---
 

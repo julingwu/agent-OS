@@ -11,17 +11,17 @@
 
 | 项目 | 改造前 | 改造后 |
 |---|---|---|
-| 证书 | 自签单证书（`CN=193.112.172.223`，自己签自己） | 2 级链：`AgentOS Local Root CA` → 服务器证书 |
+| 证书 | 自签单证书（`CN=203.0.113.10`，自己签自己） | 2 级链：`AgentOS Local Root CA` → 服务器证书 |
 | 证书链 | 1 级（自签，任何客户端都不认） | 2 级（叶 + 根，`verify return code = 0`） |
-| SAN | 只有 `IP:193.112.172.223` | `IP:193.112.172.223`、`127.0.0.1`、`::1`、`DNS:localhost` |
-| 吊销 | 无 | 有 CRL，`https://193.112.172.223/agentos-ca.crl`（`application/pkix-crl`） |
+| SAN | 只有 `IP:203.0.113.10` | `IP:203.0.113.10`、`127.0.0.1`、`::1`、`DNS:localhost` |
+| 吊销 | 无 | 有 CRL，`https://203.0.113.10/agentos-ca.crl`（`application/pkix-crl`） |
 | Windows 客户端 | `curl` 退出码 60，WebView2 必须加 `--ignore-certificate-errors` | 装 CA 后 `curl.exe` 不带 `-k` 返回 200，可删掉该参数 |
 | TLS 策略 | TLS1.2/1.3，无 HSTS | TLS1.2/1.3、关闭会话票据、HSTS `max-age=15552000` |
 
 验收结果（实测，见 §11 附录）：
 
-1. ✅ 服务器 `nginx -t` 通过，`systemctl reload nginx` 后 `openssl s_client` 显示 2 级链、SAN 含 `IP:193.112.172.223`、`Verify return code: 0 (ok)`
-2. ✅ 本机 Windows `curl.exe -s -o NUL -w "%{http_code}" https://193.112.172.223/v1/health` → `200`（不带 `-k`）
+1. ✅ 服务器 `nginx -t` 通过，`systemctl reload nginx` 后 `openssl s_client` 显示 2 级链、SAN 含 `IP:203.0.113.10`、`Verify return code: 0 (ok)`
+2. ✅ 本机 Windows `curl.exe -s -o NUL -w "%{http_code}" https://203.0.113.10/v1/health` → `200`（不带 `-k`）
 3. ✅ CA / 服务器证书 / CRL 的 SHA256 指纹已记录（§4）
 
 ---
@@ -31,12 +31,12 @@
 四条独立理由，任意一条都足以否掉 ACME 方案：
 
 1. **没有域名，只有 IP**。ACME 的 `HTTP-01` / `TLS-ALPN-01` 都要求申请者控制一个**域名**（签发主体必须是域名，IP 证书只有极少数商业 CA 提供，且要付费 + 人工审核）。
-2. **服务器（193.112.172.223）的 80 端口对客户端不可达**
+2. **服务器（203.0.113.10）的 80 端口对客户端不可达**
    —— 注意是**服务器侧入向**，不是客户端本机的 80 端口。实测证据（2026-10-28）：
 
    | 检查点 | 结果 |
    |---|---|
-   | 从本机 `Test-NetConnection 193.112.172.223 -Port 80` | `False`（无响应；`curl` 直连 exit=28 超时） |
+   | 从本机 `Test-NetConnection 203.0.113.10 -Port 80` | `False`（无响应；`curl` 直连 exit=28 超时） |
    | 从本机 `... -Port 443` / `-Port 22` | `True` / `True` |
    | 从本机到 `example.com:80`、`www.baidu.com:80` | `True`（本机出站 80 正常，排除客户端侧问题） |
    | 服务器上 `ss -ltn` | nginx 在监听 `0.0.0.0:80`、`[::]:80` |
@@ -44,7 +44,7 @@
    | 服务器上 `iptables`/`nft` | `YJ-FIREWALL-INPUT` 链里**没有**针对 80 的规则 |
 
    结论：应用层与主机防火墙都没拦，是**云厂商安全组**未放通 80（SYN 被静默丢弃），只放通了 443/22 等。
-   因此任何客户端（浏览器、WebView2、Windows 的 CRL 抓取器）都取不到 `http://193.112.172.223/...`；
+   因此任何客户端（浏览器、WebView2、Windows 的 CRL 抓取器）都取不到 `http://203.0.113.10/...`；
    即使用 `HTTP-01`，验证请求也进不来；`TLS-ALPN-01` 又要独占 443，与 nginx 冲突（需要前置 SNI 分流）。
 3. **机器是单点内网式部署**，客户端只来自少数几台内部 Windows（连的是固定 IP），不存在「任意公网用户访问」的场景，
    公共信任链带来的收益（免装根证书）在这里可以接受用「一次安装本地 CA」替代。
@@ -61,16 +61,16 @@
 ```
                      ┌──────────────────────────────────────────┐
                      │  AgentOS Local Root CA (自签, RSA 4096)    │
-                     │  CN=AgentOS Local Root CA (193.112.172.223)│
+                     │  CN=AgentOS Local Root CA (203.0.113.10)│
                      │  10 年，仅签名，私钥 ca.key 权限 600       │
                      └───────────────┬──────────────────────────┘
                                      │ 签发
                      ┌───────────────▼──────────────────────────┐
                      │  服务器证书 (RSA 2048, 397 天)             │
-                     │  CN=193.112.172.223                       │
-                     │  SAN=IP:193.112.172.223,127.0.0.1,::1,    │
+                     │  CN=203.0.113.10                       │
+                     │  SAN=IP:203.0.113.10,127.0.0.1,::1,    │
                      │      DNS:localhost                        │
-                     │  CDP=https://193.112.172.223/agentos-ca.crl│
+                     │  CDP=https://203.0.113.10/agentos-ca.crl│
                      └───────────────┬──────────────────────────┘
                                      │ nginx 下发 fullchain.crt（叶+根）
    Windows 客户端 ──────────────────┘
@@ -88,8 +88,8 @@
    `curl` 退出码 35、HTTP 状态 000。**本轮改造实测踩到了这个坑**（详见 §8 排查表）。
 
 > 注意：CDP 用的是 **https**，不是 http —— 因为**服务器侧**的 80 端口入向被云安全组挡掉了（§2 第 2 条有完整证据），
-> 客户端（含 Windows 拉 CRL 的那个组件）根本连不上 `http://193.112.172.223/`。
-> 443 已验证可达，所以 CDP 走 `https://193.112.172.223/agentos-ca.crl`。
+> 客户端（含 Windows 拉 CRL 的那个组件）根本连不上 `http://203.0.113.10/`。
+> 443 已验证可达，所以 CDP 走 `https://203.0.113.10/agentos-ca.crl`。
 > 这与「客户端本机有没有开 80」无关——本机的 80 端口在这个方案里完全不参与。
 
 ---
@@ -159,7 +159,7 @@ Get-ChildItem Cert:\CurrentUser\Root | Where-Object Subject -like '*AgentOS*' |
 ### 6.1 日常：幂等（推荐，改完就跑）
 
 ```bash
-ssh -i ~/.ssh/oa_agent_ed25519.pem root@193.112.172.223
+ssh -i ~/.ssh/oa_agent_ed25519.pem root@203.0.113.10
 cd /opt/agent-os/app-src
 bash deploy/tls/gen_ca_and_cert.sh          # 缺什么补什么，然后把证书装到 /opt/agent-os/etc
 nginx -t && systemctl reload nginx
@@ -178,7 +178,7 @@ nginx -t && systemctl reload nginx
 ```
 == run A（应全部复用）==
 [tls] 根 CA 复用（剩余有效期 Oct 24 16:15:44 2036 GMT）
-[tls] 服务器证书复用：O=AgentOS, OU=Local PKI, CN=193.112.172.223（到期 Nov 28 16:31:53 2027 GMT）
+[tls] 服务器证书复用：O=AgentOS, OU=Local PKI, CN=203.0.113.10（到期 Nov 28 16:31:53 2027 GMT）
 [tls] fullchain.crt 已生成（2 级链）
 [tls] CRL 已刷新（已吊销 0 张，到期 Oct 27 16:31:53 2027 GMT）
 == 指纹对比 ==
@@ -220,7 +220,7 @@ bash deploy/tls/gen_ca_and_cert.sh --help
 --ca-days N        CA 天数（默认 3650）
 --crl-days N       CRL 天数（默认 365）
 --server-ips "..." --server-dns "..."   SAN 内容
---cdp URI          CRL 分发点（默认 https://193.112.172.223/agentos-ca.crl）
+--cdp URI          CRL 分发点（默认 https://203.0.113.10/agentos-ca.crl）
 --revoke           吊销当前叶证书 + 刷新 CRL
 --gen-crl          只刷新 CRL
 --print            只打印指纹/有效期
@@ -308,8 +308,8 @@ powershell -ExecutionPolicy Bypass -File scripts\install_ca_windows.ps1 -Server 
 
 ```
 == CA 证书信息（C:\oaagent-m0\deploy\tls\out\ca.crt） ==
-   Subject        : CN=AgentOS Local Root CA (193.112.172.223), OU=Local PKI, O=AgentOS
-   Issuer         : CN=AgentOS Local Root CA (193.112.172.223), OU=Local PKI, O=AgentOS
+   Subject        : CN=AgentOS Local Root CA (203.0.113.10), OU=Local PKI, O=AgentOS
+   Issuer         : CN=AgentOS Local Root CA (203.0.113.10), OU=Local PKI, O=AgentOS
    NotBefore      : 2026-10-27 16:15:44 UTC
    NotAfter       : 2036-10-24 16:15:44 UTC
    SHA256 指纹    : 30:C5:5E:71:3D:77:3C:6C:96:AC:71:FB:F6:02:77:90:A0:F1:8B:30:29:A3:DB:19:07:E0:E2:15:84:73:63:47
@@ -320,7 +320,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install_ca_windows.ps1 -Server 
    OK   已安装（指纹 30:C5:5E:71:...:63:47）
 
 == curl.exe 验证（不带 -k，走 Windows 证书存储） ==
-   https://193.112.172.223/v1/health -> HTTP 200
+   https://203.0.113.10/v1/health -> HTTP 200
    OK   校验通过：不再需要 --ignore-certificate-errors
 ```
 
@@ -330,13 +330,13 @@ powershell -ExecutionPolicy Bypass -File scripts\install_ca_windows.ps1 -Server 
 
 ```powershell
 # 1) 核心验收：不带 -k 必须是 200
-curl.exe -s -o NUL -w "%{http_code}`n" https://193.112.172.223/v1/health
+curl.exe -s -o NUL -w "%{http_code}`n" https://203.0.113.10/v1/health
 
 # 2) 看证书链和是否走了 Schannel 吊销检查
-curl.exe -sv --max-time 20 -o NUL https://193.112.172.223/v1/health 2>&1 | Select-String 'schannel|revocation|TLS'
+curl.exe -sv --max-time 20 -o NUL https://203.0.113.10/v1/health 2>&1 | Select-String 'schannel|revocation|TLS'
 
 # 3) WebView2/Edge 的实际效果（.NET 默认不查吊销，能过说明链本身没问题）
-(Invoke-WebRequest https://193.112.172.223/v1/health -UseBasicParsing).StatusCode
+(Invoke-WebRequest https://203.0.113.10/v1/health -UseBasicParsing).StatusCode
 ```
 
 实测：
@@ -345,7 +345,7 @@ curl.exe -sv --max-time 20 -o NUL https://193.112.172.223/v1/health 2>&1 | Selec
 #1  -> 200   exit=0
 #3  -> 200   body: {"ok":true,"service":"agent-os-v1",...,"subscribers":1}
 根存储里有：
-Subject    : CN=AgentOS Local Root CA (193.112.172.223), OU=Local PKI, O=AgentOS
+Subject    : CN=AgentOS Local Root CA (203.0.113.10), OU=Local PKI, O=AgentOS
 Thumbprint : D00DB5DC1861464159005B83CE78140F2C68AB76
 NotAfter   : 2036/10/25 0:15:44
 ```
@@ -358,7 +358,7 @@ NotAfter   : 2036/10/25 0:15:44
 ```powershell
 $edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 & $edge --headless=new --disable-gpu --virtual-time-budget=8000 --dump-dom `
-        https://193.112.172.223/v1/health
+        https://203.0.113.10/v1/health
 ```
 
 实测（2026-10-28 00:48）：
@@ -394,7 +394,7 @@ exit=60
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `curl` 退出码 **60**、HTTP `000` | CA 没装 / 装错用户（装进了管理员用户而不是运行程序的用户） | `scripts\install_ca_windows.ps1 -Verify`；确认 `Get-ChildItem Cert:\CurrentUser\Root` 里有 `AgentOS` |
-| `curl` 退出码 **35**、`schannel: ... CRYPT_E_NO_REVOCATION_CHECK` | 叶证书缺 CDP，或 CRL 取不到（例如把 CDP 写成 `http://`——服务器 80 入向被云安全组挡掉，取不到） | 服务器重跑 `gen_ca_and_cert.sh`；`curl.exe -s -o NUL -w "%{http_code}" https://193.112.172.223/agentos-ca.crl` 应返回 200 |
+| `curl` 退出码 **35**、`schannel: ... CRYPT_E_NO_REVOCATION_CHECK` | 叶证书缺 CDP，或 CRL 取不到（例如把 CDP 写成 `http://`——服务器 80 入向被云安全组挡掉，取不到） | 服务器重跑 `gen_ca_and_cert.sh`；`curl.exe -s -o NUL -w "%{http_code}" https://203.0.113.10/agentos-ca.crl` 应返回 200 |
 | `curl --ssl-no-revoke` 能过，不加就 35 | 就是吊销链问题，等价于上一条 | 同上（`--ssl-no-revoke` 只当临时定位手段，不要长期用） |
 | `certutil` 报「Access has been restricted by your Administrator by policy rule」 | 企业策略（AppLocker/WDAC）限制了 certutil 子命令 | 见 §9；`-addstore` 实测可用，`-URLcache` 会被拦 |
 | reload 后第一次请求失败、重试就成功 | nginx reload 期间旧 worker 还在用旧证书（旧证书没有 CDP） | 客户端脚本已内置「失败重试一次」；运维上把「重签证书」和「验证」隔几秒 |
@@ -451,21 +451,21 @@ exit=60
 ----------------------------------------------------------------------
 ### 0. 磁盘上的证书与 CA 指纹
 ----------------------------------------------------------------------
-  subject=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (193.112.172.223)
-  issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (193.112.172.223)
+  subject=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (203.0.113.10)
+  issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (203.0.113.10)
   notBefore=Oct 27 16:15:44 2026 GMT
   notAfter=Oct 24 16:15:44 2036 GMT
   sha256 Fingerprint=30:C5:5E:71:3D:77:3C:6C:96:AC:71:FB:F6:02:77:90:A0:F1:8B:30:29:A3:DB:19:07:E0:E2:15:84:73:63:47
 
-  subject=O=AgentOS, OU=Local PKI, CN=193.112.172.223
-  issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (193.112.172.223)
+  subject=O=AgentOS, OU=Local PKI, CN=203.0.113.10
+  issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (203.0.113.10)
   notBefore=Oct 27 16:31:53 2026 GMT
   notAfter=Nov 28 16:31:53 2027 GMT
   sha256 Fingerprint=55:A3:C0:AC:1F:B4:39:35:1C:F7:DB:F5:FC:E9:02:F5:72:C6:23:0E:A2:CD:FE:54:CA:37:C8:8C:0A:CA:48:31
 ----------------------------------------------------------------------
 ### 1. nginx 实际提供的证书（openssl s_client -showcerts）
 ----------------------------------------------------------------------
-  [PASS] s_client 连接成功：127.0.0.1:443（SNI=193.112.172.223）
+  [PASS] s_client 连接成功：127.0.0.1:443（SNI=203.0.113.10）
 --- 协议 / 套件 / verify ---
   New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
   Protocol: TLSv1.3
@@ -473,8 +473,8 @@ exit=60
   [PASS] verify return code = 0 (ok)
 --- 证书链（s_client 展示）---
   Certificate chain
-   0 s:O=AgentOS, OU=Local PKI, CN=193.112.172.223
-     i:O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (193.112.172.223)
+   0 s:O=AgentOS, OU=Local PKI, CN=203.0.113.10
+     i:O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (203.0.113.10)
      a:PKEY: RSA, 2048 (bit); sigalg: sha256WithRSAEncryption
      v:NotBefore: Oct 27 16:31:53 2026 GMT; NotAfter: Nov 28 16:31:53 2027 GMT
   实际下发的证书张数 = 2
@@ -483,14 +483,14 @@ exit=60
 ### 2. 逐张证书内容
 ----------------------------------------------------------------------
   --- 第 1 张 ---
-      subject=O=AgentOS, OU=Local PKI, CN=193.112.172.223
-      issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (193.112.172.223)
+      subject=O=AgentOS, OU=Local PKI, CN=203.0.113.10
+      issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (203.0.113.10)
       serial=1001
       notBefore=Oct 27 16:31:53 2026 GMT
       notAfter=Nov 28 16:31:53 2027 GMT
   --- 第 2 张 ---
-      subject=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (193.112.172.223)
-      issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (193.112.172.223)
+      subject=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (203.0.113.10)
+      issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (203.0.113.10)
       serial=6C2A652B40A94384765191458E1F61E1D7EDD206
       notBefore=Oct 27 16:15:44 2026 GMT
       notAfter=Oct 24 16:15:44 2036 GMT
@@ -502,8 +502,8 @@ exit=60
       X509v3 Extended Key Usage:
           TLS Web Server Authentication
       X509v3 Subject Alternative Name:
-          DNS:localhost, IP Address:193.112.172.223, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1
-  [PASS] SAN 含 IP:193.112.172.223
+          DNS:localhost, IP Address:203.0.113.10, IP Address:127.0.0.1, IP Address:0:0:0:0:0:0:0:1
+  [PASS] SAN 含 IP:203.0.113.10
   [PASS] SAN 含 DNS:localhost
   [PASS] SAN 含 127.0.0.1
   [PASS] openssl verify -CAfile ca.crt 通过
@@ -532,10 +532,10 @@ exit=60
 ----------------------------------------------------------------------
 ### 5. CRL 分发点（Windows/Schannel 吊销检查依赖）
 ----------------------------------------------------------------------
-  [PASS] 叶证书含 CDP: https://193.112.172.223/agentos-ca.crl
-  GET https://193.112.172.223/agentos-ca.crl -> HTTP 200  内容类型: application/pkix-crl  大小: 731 字节
+  [PASS] 叶证书含 CDP: https://203.0.113.10/agentos-ca.crl
+  GET https://203.0.113.10/agentos-ca.crl -> HTTP 200  内容类型: application/pkix-crl  大小: 731 字节
   [PASS] CRL 可访问
-    issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (193.112.172.223)
+    issuer=O=AgentOS, OU=Local PKI, CN=AgentOS Local Root CA (203.0.113.10)
     lastUpdate=Oct 27 16:38:25 2026 GMT
     nextUpdate=Oct 27 16:38:25 2027 GMT
   [PASS] CRL 为合法 DER
