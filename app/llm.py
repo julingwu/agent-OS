@@ -137,7 +137,8 @@ def _fix_assistant_reasoning_content(messages: list[dict]) -> list[dict]:
 
 def chat(messages: list[dict], *, tools: list[dict] | None = None,
          max_tokens: int = 4000, temperature: float = 0.3,
-         timeout: float = 180.0, model: str | None = None) -> dict | None:
+         timeout: float = 180.0, model: str | None = None,
+         reasoning_effort: str | None = None) -> dict | None:
     """带工具调用的单轮对话，返回 {'message': {...}, 'usage': {...}}。
 
     与 complete() 的区别：这个必须拿到 usage —— 真实 token 数要进 finance 账本和
@@ -152,6 +153,11 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
         raise RuntimeError(f"daily_token_limit_exceeded: used {used_today} of {limit}")
     body: dict = {"model": model or _model(), "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens}
+    if reasoning_effort and str(reasoning_effort).lower() not in ("none", "off", "0", ""):
+        body["reasoning_effort"] = str(reasoning_effort).lower()
+        model_name = (model or "").lower()
+        if any(k in model_name for k in ("o1", "o3", "reasoner")):
+            body.pop("temperature", None)
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
@@ -205,7 +211,8 @@ def chat(messages: list[dict], *, tools: list[dict] | None = None,
 
 def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
                 max_tokens: int = 4000, temperature: float = 0.3,
-                timeout: float = 300.0, model: str | None = None):
+                timeout: float = 300.0, model: str | None = None,
+                reasoning_effort: str | None = None):
     """流式单轮对话。逐块 yield ("delta", 文本)，最后 yield ("final", {message, usage})。
 
     为什么单独一个函数而不是给 chat() 加参数：
@@ -224,6 +231,11 @@ def chat_stream(messages: list[dict], *, tools: list[dict] | None = None,
     body: dict = {"model": model or _model(), "messages": list(messages),
                   "temperature": temperature, "max_tokens": max_tokens,
                   "stream": True, "stream_options": {"include_usage": True}}
+    if reasoning_effort and str(reasoning_effort).lower() not in ("none", "off", "0", ""):
+        body["reasoning_effort"] = str(reasoning_effort).lower()
+        model_name = (model or "").lower()
+        if any(k in model_name for k in ("o1", "o3", "reasoner")):
+            body.pop("temperature", None)
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"

@@ -1,0 +1,332 @@
+<#
+.SYNOPSIS
+    AgentOS Windows Native PowerShell Daemon (Zero-Binary Lightweight Agent)
+.DESCRIPTION
+    替代笨重的 exe 桌面客户端，纯 PowerShell 原生守护进程。
+    通过安全 WebSocket 连接 AgentOS 服务端（本地或 NAS 容器），
+    安全接收并执行本地审批通过的系统命令、文件读写、信息采集与原生截屏。
+#>
+
+param (
+    [string]$ServerUrl = "http://127.0.0.1:8077",
+    [string]$Token = "daemon_windows_local_token_sec99",
+    [switch]$VerboseLog
+)
+
+$ErrorActionPreference = "Continue"
+
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "     AgentOS Windows PowerShell Native Daemon v1.0        " -ForegroundColor Cyan
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "[*] Target Server: $ServerUrl" -ForegroundColor Yellow
+Write-Host "[*] Device Token : $($Token.Substring(0, [Math]::Min(12, $Token.Length)))..." -ForegroundColor Yellow
+Write-Host "[*] Platform     : Windows $([System.Environment]::OSVersion.Version)" -ForegroundColor Yellow
+Write-Host "==========================================================" -ForegroundColor Cyan
+
+function ConvertTo-WsUrl([string]$httpUrl, [string]$tokenValue) {
+    $clean = $httpUrl.TrimEnd('/')
+    if ($clean.StartsWith("https://")) {
+        $wsBase = "wss://" + $clean.Substring(8)
+    } elseif ($clean.StartsWith("http://")) {
+        $wsBase = "ws://" + $clean.Substring(7)
+    } else {
+        $wsBase = "ws://" + $clean
+    }
+    return "$wsBase/v1/device?token=$tokenValue"
+}
+
+function Get-SystemSnapshot() {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $proc = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+
+    return @{
+        hostname = [System.Environment]::MachineName
+        username = [System.Environment]::UserName
+        platform = "Windows"
+        os_name = if ($os) { $os.Caption } else { "Microsoft Windows" }
+        os_version = [System.Environment]::OSVersion.VersionString
+        arch = [System.Environment]::GetEnvironmentVariable("PROCESSOR_ARCHITECTURE")
+        cpu = if ($proc) { $proc.Name.Trim() } else { "Unknown CPU" }
+        cores = [System.Environment]::ProcessorCount
+        total_memory_mb = if ($os) { [Math]::Round($os.TotalVisibleMemorySize / 1024) } else { 0 }
+        free_memory_mb = if ($os) { [Math]::Round($os.FreePhysicalMemory / 1024) } else { 0 }
+        cwd = (Get-Location).Path
+    }
+}
+
+function Capture-ScreenBase64() {
+    try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+
+        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bmp = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+        $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+
+        $ms = New-Object System.IO.MemoryStream
+        $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+        $bytes = $ms.ToArray()
+        $b64 = [System.Convert]::ToBase64String($bytes)
+
+        $graphics.Dispose()
+        $bmp.Dispose()
+        $ms.Dispose()
+
+        return @{
+            ok = $true
+            bytes = $bytes.Length
+            data_b64 = $b64
+            w = $bounds.Width
+            h = $bounds.Height
+        }
+    } catch {
+        return @{
+            ok = $false
+            error = "Screenshot capture failed: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Execute-LocalTool([string]$tool, $args) {
+    switch ($tool) {
+        "local_info" {
+            return @{ ok = $true; result = Get-SystemSnapshot }
+        }
+        "local_exec" {
+            $cmd = [string]$args.cmd
+            $cwd = [string]$args.cwd
+            $timeout = if ($args.timeout_s) { [int]$args.timeout_s } else { 60 }
+
+            if ([string]::IsNullOrWhiteSpace($cmd)) {
+                return @{ ok = $false; error = "cmd parameter is required" }
+            }
+
+            Write-Host "[EXEC] > $cmd" -ForegroundColor Green
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+            $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+            $pinfo.FileName = "powershell.exe"
+            $pinfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"$cmd`""
+            $pinfo.RedirectStandardOutput = $true
+            $pinfo.RedirectStandardError = $true
+            $pinfo.UseShellExecute = $false
+            $pinfo.CreateNoWindow = $true
+            if (-not [string]::IsNullOrWhiteSpace($cwd) -and (Test-Path $cwd)) {
+                $pinfo.WorkingDirectory = $cwd
+            }
+
+            $p = New-Object System.Diagnostics.Process
+            $p.StartInfo = $pinfo
+            [void]$p.Start()
+
+            $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+            $stderrTask = $p.StandardError.ReadToEndAsync()
+
+            if (-not $p.WaitForExit($timeout * 1000)) {
+                try { $p.Kill() } catch {  }
+                return @{ ok = $false; error = "Command timed out after $timeout seconds" }
+            }
+
+            [System.Threading.Tasks.Task]::WaitAll($stdoutTask, $stderrTask)
+            $stdout = $stdoutTask.Result
+            $stderr = $stderrTask.Result
+            $sw.Stop()
+
+            return @{
+                ok = ($p.ExitCode -eq 0)
+                result = @{
+                    stdout = $stdout
+                    stderr = $stderr
+                    exit_code = $p.ExitCode
+                    duration_ms = $sw.ElapsedMilliseconds
+                }
+            }
+        }
+        "local_list" {
+            $path = if ($args.path) { [string]$args.path } else { "." }
+            if (-not (Test-Path $path)) {
+                return @{ ok = $false; error = "Path not found: $path" }
+            }
+            $items = Get-ChildItem -LiteralPath $path -ErrorAction SilentlyContinue | Select-Object -First 200 | ForEach-Object {
+                @{
+                    name = $_.Name
+                    type = if ($_.PSIsContainer) { "dir" } else { "file" }
+                    bytes = if ($_.PSIsContainer) { 0 } else { $_.Length }
+                    modified = $_.LastWriteTime.ToString("o")
+                }
+            }
+            return @{ ok = $true; result = @{ items = @($items) } }
+        }
+        "local_read" {
+            $path = [string]$args.path
+            $maxBytes = if ($args.max_bytes) { [int]$args.max_bytes } else { 200000 }
+            if (-not (Test-Path $path)) {
+                return @{ ok = $false; error = "File not found: $path" }
+            }
+            $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $path).Path)
+            if ($bytes.Length -gt $maxBytes) {
+                $bytes = $bytes[0..($maxBytes - 1)]
+            }
+            $content = [System.Text.Encoding]::UTF8.GetString($bytes)
+            return @{ ok = $true; result = @{ path = $path; content = $content; bytes = $bytes.Length } }
+        }
+        "local_write" {
+            $path = [string]$args.path
+            $content = [string]$args.content
+            if ([string]::IsNullOrWhiteSpace($path)) {
+                return @{ ok = $false; error = "path parameter is required" }
+            }
+            $dir = Split-Path $path -Parent
+            if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path $dir)) {
+                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            }
+            [System.IO.File]::WriteAllText($path, $content, [System.Text.Encoding]::UTF8)
+            return @{ ok = $true; result = @{ path = $path; bytes = [System.Text.Encoding]::UTF8.GetByteCount($content) } }
+        }
+        "local_screenshot" {
+            $shot = Capture-ScreenBase64
+            if (-not $shot.ok) {
+                return @{ ok = $false; error = $shot.error }
+            }
+            return @{
+                ok = $true
+                is_artifact = $true
+                artifact = @{
+                    name = "screen-$([DateTime]::Now.ToString('yyyyMMdd-HHmmss')).jpg"
+                    kind = "image/jpeg"
+                    bytes = $shot.bytes
+                    data_b64 = $shot.data_b64
+                }
+                result = @{
+                    ok = $true
+                    w = $shot.w
+                    h = $shot.h
+                    bytes = $shot.bytes
+                }
+            }
+        }
+        default {
+            return @{ ok = $false; error = "Unknown tool: $tool" }
+        }
+    }
+}
+
+# 主守护循环
+while ($true) {
+    try {
+        $wsUrl = ConvertTo-WsUrl $ServerUrl $Token
+        Write-Host "[*] Connecting to WebSocket: $wsUrl ..." -ForegroundColor Yellow
+
+        $ws = New-Object System.Net.WebSockets.ClientWebSocket
+        $cts = New-Object System.Threading.CancellationTokenSource
+
+        $connectTask = $ws.ConnectAsync((New-Object System.Uri $wsUrl), $cts.Token)
+        $connectTask.Wait(8000)
+
+        if ($ws.State -ne [System.Net.WebSockets.WebSocketState]::Open) {
+            throw "WebSocket connection failed (State: $($ws.State))"
+        }
+
+        Write-Host "[OK] Connected to AgentOS Server successfully!" -ForegroundColor Green
+
+        # 1. 发送 Hello 问候与能力声明
+        $helloPayload = @{
+            t = "hello"
+            platform = "Windows"
+            caps = @("exec", "fs", "info", "screenshot", "clipboard")
+            version = "1.0.0-ps"
+        } | ConvertTo-Json -Compress
+
+        $helloBytes = [System.Text.Encoding]::UTF8.GetBytes($helloPayload)
+        $sendSegment = New-Object System.ArraySegment[byte] @(,$helloBytes), 0, $helloBytes.Length
+        [void]$ws.SendAsync($sendSegment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).Wait(4000)
+        Write-Host "[OK] Registered capability: exec, fs, info, screenshot" -ForegroundColor Green
+
+        # 2. 接收与消息分发循环
+        $buffer = New-Object byte[] 65536
+        $segment = New-Object System.ArraySegment[byte] @(,$buffer)
+        $lastPing = [System.DateTime]::Now
+
+        while ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+            # 发送心跳 Ping
+            if (([System.DateTime]::Now - $lastPing).TotalSeconds -ge 25) {
+                $pingBytes = [System.Text.Encoding]::UTF8.GetBytes('{"t":"ping"}')
+                $pingSegment = New-Object System.ArraySegment[byte] @(,$pingBytes), 0, $pingBytes.Length
+                [void]$ws.SendAsync($pingSegment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token)
+                $lastPing = [System.DateTime]::Now
+            }
+
+            $receiveTask = $ws.ReceiveAsync($segment, $cts.Token)
+            if (-not $receiveTask.Wait(1000)) {
+                continue
+            }
+
+            $result = $receiveTask.Result
+            if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                Write-Host "[!] Server sent close message. Disconnecting." -ForegroundColor Yellow
+                break
+            }
+
+            $msgText = [System.Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+            if ($VerboseLog) { Write-Host "[RECV] $msgText" -ForegroundColor DarkGray }
+
+            $msg = $null
+            try { $msg = $msgText | ConvertFrom-Json } catch {  }
+            if (-not $msg) { continue }
+
+            if ($msg.t -eq "pong" -or $msg.t -eq "hello_ack") {
+                continue
+            }
+
+            if ($msg.t -eq "tool_call") {
+                $callId = [string]$msg.call_id
+                $tool = [string]$msg.tool
+                $args = $msg.args
+
+                Write-Host "[TASK] Dispatched call: $tool (id: $callId)" -ForegroundColor Magenta
+                $execRes = Execute-LocalTool $tool $args
+
+                # 如果有产物附件（如截屏），先推 artifact 消息
+                if ($execRes.is_artifact -and $execRes.artifact) {
+                    $artMsg = @{
+                        t = "artifact"
+                        call_id = $callId
+                        name = $execRes.artifact.name
+                        kind = $execRes.artifact.kind
+                        bytes = $execRes.artifact.bytes
+                        data_b64 = $execRes.artifact.data_b64
+                    } | ConvertTo-Json -Compress
+
+                    $artBytes = [System.Text.Encoding]::UTF8.GetBytes($artMsg)
+                    $artSeg = New-Object System.ArraySegment[byte] @(,$artBytes), 0, $artBytes.Length
+                    [void]$ws.SendAsync($artSeg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).Wait(8000)
+                }
+
+                # 返回执行结果 tool_result
+                $resMsg = @{
+                    t = "tool_result"
+                    call_id = $callId
+                    ok = [bool]$execRes.ok
+                    result = $execRes.result
+                    error = $execRes.error
+                } | ConvertTo-Json -Compress -Depth 10
+
+                $resBytes = [System.Text.Encoding]::UTF8.GetBytes($resMsg)
+                $resSeg = New-Object System.ArraySegment[byte] @(,$resBytes), 0, $resBytes.Length
+                [void]$ws.SendAsync($resSeg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).Wait(8000)
+                Write-Host "[DONE] Completed call: $tool (ok: $($execRes.ok))" -ForegroundColor Cyan
+            }
+        }
+    } catch {
+        Write-Host "[WARN] Daemon loop error: $($_.Exception.Message)" -ForegroundColor Yellow
+    } finally {
+        if ($ws) {
+            try { $ws.Dispose() } catch {  }
+        }
+    }
+
+    Write-Host "[*] Reconnecting in 5 seconds..." -ForegroundColor DarkYellow
+    Start-Sleep -Seconds 5
+}

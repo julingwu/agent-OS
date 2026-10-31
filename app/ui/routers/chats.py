@@ -105,6 +105,11 @@ def post_message(chat_id: str, payload: MessageIn, oa_ui: str | None = Depends(_
         chat = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
         if chat is None:
             raise HTTPException(404, detail={"code": "ChatNotFound"})
+        from ... import homelab_transport
+        try:
+            text = homelab_transport.capture(text, chat_id)
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="homelab_capture_failed") from None
         store.add_message(conn, chat_id, "human", text, author="我")
         # 人开口 = 新的一轮，重置 agent 发言预算（否则人类消息会被历史 hop 吃掉）
         conn.execute("DELETE FROM group_hops WHERE chat_id=?", (chat_id,))

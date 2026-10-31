@@ -3,12 +3,23 @@
 
 const LS_KEY = "agentos.conn";
 
+function getDefaultBaseUrl() {
+  if (typeof window !== "undefined" && window.location?.origin && !window.location.origin.startsWith("file:")) {
+    return window.location.origin;
+  }
+  return "http://127.0.0.1:8077";
+}
+
 export function getConn() {
   try {
-    return JSON.parse(localStorage.getItem(LS_KEY) || "null");
+    const saved = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+    if (saved && saved.baseUrl) {
+      return { baseUrl: saved.baseUrl, token: saved.token || "local" };
+    }
   } catch {
-    return null;
+    /* ignore */
   }
+  return { baseUrl: getDefaultBaseUrl(), token: "local" };
 }
 
 export function setConn(conn) {
@@ -20,11 +31,11 @@ export function clearConn() {
 }
 
 export function baseUrl() {
-  return (getConn()?.baseUrl || "https://193.112.172.223").replace(/\/$/, "");
+  return (getConn()?.baseUrl || getDefaultBaseUrl()).replace(/\/$/, "");
 }
 
 export function token() {
-  return getConn()?.token || "";
+  return getConn()?.token || "local";
 }
 
 export async function api(path, { method = "GET", body } = {}) {

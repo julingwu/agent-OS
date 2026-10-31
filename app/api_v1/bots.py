@@ -64,6 +64,7 @@ class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=20000)
     client_msg_id: str | None = Field(default=None, max_length=64)
     reply_to: int | None = None
+    reasoning_effort: str | None = None
 
 
 # ---------------------------------------------------------------- Bot
@@ -336,12 +337,21 @@ def post_message(session_id: str, body: MessageIn,
         ).fetchone()
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
+        from .. import homelab_transport
+        try:
+            body.text = homelab_transport.capture(body.text, session_id)
+        except RuntimeError:
+            raise HTTPException(status_code=503, detail="homelab_capture_failed") from None
         bot_id = session["admin_bot_id"] or "bot_chief"
         event = ev.emit(
             conn, bot_id=bot_id, session_id=session_id,
             kind="message.user", origin="user",
             actor={"type": "user", "id": device["id"]},
-            payload={"text": body.text, "device_id": device["id"]},
+            payload={
+                "text": body.text,
+                "device_id": device["id"],
+                "reasoning_effort": body.reasoning_effort,
+            },
             client_msg_id=body.client_msg_id,
             refs={"reply_to": body.reply_to} if body.reply_to else None,
         )
@@ -356,6 +366,19 @@ def post_message(session_id: str, body: MessageIn,
 
     return {"event_id": event.id, "cursor": cursor, "reply_scheduled": scheduled,
             "targets": targets}
+
+
+@router.post("/sessions/{session_id}/abort")
+def abort_session(session_id: str, device: dict = Depends(require_device)) -> dict:
+    from ..agent import loop as agent_loop
+    agent_loop.request_abort(session_id)
+    with db.get_conn() as conn:
+        session = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if session:
+            bot_id = session["admin_bot_id"] or "bot_chief"
+            ev.emit(conn, bot_id=bot_id, session_id=session_id, kind="turn.ended",
+                    payload={"status": "aborted", "manual": True})
+    return {"ok": True, "session_id": session_id, "message": "已成功中止当前任务"}
 
 
 def _route_targets(conn, session, text: str) -> list[str]:

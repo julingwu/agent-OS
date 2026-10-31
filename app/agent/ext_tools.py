@@ -480,6 +480,12 @@ def computer_action(action: str, params: dict[str, Any] | None = None) -> dict[s
 # ---------------------------------------------------------------- MCP 协议集成
 def mcp_list_tools(server_url: str | None = None) -> dict[str, Any]:
     """列出远程 MCP 服务器或已配置 MCP 服务的工具列表。"""
+    if server_url == "stdio://homelab-unified":
+        from .. import homelab_transport
+        response = homelab_transport.rpc("tools/list")
+        if not response.get("ok"):
+            return response
+        return {"ok": True, "server_url": server_url, "tools": response["result"].get("tools", [])}
     if server_url:
         try:
             req = {"jsonrpc": "2.0", "id": "tools-1", "method": "tools/list", "params": {}}
@@ -532,6 +538,10 @@ def mcp_call(tool_name: str, arguments: dict[str, Any], server_url: str | None =
 
     if not target_url:
         return {"ok": False, "error": "未指定 server_url 且在已配置 MCP 服务中未找到对应工具"}
+
+    if target_url == "stdio://homelab-unified":
+        from .. import homelab_transport
+        return homelab_transport.rpc("tools/call", {"name": tool_name, "arguments": arguments})
 
     req_body = {
         "jsonrpc": "2.0",

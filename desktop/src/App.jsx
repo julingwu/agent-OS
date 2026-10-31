@@ -1,35 +1,41 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, clearConn, getConn, setConn, wsUrl } from "./api.js";
+import { useTheme } from "./theme.js";
 
 const TABS = [
   { id: "computer", label: "电脑" },
+  { id: "run", label: "运行" },
   { id: "details", label: "详情" },
   { id: "library", label: "资料库" },
 ];
 
+const REASONING_LEVEL_LABELS = {
+  none: "🚀 关闭思考 (None · 极速直出)",
+  low: "⚡ 低强度 (Low · 轻量推理)",
+  medium: "⚖️ 中等 (Medium · 平衡推荐)",
+  high: "🧠 高强度 (High · 深度思考)",
+  xhigh: "🔥 超高强度 (X-High · 极度深入)",
+  max: "💥 极限算力 (Max · 顶格算力)",
+  ultra: "🌌 终极推理 (Ultra · 满血旗舰)",
+};
+
 export default function App() {
   const [conn, setConnState] = useState(getConn());
-  const [phase, setPhase] = useState(() => (getConn() ? "checking" : "login"));
+  const [phase, setPhase] = useState("app");
   const [bootError, setBootError] = useState("");
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    if (!conn) {
-      setPhase("login");
-      return;
-    }
     let cancelled = false;
     (async () => {
       try {
         await api("/v1/bots");
         if (!cancelled) {
           setBootError("");
-          setPhase("app");
         }
       } catch (e) {
         if (!cancelled) {
-          setBootError(String(e.message || e));
-          setPhase("login");
+          console.warn("api /v1/bots notice:", e);
         }
       }
     })();
@@ -38,10 +44,10 @@ export default function App() {
     };
   }, [conn, tick]);
 
-  if (phase === "app" && conn) {
+  if (phase === "app") {
     return (
       <MainApp
-        key={conn.baseUrl + conn.token}
+        key={(conn?.baseUrl || "") + (conn?.token || "")}
         onLogout={() => {
           clearConn();
           setConnState(null);
@@ -418,13 +424,167 @@ function uiaIncludesIOS(ua) {
 }
 
 /* ============================== 主界面 ============================== */
+
+function DualTrackPill({ notify }) {
+  const [status, setStatus] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/v1/supervisor/status");
+      if (res.ok) {
+        const data = await res.json();
+        setStatus(data);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStatus();
+    const timer = setInterval(fetchStatus, 4000);
+    return () => clearInterval(timer);
+  }, [fetchStatus]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onOutside = (e) => {
+      if (!e.target.closest(".track-pill-wrap")) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onOutside);
+    return () => window.removeEventListener("pointerdown", onOutside);
+  }, [open]);
+
+  const doSwitch = async () => {
+    if (switching) return;
+    setSwitching(true);
+    try {
+      const res = await fetch("/v1/supervisor/switch", { method: "POST" });
+      const data = await res.json();
+      if (data.ok) {
+        notify && notify(`⚡ ${data.message}`);
+        await fetchStatus();
+      }
+    } catch (e) {
+      notify && notify(`切换失败: ${e.message}`);
+    } finally {
+      setSwitching(false);
+      setOpen(false);
+    }
+  };
+
+  const doRestartStandby = async () => {
+    try {
+      notify && notify("正在热重载备用进程并执行自检…");
+      const res = await fetch("/v1/supervisor/restart_standby", { method: "POST" });
+      const data = await res.json();
+      notify && notify(data.message);
+      await fetchStatus();
+    } catch (e) {
+      notify && notify(`重启失败: ${e.message}`);
+    }
+  };
+
+  if (!status) return null;
+
+  const isGreen = status.active === "green";
+  const activeColor = isGreen ? "#35e08a" : "#ff5d73";
+  const activeName = isGreen ? "🟢 绿进程" : "🔴 红进程";
+  const standbyName = isGreen ? "红进程 (备用)" : "绿进程 (备用)";
+
+  return (
+    <div className="track-pill-wrap">
+      <div
+        className={`track-pill ${isGreen ? "green" : "red"}`}
+        onClick={() => setOpen((v) => !v)}
+        title="点击查看双轨运行状态与热切换"
+      >
+        <span className="track-glow-dot" style={{ backgroundColor: activeColor }} />
+        <span className="track-pill-label">{activeName} · 主控</span>
+        <span className="track-pill-arrow">{open ? "▲" : "▼"}</span>
+      </div>
+
+      {open && (
+        <div className="track-popover" onClick={(e) => e.stopPropagation()}>
+          <div className="track-popover-head">
+            <span className="track-popover-title">双轨热切换引擎 (Dual-Track)</span>
+            <span className="track-popover-close" onClick={() => setOpen(false)}>✕</span>
+          </div>
+
+          <div className="track-cards-row">
+            <div className={`track-card ${isGreen ? "active" : ""}`}>
+              <div className="track-card-head">
+                <span className="track-card-indicator" style={{ background: "#35e08a" }} />
+                <span className="track-card-name">绿进程 (Green)</span>
+                {isGreen && <span className="track-card-badge primary">当前主控</span>}
+              </div>
+              <div className="track-card-info">
+                <span>端口：127.0.0.1:{status.green?.port}</span>
+                <span>状态：{status.green?.alive ? "正常运行" : "未启动"}</span>
+              </div>
+            </div>
+
+            <div className={`track-card ${!isGreen ? "active" : ""}`}>
+              <div className="track-card-head">
+                <span className="track-card-indicator" style={{ background: "#ff5d73" }} />
+                <span className="track-card-name">红进程 (Red)</span>
+                {!isGreen && <span className="track-card-badge primary">当前主控</span>}
+              </div>
+              <div className="track-card-info">
+                <span>端口：127.0.0.1:{status.red?.port}</span>
+                <span>状态：{status.red?.alive ? "正常运行" : "未启动"}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="track-popover-actions">
+            <button
+              type="button"
+              className="track-btn-switch"
+              disabled={switching}
+              onClick={doSwitch}
+            >
+              {switching ? "切换中…" : `⚡ 一键切换为主进程（${standbyName}）`}
+            </button>
+            <button
+              type="button"
+              className="track-btn-restart"
+              onClick={doRestartStandby}
+              title="代码修改后，让备用进程立即加载新代码并自检"
+            >
+              🔄 热重载备用进程 (Staging Reload)
+            </button>
+          </div>
+
+          <p className="track-popover-hint">
+            * 共享 SQLite WAL 状态库，切换后会话与记忆无感延续，不中断当前工作。
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MainApp({ onLogout }) {
+  const { themePreference, effectiveTheme, changeTheme } = useTheme();
+  const [toast, setToast] = useState("");
+  const showToast = useCallback((msg, ms = 2500) => {
+    setToast(msg);
+    if (window.__toastTimer) clearTimeout(window.__toastTimer);
+    window.__toastTimer = setTimeout(() => setToast(""), ms);
+  }, []);
+  const notify = showToast;
+
   const [bots, setBots] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [trackSwitchBanner, setTrackSwitchBanner] = useState(null);
   const [activity, setActivity] = useState([]);
-  // 流式中的半截回复：{ turnId, text }。message.bot 到了就清掉（以持久化为准）
   const [streamText, setStreamText] = useState(null);
   const [status, setStatus] = useState("idle");
   const [usage, setUsage] = useState(0);
@@ -435,14 +595,87 @@ function MainApp({ onLogout }) {
   const [preview, setPreview] = useState(null);
   const [frame, setFrame] = useState(null);
   const [screenMeta, setScreenMeta] = useState(null);
+  const [screenError, setScreenError] = useState("");
   const [computerState, setComputerState] = useState("unknown");
   const [error, setError] = useState("");
   const [draft, setDraft] = useState("");
   const [connected, setConnected] = useState(false);
-  // 截图放大查看：{url, name}，点缩略图时设置，Esc/点遮罩关闭
   const [lightbox, setLightbox] = useState(null);
-
   const [showMenu, setShowMenu] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [reasoningEffort, setReasoningEffort] = useState(() => {
+    try { return localStorage.getItem("agentos.reasoning_effort") || "medium"; }
+    catch { return "medium"; }
+  });
+
+  // 探测器自动跟随：停在底部时自动滚到最新；用户向上翻看时不打断
+  const probeRef = useRef(null);
+  const probeStickRef = useRef(true);
+  // 探测器可视窗口：只展示最近 N 步，超出后改为内部滚动，不再向下继续展开
+  const PROBE_VISIBLE_STEPS = 5;
+  const [probeClampH, setProbeClampH] = useState(null);
+
+  const handleTrackSwitched = useCallback((info) => {
+    setTrackSwitchBanner(info);
+    const noticeMsg = {
+      id: "sys_track_" + Date.now(),
+      bot_id: "system",
+      origin: "system",
+      kind: "message.bot",
+      text: `🚀 **系统双轨热切换已成功完成**\n\n- 当前活动轨道已平滑迁移至：**${info.activeName}** (Port ${info.port})\n- 新进程已启动承接服务，所有改动与修复均已生效。\n- 建议按 **F5** 或点击上方提示条刷新页面以体验最新功能。`,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, noticeMsg]);
+  }, []);
+
+  useEffect(() => {
+    const el = probeRef.current;
+    if (!el) return;
+    const raf = requestAnimationFrame(() => {
+      const box = probeRef.current;
+      if (!box) return;
+      const items = box.querySelectorAll(".probe-item");
+      if (items.length > PROBE_VISIBLE_STEPS) {
+        const cs = getComputedStyle(box);
+        const stream = box.querySelector(".live-probe-stream");
+        const gap = stream ? (parseFloat(getComputedStyle(stream).rowGap) || parseFloat(getComputedStyle(stream).gap) || 0) : 0;
+        const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+        const bord = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+        const vis = Array.prototype.slice.call(items, items.length - PROBE_VISIBLE_STEPS);
+        let h = pad + bord;
+        vis.forEach((n, i) => { h += n.getBoundingClientRect().height + (i ? gap : 0); });
+        const ind = box.querySelector(".probe-running-indicator");
+        if (ind) h += ind.getBoundingClientRect().height + gap;
+        // 兜底：任何情况下不超过视口 62%，确保一定出现滚动而不是无限拉长
+        h = Math.min(Math.ceil(h) + 2, Math.round(window.innerHeight * 0.62));
+        setProbeClampH(h);
+      } else {
+        setProbeClampH(null);
+      }
+      if (box && probeStickRef.current) box.scrollTop = box.scrollHeight;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [activity, status]);
+
+  useEffect(() => {
+    if (status !== "thinking") {
+      setElapsedSeconds(0);
+      return;
+    }
+    const timer = setInterval(() => setElapsedSeconds((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, [status]);
+
+  const stopRun = async () => {
+    if (!activeId) return;
+    try {
+      await api(`/v1/sessions/${activeId}/abort`, { method: "POST" });
+      notify("已发送停止信号");
+    } catch (e) {
+      console.warn("abort failed:", e);
+    }
+    setStatus("idle");
+  };
   const [modal, setModal] = useState(null);           // search | newbot | group | apps | settings
   const [settingsTab, setSettingsTab] = useState("general");
   const [showMobileSidebar, setShowMobileSidebar] = useState(false);
@@ -504,15 +737,13 @@ function MainApp({ onLogout }) {
   const [workbenchSrc, setWorkbenchSrc] = useState("");
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [ctx, setCtx] = useState(null);
-  const [toast, setToast] = useState("");
   const [pairCode, setPairCode] = useState(null);
 
   const streamRef = useRef(null);
   const fileInputRef = useRef(null);
   const [uploadingFile, setUploadingFile] = useState(false);
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
+  const uploadFile = async (file) => {
     if (!file) return;
     setUploadingFile(true);
     try {
@@ -523,14 +754,14 @@ function MainApp({ onLogout }) {
           const res = await api("/v1/workspace/upload", {
             method: "POST",
             body: {
-              filename: file.name,
+              filename: file.name || `paste_${Date.now()}.png`,
               data_b64: b64,
               session_id: activeId,
               bot_id: activeBot?.id,
             },
           });
           if (res.ok) {
-            setToast(`已上传：${res.filename}`);
+            showToast(`已上传：${res.filename}`);
             setDraft((prev) => (prev ? `${prev} [已上传文件: ${res.path}]` : `已上传文件: ${res.path}，请查阅并处理。`));
           } else {
             setError(res.error || "上传失败");
@@ -546,6 +777,39 @@ function MainApp({ onLogout }) {
     } catch (err) {
       setError(err.message || "文件读取失败");
       setUploadingFile(false);
+    }
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (file) uploadFile(file);
+  };
+
+  const handlePaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          const now = new Date();
+          const pad = (n) => String(n).padStart(2, "0");
+          const timeStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+          const renamed = new File([file], `paste_${timeStr}.png`, { type: file.type || "image/png" });
+          uploadFile(renamed);
+          return;
+        }
+      }
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      uploadFile(files[0]);
     }
   };
 
@@ -739,7 +1003,10 @@ function MainApp({ onLogout }) {
       case "turn.started":
         if (e.__replay) break;
         setStatus("thinking");
-        setActivity([]);        // 新一轮从空白开始，别把上轮的过程堆在这轮
+        // 不清空：保留历史过程，仅插入一条分隔标记，可一直往上回看
+        setActivity((prev) => (prev.length
+          ? [...prev, { id: "turn-sep-" + (e.id || Date.now()), kind: "separator", label: "新一轮开始" }]
+          : prev));
         break;
       case "turn.ended":
         if (e.__replay) break;
@@ -819,9 +1086,11 @@ function MainApp({ onLogout }) {
       ws.onopen = () => ws.send(JSON.stringify({ t: "subscribe", fps, quality: 6, max_w: 1280 }));
       ws.onmessage = (ev) => {
         if (typeof ev.data === "string") {
-          const m = JSON.parse(ev.data);
-          if (m.t === "meta") setScreenMeta(m);
-          if (m.t === "capture_error") setError(m.error);
+          try {
+            const m = JSON.parse(ev.data);
+            if (m.t === "meta") { setScreenMeta(m); setScreenError(""); }
+            if (m.t === "capture_error") { setScreenError(m.error || "无法获取画面"); }
+          } catch (_) {}
           return;
         }
         const buf = new Uint8Array(ev.data);
@@ -829,6 +1098,7 @@ function MainApp({ onLogout }) {
         if (lastFrame) URL.revokeObjectURL(lastFrame);
         lastFrame = url;
         setFrame(url);
+        setScreenError("");
       };
     } catch (e) {
       setError(String(e.message || e));
@@ -888,13 +1158,19 @@ function MainApp({ onLogout }) {
     const text = draft.trim();
     if (!text || !activeId) return;
     setDraft("");
+    setStatus("thinking");
     scrollToBottom(false);
     try {
       await api(`/v1/sessions/${activeId}/messages`, {
         method: "POST",
-        body: { text, client_msg_id: crypto.randomUUID() },
+        body: {
+          text,
+          client_msg_id: crypto.randomUUID(),
+          reasoning_effort: reasoningEffort,
+        },
       });
     } catch (e) {
+      setStatus("idle");
       setError(String(e.message || e));
     }
   };
@@ -1060,11 +1336,16 @@ function MainApp({ onLogout }) {
     const content = memInput.trim();
     if (!content || !activeBot?.id) return;
     try {
-      await api("/v1/memories", {
+      const res = await api("/v1/memories", {
         method: "POST",
         body: { bot_id: activeBot.id, content, kind: "fact", importance: 2 },
       });
       setMemInput("");
+      if (res && res.duplicate) {
+        showToast(res.message || "该记忆已存在或同主题已更新");
+      } else {
+        showToast("已记住新信息");
+      }
       reloadMemories();
     } catch (e) {
       setError(String(e.message || e));
@@ -1193,11 +1474,6 @@ function MainApp({ onLogout }) {
     return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   };
 
-  const notify = (msg) => {
-    setToast(msg);
-    setTimeout(() => setToast(""), 2200);
-  };
-
   const deleteSession = async (id) => {
     if (!window.confirm("删除这个会话？聊天记录会保留在审计日志里，但列表不再显示。")) return;
     try {
@@ -1261,6 +1537,36 @@ function MainApp({ onLogout }) {
         (activeSession?.members && activeSession.members.includes(b.id))
     ) || bots[0];
   const activeBotId = activeBot?.id;
+
+  // 当前激活模型与网关原生推理档位自适应
+  const currentModelId = activeBot?.model || models.default || models.items[0]?.id || "";
+  const currentModelMeta = (models.items || []).find((m) => m.id === currentModelId);
+
+  const availableReasoningLevels = useMemo(() => {
+    if (currentModelMeta?.reasoning_levels?.length) {
+      return currentModelMeta.reasoning_levels;
+    }
+    const mid = currentModelId.toLowerCase();
+    if (mid.includes("deepseek")) {
+      return ["none", "low", "high", "max"];
+    }
+    if (mid.includes("codex") || mid.includes("gpt")) {
+      return ["low", "medium", "high", "xhigh", "max", "ultra"];
+    }
+    return ["none", "low", "medium", "high"];
+  }, [currentModelId, currentModelMeta]);
+
+  useEffect(() => {
+    if (availableReasoningLevels.length && !availableReasoningLevels.includes(reasoningEffort)) {
+      let fallback = "medium";
+      if (availableReasoningLevels.includes("medium")) fallback = "medium";
+      else if (availableReasoningLevels.includes("high")) fallback = "high";
+      else if (availableReasoningLevels.includes("low")) fallback = "low";
+      else fallback = availableReasoningLevels[0] || "none";
+      setReasoningEffort(fallback);
+      try { localStorage.setItem("agentos.reasoning_effort", fallback); } catch {}
+    }
+  }, [availableReasoningLevels, reasoningEffort]);
 
   // 详情与资料库：切换当前 Bot 或 Tab 时，加载对应当前 Bot 的数据
   useEffect(() => {
@@ -1420,6 +1726,12 @@ function MainApp({ onLogout }) {
                 <span className="account-server-dot" />
                 <span className="account-server-text">{getConn()?.baseUrl || "未连接"}</span>
               </div>
+              <div className="account-line" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>主题外观</span>
+                <span style={{ color: "var(--cyan)", fontWeight: 500, fontSize: "11px" }}>
+                  {themePreference === "system" ? `💻 跟随系统 (${effectiveTheme === "dark" ? "深色" : "浅色"})` : themePreference === "dark" ? "🌙 深色" : "☀️ 浅色"}
+                </span>
+              </div>
               <button onClick={() => { setShowMenu(false); setSettingsTab("general"); setModal("settings"); }}>
                 <span className="menu-icon">⚙</span>
                 <span>设置</span>
@@ -1454,6 +1766,24 @@ function MainApp({ onLogout }) {
       </aside>
 
       <main className="chat">
+        {trackSwitchBanner && (
+          <div className="track-switched-banner">
+            <span className="banner-icon">🚀</span>
+            <div className="banner-content">
+              <strong>双轨热备进程已切换！</strong>
+              <span>服务已从 {trackSwitchBanner.fromName} 平滑迁移至 <b>{trackSwitchBanner.activeName} (端口 {trackSwitchBanner.port})</b>，后台代码已热生效。</span>
+            </div>
+            <button
+              className="banner-refresh-btn"
+              onClick={() => {
+                window.location.href = window.location.origin + "/ui/?_t=" + Date.now();
+              }}
+            >
+              立即刷新页面 (F5)
+            </button>
+            <button className="banner-close-btn" onClick={() => setTrackSwitchBanner(null)}>✕</button>
+          </div>
+        )}
         <header className="chat-head">
           <div className="chat-head-left">
             <button
@@ -1475,6 +1805,7 @@ function MainApp({ onLogout }) {
             </div>
           </div>
           <div className="chat-head-right">
+            <DualTrackPill notify={notify} onTrackSwitch={handleTrackSwitched} />
             {activeId && sessionApproved[activeId] && (
               <div className="session-auth-pill" title="此对话所有本地操作免确认授权中，点击可收回">
                 <span className="dot on" />
@@ -1517,6 +1848,25 @@ function MainApp({ onLogout }) {
               </div>
             )
           ))}
+          {status === "thinking" && !streamText?.text && (
+            <div className="bubble bot thinking-bubble">
+              <div className="thinking-head">
+                <span className="thinking-spinner" />
+                <span className="thinking-title">
+                  {activeBot?.name || "助手"} 正在深度思考与执行中...
+                </span>
+                <span className="thinking-timer">{elapsedSeconds}s</span>
+              </div>
+              {activity.length > 0 && (
+                <div className="thinking-preview">
+                  <span className="thinking-preview-icon">⚡</span>
+                  <span className="thinking-preview-text">
+                    正在执行：{activity[activity.length - 1]?.tool} ({activity[activity.length - 1]?.state === "running" ? "进行中" : "完成"})
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
           {streamText?.text && (
             <div className="bubble bot streaming">
               <div className="bubble-text md"
@@ -1555,31 +1905,122 @@ function MainApp({ onLogout }) {
 
         <div className="composer">
           {error && <div className="error-bar" onClick={() => setError("")}>{error}（点击关闭）</div>}
-          <div className="composer-row">
-            <input
-              type="file"
-              ref={fileInputRef}
-              style={{ display: "none" }}
-              onChange={handleFileUpload}
-            />
-            <button
-              type="button"
-              className="attach-btn"
-              title="上传文件到工作区与当前会话"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploadingFile}
-            >
-              {uploadingFile ? "⏳" : "📎"}
-            </button>
-            <textarea value={draft} placeholder={`给 ${activeBot?.name || "Bot"} 发消息…`}
+          <div className="composer-box" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
+            <textarea
+              value={draft}
+              placeholder={status === "thinking" ? `${activeBot?.name || "Bot"} 正在执行中，可直接输入并发送追加要求或调整方向…` : `给 ${activeBot?.name || "Bot"} 发消息… (Enter 发送，Shift+Enter 换行，支持直接粘贴图片)`}
               onChange={(e) => setDraft(e.target.value)}
+              onPaste={handlePaste}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  send();
+                  if (draft.trim()) {
+                    send();
+                  } else if (status === "thinking") {
+                    stopRun();
+                  }
                 }
-              }} />
-            <button className="send-btn" onClick={send}>发送</button>
+              }}
+            />
+
+            <div className="composer-toolbar">
+              <div className="composer-toolbar-left">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  style={{ display: "none" }}
+                  onChange={handleFileUpload}
+                />
+                <button
+                  type="button"
+                  className="composer-tool-btn"
+                  title="上传文件到工作区与当前会话"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingFile}
+                >
+                  <span>{uploadingFile ? "⏳" : "📎"}</span>
+                  <span>附件</span>
+                </button>
+
+                {/* 消息栏下方模型快速选择器 (专一展示网关提供的真实模型) */}
+                <div className="composer-model-pill" title="切换当前助手使用的模型">
+                  <span>🤖</span>
+                  <select
+                    className="composer-model-select"
+                    value={activeBot?.model || models.default || models.items[0]?.id || ""}
+                    onChange={(e) => saveBotModel(activeBot.id, e.target.value)}
+                  >
+                    {models.items.map((m) => (
+                      <option key={m.id} value={m.id}>{m.label || m.display_name || m.id}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 推理强度等级选择器 (根据网关模型原生等级动态展示) */}
+                <div className="composer-reasoning-pill" title={`设置 ${currentModelMeta?.label || currentModelId} 的模型推理强度`}>
+                  <span>🧠</span>
+                  <select
+                    className="composer-reasoning-select"
+                    value={reasoningEffort}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setReasoningEffort(val);
+                      try { localStorage.setItem("agentos.reasoning_effort", val); } catch {}
+                    }}
+                  >
+                    {availableReasoningLevels.map((lvl) => (
+                      <option key={lvl} value={lvl}>
+                        {REASONING_LEVEL_LABELS[lvl] || `${lvl} (推理强度)`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {status === "thinking" && (
+                  <div className="composer-running-pill" title="模型正在思考并执行任务中">
+                    <span className="pulse-dot"></span>
+                    <span>运行中 {elapsedSeconds}s</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="composer-toolbar-right" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {status === "thinking" && (
+                  <button
+                    type="button"
+                    className="send-btn stop-mode"
+                    onClick={stopRun}
+                    title="点击中断当前执行"
+                  >
+                    <span className="btn-spinner" />
+                    <span className="stop-square">⏹</span>
+                    <span>停止</span>
+                  </button>
+                )}
+                {status === "thinking" && draft.trim() ? (
+                  <button
+                    type="button"
+                    className="send-btn steer-mode"
+                    onClick={send}
+                    title="在执行中向助手追加要求或改变方向 (Enter 发送)"
+                  >
+                    <span>转向/追加</span>
+                    <span className="send-arrow">↪</span>
+                  </button>
+                ) : status !== "thinking" ? (
+                  <button
+                    type="button"
+                    className="send-btn"
+                    onClick={send}
+                    disabled={!draft.trim()}
+                    title="发送消息 (Enter)"
+                  >
+                    <span>发送</span>
+                    <span className="send-arrow">↑</span>
+                  </button>
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>
       </main>
@@ -1605,12 +2046,12 @@ function MainApp({ onLogout }) {
             <div className="kv model-row">
               <span>模型</span>
               <select
-                value={activeBot?.model || ""}
+                value={activeBot?.model || models.default || models.items[0]?.id || ""}
                 onChange={(e) => saveBotModel(activeBot.id, e.target.value)}
+                title="在输入框下方亦可直接切换"
               >
-                <option value="">跟随全局默认（{settings?.model || models.default || "deepseek-flash"}）</option>
                 {models.items.map((m) => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
+                  <option key={m.id} value={m.id}>{m.label || m.display_name || m.id}</option>
                 ))}
               </select>
             </div>
@@ -1795,7 +2236,7 @@ function MainApp({ onLogout }) {
         {tab === "computer" && (
           <div className="panel-body">
             <div className="screen-wrap" onClick={() => setFullscreen(true)} title="点击全屏">
-              {frame ? <img className="screen" src={frame} alt="computer" /> : <div className="screen placeholder">{computerState === "sleeping" ? "电脑休眠中" : "等待画面…"}</div>}
+              {frame ? <img className="screen" src={frame} alt="computer" /> : <div className="screen placeholder">{screenError ? `画面提示：${screenError}` : computerState === "sleeping" ? "电脑休眠中" : "等待画面…"}</div>}
             </div>
             <div className="screen-bar">
               <span className={`computer-state ${computerState}`}>
@@ -1809,6 +2250,110 @@ function MainApp({ onLogout }) {
             <div className="kv"><span>分辨率</span><b>{screenMeta ? `${screenMeta.geometry.w}×${screenMeta.geometry.h}` : "—"}</b></div>
             <div className="kv"><span>帧率</span><b>{screenMeta ? `${screenMeta.fps} fps` : "—"}</b></div>
             <p className="hint">点击画面进入全屏；全屏后可切换"取得控制权"直接操作服务器桌面。</p>
+
+          </div>
+        )}
+
+        {tab === "run" && (
+          <div className="panel-body run-panel">
+            <div className="live-probe-card standalone">
+              <div className="live-probe-head">
+                <div className="live-probe-title">
+                  <span className="live-probe-icon">⚡</span>
+                  <span>后台执行探测器</span>
+                  {status === "thinking" ? (
+                    <span className="live-probe-badge running">
+                      <span className="pulse-dot"></span>
+                      <span>执行中 {elapsedSeconds}s</span>
+                    </span>
+                  ) : (
+                    <span className="live-probe-badge idle">待命就绪</span>
+                  )}
+                </div>
+                {activity.length > 0 && (
+                  <span className="live-probe-count">
+                    {activity.filter((a) => a.kind !== "separator").length > PROBE_VISIBLE_STEPS
+                      ? `最近 ${PROBE_VISIBLE_STEPS} 步 / 共 ${activity.filter((a) => a.kind !== "separator").length} 步`
+                      : `${activity.filter((a) => a.kind !== "separator").length} 步操作`}
+                  </span>
+                )}
+              </div>
+
+              <div className={"live-probe-terminal" + (probeClampH ? " clamped" : "")}
+                   ref={probeRef}
+                   style={probeClampH ? { maxHeight: probeClampH + "px" } : undefined}
+                   onScroll={(ev) => {
+                     const el = ev.currentTarget;
+                     probeStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+                   }}>
+                {activity.length === 0 ? (
+                  <div className="live-probe-empty">
+                    <div className="probe-empty-icon">📡</div>
+                    <div className="probe-empty-title">实时动向探测就绪</div>
+                    <div className="probe-empty-desc">
+                      向 Agent 发送指令时，此处将实时流式探测并显示底层工具调用、终端命令、文件读写与模型内部动态，随时掌握任务真实动向。
+                    </div>
+                  </div>
+                ) : (
+                  <div className="live-probe-stream">
+                    {activity.map((a, idx) => a.kind === "separator" ? (
+                      <div key={a.id || idx} className="probe-separator"><span>{a.label}</span></div>
+                    ) : (
+                      <div key={a.id || idx} className={`probe-item state-${a.state || "running"}`}>
+                        <div className="probe-item-header">
+                          <span className="probe-item-status">
+                            {a.state === "ok" ? "🟢" : a.state === "fail" ? "🔴" : a.state === "waiting" ? "⏳" : "⚙️"}
+                          </span>
+                          <span className="probe-item-tool">
+                            {a.tool === "exec" ? "终端命令" :
+                             a.tool === "fs_write" ? "写入文件" :
+                             a.tool === "fs_edit" ? "修改文件" :
+                             a.tool === "fs_read" ? "读取文件" :
+                             a.tool === "web_search" ? "联网搜索" :
+                             a.tool === "web_fetch" ? "抓取网页" :
+                             a.tool === "todo_write" ? "任务清单" :
+                             a.tool === "remember" ? "长期记忆" :
+                             a.tool === "recall" ? "检索记忆" :
+                             a.tool === "delegate_task" ? "子代理分派" :
+                             a.tool === "process_start" ? "启动后台进程" :
+                             a.tool || "执行"}
+                          </span>
+                          <span className="probe-item-step">#{idx + 1}</span>
+                        </div>
+
+                        {a.args && (
+                          <div className="probe-cmd-box">
+                            <span className="probe-prompt">▶</span>
+                            <code>
+                              {typeof a.args === "string" ? a.args :
+                               a.args.cmd ? a.args.cmd :
+                               a.args.path ? `${a.args.path} ${a.args.pattern || ""}` :
+                               a.args.query ? a.args.query :
+                               a.args.content ? a.args.content.slice(0, 160) :
+                               JSON.stringify(a.args).slice(0, 180)}
+                            </code>
+                          </div>
+                        )}
+
+                        {a.summary && (
+                          <div className="probe-result-box">
+                            <pre className="probe-result-pre">
+                              {typeof a.summary === "string" ? a.summary.slice(0, 500) : JSON.stringify(a.summary, null, 2).slice(0, 500)}
+                            </pre>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {status === "thinking" && (
+                      <div className="probe-running-indicator">
+                        <span className="btn-spinner mini" />
+                        <span>正在处理下一阶段任务...</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </aside>
@@ -1835,6 +2380,7 @@ function MainApp({ onLogout }) {
           vault={vault} onOpenVault={openVault}
           models={models} pairCode={pairCode} onGenPairCode={generatePairCode}
           integrations={integrations} localDevices={localDevices}
+          themePreference={themePreference} onThemeChange={changeTheme}
           onClose={() => setModal(null)}
         />
       )}
@@ -1913,7 +2459,7 @@ function MainApp({ onLogout }) {
         </div>
       )}
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <div className="toast" onClick={() => setToast("")} title="点击关闭提示"><span>{toast}</span><span style={{ marginLeft: "8px", opacity: 0.6, fontSize: "11px" }}>✕</span></div>}
 
       {lightbox && (
         <div className="artifact-viewer" onClick={() => setLightbox(null)}>
@@ -2283,7 +2829,7 @@ const PROVIDER_PRESETS = [
   { id: "custom", label: "自定义 (OpenAI 兼容规范)", baseUrl: "", defaultModel: "", models: [] },
 ];
 
-function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, onSleep, vault, onOpenVault, models, pairCode, onGenPairCode, integrations, localDevices, onClose }) {
+function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, onSleep, vault, onOpenVault, models, pairCode, onGenPairCode, integrations, localDevices, themePreference, onThemeChange, onClose }) {
   const [local, setLocal] = useState(settings || {});
   const [saved, setSaved] = useState(false);
   const [showKey, setShowKey] = useState(false);
@@ -2368,9 +2914,7 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
   const combinedModelOptions = Array.from(new Set([
     local.model,
     ...(models?.items ? models.items.map((m) => m.id) : []),
-    ...(PROVIDER_PRESETS.find((p) => p.id === local.llm_provider)?.models || []),
-    "deepseek-chat", "deepseek-reasoner", "gpt-4o", "gpt-4.1", "o3-mini",
-    "anthropic/claude-3.7-sonnet", "qwen-max"
+    ...(models?.items?.length ? [] : (PROVIDER_PRESETS.find((p) => p.id === local.llm_provider)?.models || ["deepseek-chat"])),
   ].filter(Boolean)));
 
   return (
@@ -2386,6 +2930,34 @@ function SettingsModal({ tab, setTab, settings, onSave, computerState, onWake, o
         <div className="settings-body">
           {tab === "general" && (
             <>
+              <h3>界面外观与主题</h3>
+              <p className="hint">支持深色、浅色以及跟随操作系统外观自动切换，切换即刻生效。</p>
+              <div className="theme-selector-grid">
+                {[
+                  { id: "system", label: "跟随系统", icon: "💻", desc: "自动同步操作系统深浅外观" },
+                  { id: "dark", label: "深色模式", icon: "🌙", desc: "经典赛博暗夜黑风格" },
+                  { id: "light", label: "浅色模式", icon: "☀️", desc: "明亮素雅高对比度" },
+                ].map((t) => {
+                  const active = (themePreference || "system") === t.id;
+                  return (
+                    <div
+                      key={t.id}
+                      className={`theme-option-card ${active ? "active" : ""}`}
+                      onClick={() => onThemeChange && onThemeChange(t.id)}
+                    >
+                      <div className="theme-option-icon">{t.icon}</div>
+                      <div className="theme-option-body">
+                        <div className="theme-option-title">{t.label}</div>
+                        <div className="theme-option-desc">{t.desc}</div>
+                      </div>
+                      <div className={`theme-radio-dot ${active ? "checked" : ""}`} />
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="settings-divider" />
+
               <h3>全局大模型配置</h3>
               <p className="hint">统一管理底座模型、接口地址与秘钥。所有助手默认继承此处配置。</p>
 

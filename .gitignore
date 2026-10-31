@@ -80,3 +80,9 @@ desktop/src-tauri/target/
 
 # Allow role seed data to be tracked
 !app/data/roles_seed.json
+
+# Local temporary backups and runtime logs
+*.bak_*
+*.bak*
+logs/
+outputs/

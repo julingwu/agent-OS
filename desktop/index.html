@@ -10,7 +10,29 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>AgentOS</title>
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem("agentos.theme") || "system";
+          var isDark = true;
+          if (pref === "light") {
+            isDark = false;
+          } else if (pref === "dark") {
+            isDark = true;
+          } else {
+            isDark = !(window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches);
+          }
+          var theme = isDark ? "dark" : "light";
+          document.documentElement.setAttribute("data-theme", theme);
+          document.documentElement.setAttribute("data-theme-preference", pref);
+          document.documentElement.style.colorScheme = theme;
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

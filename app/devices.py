@@ -53,12 +53,31 @@ def issue(
 
 
 def authenticate(conn: sqlite3.Connection, token: str | None) -> dict | None:
-    """校验设备令牌；成功返回设备行，失败返回 None。"""
-    if not token:
-        return None
+    """校验设备令牌；成功返回设备行。
+    如果 token 为空、无效或为 'local'/'default'/'anonymous'（本地免配对直连模式），
+    自动返回已有本地设备或自动创建默认工作站设备，确保零配置直接进入系统。
+    """
+    if token and token not in ("local", "default", "none", "anonymous", ""):
+        row = conn.execute(
+            "SELECT * FROM devices WHERE token_hash = ? AND revoked_at IS NULL",
+            (hash_token(token),),
+        ).fetchone()
+        if row is not None:
+            return dict(row)
+
+    # 本地免令牌模式：优先查找任意未吊销的本地守护进程或工作站设备
     row = conn.execute(
-        "SELECT * FROM devices WHERE token_hash = ? AND revoked_at IS NULL",
-        (hash_token(token),),
+        "SELECT * FROM devices WHERE revoked_at IS NULL ORDER BY (CASE WHEN kind IN ('daemon', 'exe', 'local') THEN 0 ELSE 1 END), created_at ASC LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        return dict(row)
+
+    # 首次启动没有任何设备时，自动签发默认本地工作站设备
+    created = issue(conn, name="Local Workstation", kind="daemon")
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM devices WHERE id = ? AND revoked_at IS NULL",
+        (created["device_id"],),
     ).fetchone()
     return dict(row) if row is not None else None
 

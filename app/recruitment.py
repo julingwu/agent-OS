@@ -476,7 +476,7 @@ def synthesize_role_template(conn, role_tag: str, requirement: str = "") -> dict
     conn.execute("""
         INSERT INTO role_templates
         (id, name, tag, prompt, model, skills, tools, industry, deliverable, veto, state)
-        VALUES (?, ?, ?, ?, 'deepseek-chat', ?, ?, ?, ?, 0, 'active')
+        VALUES (?, ?, ?, ?, COALESCE((SELECT value_json FROM app_settings WHERE key='model'), 'deepseek/deepseek-flash'), ?, ?, ?, ?, 0, 'active')
         ON CONFLICT(id) DO UPDATE SET
             name=excluded.name,
             tag=excluded.tag,

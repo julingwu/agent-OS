@@ -36,8 +36,8 @@ def create_memory(body: MemoryIn, device: dict = Depends(require_device)) -> dic
                                kind=body.kind, importance=body.importance,
                                topic=body.topic)
         if saved is None:
-            raise HTTPException(status_code=409, detail="这条记忆已存在或同主题已更新")
-        return {"item": saved, "total": bot_memory.count(conn, body.bot_id)}
+            return {"ok": True, "saved": False, "item": None, "duplicate": True, "message": "这条记忆已存在或同主题已更新", "total": bot_memory.count(conn, body.bot_id)}
+        return {"ok": True, "saved": True, "item": saved, "duplicate": False, "total": bot_memory.count(conn, body.bot_id)}
 
 
 @router.delete("/memories/{memory_id}")

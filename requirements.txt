@@ -6,3 +6,7 @@ cryptography
 pymysql
 python-multipart
 defusedxml
+Pillow
+requests
+python-dotenv
+websockets

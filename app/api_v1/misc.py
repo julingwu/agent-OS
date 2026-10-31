@@ -240,32 +240,65 @@ def list_models(device: dict = Depends(require_device)) -> dict:
     models_seen = set()
     items = []
 
-    # 1. available_models (preserves test_pairing_v1 expectations)
-    for m in available_models():
-        if m not in models_seen:
-            models_seen.add(m)
-            items.append({"id": m, "label": m})
+    # 1. Dynamic Gateway fetch (if base_url is configured)
+    base_url = cfg.get("base_url") or ""
+    api_key = cfg.get("api_key") or ""
+    if base_url:
+        try:
+            import urllib.request
+            models_url = base_url.rstrip("/") + "/models"
+            req = urllib.request.Request(models_url)
+            if api_key:
+                req.add_header("Authorization", f"Bearer {api_key}")
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
+                data = json.loads(resp.read().decode())
+                remote_models = data.get("data") or data.get("models") or []
+                for m in remote_models:
+                    mid = m.get("id") if isinstance(m, dict) else str(m)
+                    if mid and mid not in models_seen:
+                        models_seen.add(mid)
+                        display_name = m.get("display_name") if isinstance(m, dict) else None
+                        r_levels = m.get("reasoning_levels") if isinstance(m, dict) else None
+                        if not r_levels and isinstance(m, dict) and "supported_reasoning_levels" in m:
+                            r_levels = [x.get("effort") for x in m.get("supported_reasoning_levels", []) if x.get("effort")]
+                        items.append({
+                            "id": mid,
+                            "label": display_name or mid,
+                            "display_name": display_name or mid,
+                            "reasoning_levels": r_levels,
+                            "owned_by": m.get("owned_by") if isinstance(m, dict) else None,
+                        })
+        except Exception:
+            pass
 
-    # 2. Provider presets
-    provider = cfg.get("provider", "deepseek")
-    preset_models = llm_config.PROVIDER_MODELS.get(provider, [])
-    for m in preset_models:
-        if m not in models_seen:
-            models_seen.add(m)
-            items.append({"id": m, "label": m})
+    # 若网关成功提供了模型，则专一展示网关提供的模型，杜绝混杂不相干的预设模型
+    if not items:
+        for m in available_models():
+            if m not in models_seen:
+                models_seen.add(m)
+                items.append({"id": m, "label": m, "display_name": m, "reasoning_levels": None})
 
-    # 3. Custom models configured by user
+        provider = cfg.get("provider", "deepseek")
+        preset_models = llm_config.PROVIDER_MODELS.get(provider, [])
+        for m in preset_models:
+            if m not in models_seen:
+                models_seen.add(m)
+                items.append({"id": m, "label": m, "display_name": m, "reasoning_levels": None})
+
+    # 用户手动添加的自定义模型
     if isinstance(custom_models, list):
         for m in custom_models:
             m_str = str(m).strip()
             if m_str and m_str not in models_seen:
                 models_seen.add(m_str)
-                items.append({"id": m_str, "label": m_str})
+                items.append({"id": m_str, "label": m_str, "display_name": m_str, "reasoning_levels": None})
 
-    # 4. Currently configured default
-    if default not in models_seen:
+    # 当前默认模型校准
+    if default not in models_seen and items:
+        default = items[0]["id"]
+    elif default not in models_seen:
         models_seen.add(default)
-        items.insert(0, {"id": default, "label": default})
+        items.insert(0, {"id": default, "label": default, "display_name": default, "reasoning_levels": None})
 
     return {"default": default, "items": items}
 

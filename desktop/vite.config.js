@@ -5,6 +5,6 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   base: process.env.TAURI_BUILD ? "./" : "/ui/",
-  build: { outDir: "dist", emptyOutDir: true },
+  build: { outDir: "dist", emptyOutDir: true, sourcemap: true },
   server: { port: 5173, strictPort: true },
 });

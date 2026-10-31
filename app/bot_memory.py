@@ -216,7 +216,10 @@ def _score(content: str, tokens: set[str], importance: int, created_at: str) -> 
     score = hits * 3.0 + importance
     try:
         created = datetime.fromisoformat(created_at)
-        age = datetime.now().astimezone() - created
+        now = datetime.now().astimezone()
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=now.tzinfo)
+        age = now - created
         if age < timedelta(days=7):
             score += 1.5
         elif age < timedelta(days=30):

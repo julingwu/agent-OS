@@ -61,7 +61,18 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     "custom": {
         "label": "自定义 OpenAI 兼容接口",
         "base_url": "",
-        "models": [],
+        "models": [
+            "codex/gpt-6.1-sol",
+            "codex/gpt-6.1-terra",
+            "codex/gpt-6-astra",
+            "codex/gpt-6-sol",
+            "codex/gpt-6-luna",
+            "codex/gpt-5.6-sol",
+            "codex/gpt-5.6-terra",
+            "codex/gpt-5.6-luna",
+            "deepseek/deepseek-flash",
+            "deepseek/deepseek-v4-pro",
+        ],
     },
 }
 

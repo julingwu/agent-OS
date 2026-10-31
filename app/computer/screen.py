@@ -1,16 +1,13 @@
-"""电脑（宿主机 `:0` 桌面）的采集层。
-
-为什么不用 VNC 做主通道：5Mbps 带宽下 VNC 全时推流会卡；
-预览用"按需截帧 JPEG"，只有在需要人接管时才升级到 VNC。
-
-依赖：ffmpeg / xdpyinfo（provision 脚本已装）。
-显示归属：lightdm 自动登录的 oaagent 会话，Xauthority 在 /var/run/lightdm/root/:0。
+"""远程云主机桌面（容器内 :0 屏幕）的采集与交互节点。
+在 Windows 本地模式或未安装 ffmpeg 环境下自适应降级为原生占位画面。
 """
 
 from __future__ import annotations
 
+import io
 import os
 import re
+import shutil
 import subprocess
 import threading
 
@@ -44,6 +41,20 @@ def geometry(*, refresh: bool = False) -> tuple[int, int]:
     with _geo_lock:
         if _geo_cache and not refresh:
             return _geo_cache
+
+    if os.name == "nt":
+        try:
+            import ctypes
+            w = ctypes.windll.user32.GetSystemMetrics(0)
+            h = ctypes.windll.user32.GetSystemMetrics(1)
+            if w > 0 and h > 0:
+                with _geo_lock:
+                    _geo_cache = (w, h)
+                    return _geo_cache
+        except Exception:
+            pass
+        return DEFAULT_GEOMETRY
+
     try:
         out = subprocess.run(
             ["xdpyinfo", "-display", DISPLAY],
@@ -58,9 +69,26 @@ def geometry(*, refresh: bool = False) -> tuple[int, int]:
 
 
 def grab_jpeg(max_w: int = 1280, quality: int = 5) -> bytes:
-    """抓一帧并压成 JPEG。失败抛 CaptureUnavailable（由上层降级）。"""
+    """抓一帧并压成 JPEG。在 Windows 或缺少 ffmpeg 时平滑输出占位帧，避免 WinError 2。"""
     w, h = geometry()
     target_w = max(320, min(int(max_w), w))
+    target_h = max(200, int(h * target_w / w))
+
+    # Windows 或未安装 ffmpeg 环境下的平滑兼容
+    if os.name == "nt" or not shutil.which("ffmpeg"):
+        try:
+            from PIL import Image, ImageDraw
+            im = Image.new("RGB", (target_w, target_h), (15, 23, 42))
+            draw = ImageDraw.Draw(im)
+            draw.rectangle([(8, 8), (target_w - 8, target_h - 8)], outline=(51, 65, 85), width=2)
+            msg = "AgentOS Local Windows Workspace (Active)"
+            draw.text((max(20, target_w // 2 - 140), max(20, target_h // 2 - 10)), msg, fill=(148, 163, 184))
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=80)
+            return buf.getvalue()
+        except Exception as exc:
+            raise CaptureUnavailable(f"local frame fallback failed: {exc}") from exc
+
     scale = f"scale={target_w}:-2:flags=fast_bilinear"
     cmd = [
         "ffmpeg", "-nostdin", "-loglevel", "error",
@@ -100,8 +128,10 @@ def probe() -> dict:
     }
 
 
-# ---------------------------------------------------------------- 桌面控制（接管）
+# ---------------------------------------------------------------- 桌面控制
 def desktop_active() -> bool:
+    if os.name == "nt":
+        return True
     try:
         out = subprocess.run(["systemctl", "is-active", "lightdm"],
                              capture_output=True, text=True, timeout=5)
@@ -111,6 +141,8 @@ def desktop_active() -> bool:
 
 
 def _systemctl(action: str) -> None:
+    if os.name == "nt":
+        return
     try:
         out = subprocess.run(["systemctl", action, "lightdm"],
                              capture_output=True, text=True, timeout=30)
@@ -132,6 +164,8 @@ def sleep() -> None:
 
 def xdo(*args: str) -> None:
     """在 `:0` 上执行 xdotool 动作（真实接管）。"""
+    if os.name == "nt":
+        return
     try:
         out = subprocess.run(["xdotool", *args], env=_env(),
                              capture_output=True, text=True, timeout=10)

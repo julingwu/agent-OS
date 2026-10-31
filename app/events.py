@@ -26,7 +26,7 @@ from datetime import datetime
 
 SCHEMA = pathlib.Path(__file__).with_name("schema_v1.sql")
 
-MAX_PAYLOAD_BYTES = 8 * 1024
+MAX_PAYLOAD_BYTES = 128 * 1024
 MAX_READ_LIMIT = 500
 DEFAULT_READ_LIMIT = 200
 SUBSCRIBER_QUEUE = 500
